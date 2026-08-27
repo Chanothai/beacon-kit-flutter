@@ -1,0 +1,11 @@
+{
+  "name": "ibeacon_invalid_prefix",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน ibeacon_valid_basic ทุก byte ยกเว้น [2:4) เปลี่ยนจาก 0215 เป็น 0315 (frame type/length marker ผิด) — companyID (4c00) ยังถูก ตาม ADR-3 'iBeacon ต้องเป็น 0x02 0x15' → reason=invalidPrefix",
+  "raw_hex": "4c000315e2c56db5dffb48d2b060d0f5a71096e000010064c5",
+  "expect": {
+    "result": "failure",
+    "reason": "invalidPrefix"
+  }
+}

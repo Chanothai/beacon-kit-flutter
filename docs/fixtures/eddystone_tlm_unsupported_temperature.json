@@ -1,0 +1,18 @@
+{
+  "name": "eddystone_tlm_unsupported_temperature",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน eddystone_tlm_valid ทุก byte ยกเว้น [4:6) (temperature) เปลี่ยนจาก 0x1880 เป็น 0x8000 ซึ่งตาม spec หมายถึง 'sensor ไม่รองรับ' → EddystoneTlmFrame.temperatureC ต้องเป็น null ตาม ADR-3 doc comment ของ EddystoneTlmFrame",
+  "raw_hex": "20000bb88000000003e800003039",
+  "expect": {
+    "result": "success",
+    "frame_type": "tlm",
+    "frame": {
+      "version": 0,
+      "battery_voltage_mv": 3000.0,
+      "temperature_c": null,
+      "advertising_pdu_count": 1000,
+      "time_since_power_on_ms": 1234500
+    }
+  }
+}

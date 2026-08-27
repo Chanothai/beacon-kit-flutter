@@ -1,0 +1,28 @@
+# Lint มาตรฐานของทีม Flutter เอง — ห้ามเปลี่ยนไปใช้ตัวอื่น (very_good_analysis ฯลฯ)
+# โดยไม่ตกลงกับทีมก่อน เพื่อให้ CI/local ใช้กติกาชุดเดียวกันเสมอ
+#
+# ติดตั้ง: flutter pub add --dev flutter_lints
+# ตรวจสอบเมื่อ 27 ส.ค. 2026 เวอร์ชันล่าสุดคือ ^6.0.0 (เช็ค pub.dev ก่อนติดตั้งจริงเสมอ)
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "lib/generated/**"
+
+linter:
+  rules:
+    # เสริมจากชุดมาตรฐานของ flutter_lints ให้เข้ากับกฎ Clean Architecture ของโปรเจกต์นี้
+    always_declare_return_types: true
+    avoid_print: true
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    prefer_final_locals: true
+    unawaited_futures: true
+    sort_pub_dependencies: true

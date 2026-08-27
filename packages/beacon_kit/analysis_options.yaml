@@ -1,0 +1,13 @@
+# ใช้กติกา lint กลางของโปรเจกต์ที่ root (ห้ามแก้ที่นี่ ไปแก้ที่ analysis_options.yaml ที่ root แทน)
+include: ../../analysis_options.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - example/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**

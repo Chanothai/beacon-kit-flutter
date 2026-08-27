@@ -1,0 +1,18 @@
+{
+  "name": "eddystone_tlm_valid",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte layout ตาม eddystone-tlm/tlm-plain.md (อ้างใน ARCHITECTURE.md ADR-3): [0]=0x20, [1]=version=0x00, [2:4)=battery mV BE=3000(0x0BB8), [4:6)=temperature signed 8.8 fixed point BE=24.5(0x1880, 6272/256.0), [6:10)=adv pdu count BE=1000(0x000003E8), [10:14)=time-since-power-on BE ×100ms=12345(0x00003039 → 1234500ms). รวม 14 bytes เต็ม คำนวณด้วย python struct.pack ยืนยันแล้ว",
+  "raw_hex": "20000bb81880000003e800003039",
+  "expect": {
+    "result": "success",
+    "frame_type": "tlm",
+    "frame": {
+      "version": 0,
+      "battery_voltage_mv": 3000.0,
+      "temperature_c": 24.5,
+      "advertising_pdu_count": 1000,
+      "time_since_power_on_ms": 1234500
+    }
+  }
+}

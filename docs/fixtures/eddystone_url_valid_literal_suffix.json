@@ -1,0 +1,15 @@
+{
+  "name": "eddystone_url_valid_literal_suffix",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte layout ตาม eddystone-url/README.md: [0]=0x10, [1]=txPower, [2]=scheme byte=0x02 → 'http://', [3:]=suffix เป็น ASCII literal ล้วน 'example.com/page1' (17 bytes, ไม่มี expansion code เลย) รวม 20 bytes เต็ม (ขอบบนของ ADV payload สำหรับเฟรมนี้). ใช้เคสนี้แทนเคส 'literal ASCII ปนตอนท้าย' ตามที่ QA ตีความจากโจทย์ — ดู comment ใน eddystone_parser_test.dart",
+  "raw_hex": "10f0026578616d706c652e636f6d2f7061676531",
+  "expect": {
+    "result": "success",
+    "frame_type": "url",
+    "frame": {
+      "tx_power": -16,
+      "url": "http://example.com/page1"
+    }
+  }
+}

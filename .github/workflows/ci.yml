@@ -1,0 +1,114 @@
+name: CI
+
+# ตรวจสอบเวอร์ชัน action ล่าสุดก่อนใช้จริง (ตรวจสอบเมื่อ 27 ส.ค. 2026):
+#   actions/checkout@v4, subosito/flutter-action@v2 (v2.23.0)
+# แนะนำให้เปิด Dependabot (.github/dependabot.yml, ecosystem: github-actions)
+# เพื่อให้ได้แจ้งเตือนอัตโนมัติเมื่อมีเวอร์ชันใหม่ แทนการเช็คมือ
+#
+# monorepo: มี pubspec.yaml แยกกัน 4 ตัวใต้ packages/ (federated plugin pattern
+# ตาม ARCHITECTURE.md) — ต้อง pub get / analyze / test แยกต่อ package เพราะแต่ละ
+# package resolve dependency ของตัวเอง ไม่ใช่ pubspec เดียวที่ root
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  format:
+    name: Verify formatting (dart format, ทั้ง repo)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: dart format --set-exit-if-changed
+        run: dart format --output=none --set-exit-if-changed .
+
+  analyze-test:
+    name: Analyze · Test (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - packages/beacon_kit_platform_interface
+          - packages/beacon_kit_ios
+          - packages/beacon_kit
+          - packages/beacon_kit/example
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        run: flutter pub get
+
+      - name: Analyze (flutter_lints via root analysis_options.yaml)
+        working-directory: ${{ matrix.package }}
+        run: flutter analyze --fatal-infos
+
+      - name: Run tests
+        working-directory: ${{ matrix.package }}
+        run: flutter test --coverage
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ strategy.job-index }}
+          path: ${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: ignore
+
+  # Job build ตรวจสอบว่าคอมไพล์ผ่านจริง (ไม่ sign/publish)
+  #
+  # build-android ยัง comment ไว้ — Android (beacon_kit_android) ถูกเลื่อนไป
+  # sprint หน้าตามที่ผู้ใช้สั่ง ยังไม่มี Kotlin implementation ให้ build
+  # (ดู ARCHITECTURE.md หัวข้อ "Android — deferred")
+  #
+  # build-android:
+  #   name: Build Android (debug, no signing)
+  #   runs-on: ubuntu-latest
+  #   needs: analyze-test
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: subosito/flutter-action@v2
+  #       with:
+  #         channel: stable
+  #     - working-directory: packages/beacon_kit/example
+  #       run: flutter pub get
+  #     - working-directory: packages/beacon_kit/example
+  #       run: flutter build apk --debug
+
+  build-ios:
+    name: Build iOS (debug, no signing)
+    runs-on: macos-latest
+    needs: analyze-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        working-directory: packages/beacon_kit/example
+        run: flutter pub get
+
+      - name: flutter build ios --debug --no-codesign
+        working-directory: packages/beacon_kit/example
+        run: flutter build ios --debug --no-codesign

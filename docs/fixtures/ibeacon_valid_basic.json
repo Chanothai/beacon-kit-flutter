@@ -1,0 +1,16 @@
+{
+  "name": "ibeacon_valid_basic",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte layout ตาม ARCHITECTURE.md ADR-3 (IBeaconParser): companyID LE [0:2)=4C00, [2]=02, [3]=15, [4:20)=UUID 16B, [20:22)=major BE, [22:24)=minor BE, [24]=txPower signed 8-bit. คำนวณด้วย python (struct.pack) แล้วยืนยันความยาวรวม 25 bytes ตรงตาม spec ไม่ได้จับจากอุปกรณ์จริง",
+  "raw_hex": "4c000215e2c56db5dffb48d2b060d0f5a71096e000010064c5",
+  "expect": {
+    "result": "success",
+    "frame": {
+      "uuid": "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+      "major": 1,
+      "minor": 100,
+      "tx_power": -59
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_tlm_too_short",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "ตัด eddystone_tlm_valid ให้เหลือ 13 bytes (ขาด byte สุดท้ายของ time-since-power-on ไป 1 byte) — ต่ำกว่าความยาวคงที่ 14 bytes ของ Eddystone TLM frame",
+  "raw_hex": "20000bb81880000003e8000030",
+  "expect": {
+    "result": "failure",
+    "reason": "tooShort"
+  }
+}

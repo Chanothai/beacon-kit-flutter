@@ -1,0 +1,11 @@
+{
+  "name": "ibeacon_invalid_company_id",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน ibeacon_valid_basic ทุก byte ยกเว้นสอง byte แรก ([0:2)=companyID LE) เปลี่ยนจาก 4c00 (Apple, 0x004C) เป็น 0102 ซึ่งไม่ใช่ Apple company ID — ตาม ARCHITECTURE.md ADR-3 IBeaconParser ต้อง reject เพราะไม่ใช่ Apple manufacturer-specific data. ตีความว่าเป็น reason=invalidPrefix เพราะ ParseFailureReason ไม่มีตัวแยกเฉพาะ 'invalid company id' — companyID เป็นส่วนหนึ่งของ 'prefix' 4 byte แรกที่ระบุตัวตนของ iBeacon frame ตามที่ ADR-3 อธิบาย ('company ID 0x004C, frame prefix 0x02 0x15')",
+  "raw_hex": "01020215e2c56db5dffb48d2b060d0f5a71096e000010064c5",
+  "expect": {
+    "result": "failure",
+    "reason": "invalidPrefix"
+  }
+}

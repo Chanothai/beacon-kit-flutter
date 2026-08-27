@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_uid_too_long",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "ต่อ 2 byte ขยะ (aabb) ท้าย eddystone_uid_valid ทำให้ยาว 22 bytes — เกินความยาวคงที่ 20 bytes ของ Eddystone UID frame",
+  "raw_hex": "00eaaabbccddeeff001122334455667788990000aabb",
+  "expect": {
+    "result": "failure",
+    "reason": "tooLong"
+  }
+}

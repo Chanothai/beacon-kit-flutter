@@ -1,0 +1,16 @@
+{
+  "name": "eddystone_uid_valid",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte layout ตาม eddystone-uid/README.md (อ้างใน ARCHITECTURE.md ADR-3): [0]=0x00, [1]=txPower signed8, [2:12)=namespace 10B, [12:18)=instance 6B, [18:20)=reserved 2B, รวม 20 bytes. คำนวณด้วย python ยืนยันความยาวแล้ว ไม่ได้จับจากอุปกรณ์จริง",
+  "raw_hex": "00eaaabbccddeeff001122334455667788990000",
+  "expect": {
+    "result": "success",
+    "frame_type": "uid",
+    "frame": {
+      "tx_power": -22,
+      "namespace_id": "aabbccddeeff00112233",
+      "instance_id": "445566778899"
+    }
+  }
+}

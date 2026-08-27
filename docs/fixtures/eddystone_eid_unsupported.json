@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_eid_unsupported",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte[0]=0x30 (Eddystone-EID) ตาม eddystone-eid/README.md — โครงสร้าง [1]=txPower [2:10)=EID 8 bytes ใช้เลขสมมติ ไม่มีความหมายจริงเพราะ ADR-3 ระบุว่า EID เกินสโคปสปรินต์นี้ (ต้องมี key exchange กับ resolver) EddystoneParser.parse() ต้องคืน ParseFailure(unsupportedFrameType) เสมอเมื่อ byte[0]==0x30 โดยไม่สนใจ byte ที่เหลือ",
+  "raw_hex": "30ec0123456789abcdef",
+  "expect": {
+    "result": "failure",
+    "reason": "unsupportedFrameType"
+  }
+}

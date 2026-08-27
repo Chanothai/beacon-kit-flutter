@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_tlm_too_long",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "ต่อ 1 byte ขยะ (ff) ท้าย eddystone_tlm_valid ทำให้ยาว 15 bytes — เกินความยาวคงที่ 14 bytes ของ Eddystone TLM frame",
+  "raw_hex": "20000bb81880000003e800003039ff",
+  "expect": {
+    "result": "failure",
+    "reason": "tooLong"
+  }
+}

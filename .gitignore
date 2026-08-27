@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Dart/Flutter (แต่ละ package มี .gitignore ของตัวเองจาก `flutter create` อยู่แล้ว
+# ตัวนี้เป็นตาข่ายกันพลาดระดับ root สำหรับ package ที่เพิ่มเข้ามาภายหลัง)
+.dart_tool/
+build/
+.packages
+# หมายเหตุ: ไม่ ignore pubspec.lock เหมารวมที่ root — library package ทั้ง 3 ตัว
+# ignore /pubspec.lock ของตัวเองอยู่แล้ว ส่วน example เป็น application จึง commit
+# lockfile ไว้ เพื่อให้ checkpoint นี้ revert กลับมาได้ตรงเวอร์ชันเดิมจริง ๆ
+
+# IDE
+.idea/
+*.iml
+.vscode/

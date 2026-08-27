@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_unknown_frame_type",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte[0]=0x05 ไม่ตรงกับ frame type ใดที่ Eddystone spec นิยาม (UID=0x00, URL=0x10, TLM=0x20, EID=0x30) → ตาม ARCHITECTURE.md ADR-3 (ParseFailureReason.invalidFrameType: 'byte ที่ควรเป็น frame type ไม่ตรงกับค่าใด ๆ ที่ spec นิยามไว้เลย')",
+  "raw_hex": "05aabbccdd",
+  "expect": {
+    "result": "failure",
+    "reason": "invalidFrameType"
+  }
+}

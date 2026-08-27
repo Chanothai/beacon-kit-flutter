@@ -1,0 +1,15 @@
+{
+  "name": "eddystone_url_valid_scheme_and_suffix_expansion",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "byte layout ตาม eddystone-url/README.md (อ้างใน ARCHITECTURE.md ADR-3): [0]=0x10, [1]=txPower, [2]=scheme byte, [3:]=encoded suffix. scheme=0x01 → 'https://www.', suffix = literal 'example' (65 78 61 6d 70 6c 65) ตามด้วย expansion code 0x00 → '.com/'. รวม 11 bytes ('https://www.example.com/'). คำนวณด้วย python ยืนยันแล้ว",
+  "raw_hex": "10ec016578616d706c6500",
+  "expect": {
+    "result": "success",
+    "frame_type": "url",
+    "frame": {
+      "tx_power": -20,
+      "url": "https://www.example.com/"
+    }
+  }
+}

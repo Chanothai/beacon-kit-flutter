@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_url_invalid_scheme",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน eddystone_url_valid_scheme_and_suffix_expansion ทุก byte ยกเว้น [2] เปลี่ยนจาก 0x01 เป็น 0x04 ซึ่งไม่ใช่ scheme code ที่ spec นิยาม (ใช้ได้แค่ 0x00-0x03) — QA ตีความว่า reason=invalidPrefix เพราะ scheme byte คือ 'prefix' ของ URL ตาม spec เอง (เข้ากับนิยาม invalidPrefix ใน ADR-3: 'byte แรก ๆ ไม่ตรง prefix ที่ frame type นั้นกำหนด') ดู comment ใน eddystone_parser_test.dart สำหรับเหตุผลเต็ม",
+  "raw_hex": "10ec046578616d706c6500",
+  "expect": {
+    "result": "failure",
+    "reason": "invalidPrefix"
+  }
+}

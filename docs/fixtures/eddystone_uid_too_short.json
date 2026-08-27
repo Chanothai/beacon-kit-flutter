@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_uid_too_short",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "ตัด eddystone_uid_valid ให้เหลือ 14 bytes (ขาด instance byte สุดท้าย 2 ตัวและ reserved 2 bytes ทั้งหมด) — ต่ำกว่าความยาวคงที่ 20 bytes ของ Eddystone UID frame",
+  "raw_hex": "00eaaabbccddeeff001122334455",
+  "expect": {
+    "result": "failure",
+    "reason": "tooShort"
+  }
+}

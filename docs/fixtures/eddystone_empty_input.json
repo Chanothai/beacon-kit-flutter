@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_empty_input",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "serviceData ว่างเปล่า (0 bytes) — ไม่มีแม้แต่ byte[0] ให้เช็ค frame type ได้ ตาม ARCHITECTURE.md ADR-3 ParseFailureReason.tooShort ('ความยาวรวมน้อยกว่าค่าต่ำสุดของ frame type นั้น') ถือว่า 0 bytes ต่ำกว่าค่าต่ำสุดของทุก frame type เสมอ จึงคืน tooShort ไม่ใช่ invalidFrameType เพราะยังไม่มีข้อมูลพอจะรู้ frame type ด้วยซ้ำ",
+  "raw_hex": "",
+  "expect": {
+    "result": "failure",
+    "reason": "tooShort"
+  }
+}

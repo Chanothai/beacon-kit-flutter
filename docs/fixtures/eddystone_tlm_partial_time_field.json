@@ -1,0 +1,11 @@
+{
+  "name": "eddystone_tlm_partial_time_field",
+  "parser": "eddystone",
+  "source": "derived_from_sdk_source",
+  "source_detail": "ตัด eddystone_tlm_valid ให้เหลือ 12 bytes: type+version+battery+temperature+advPduCount ครบ (10 bytes) บวก 2 ใน 4 byte แรกของ time-since-power-on (00 00 จาก 00 00 30 39) — ขาด time-since-power-on ไปครึ่งหนึ่งพอดี (2 จาก 4 bytes) หมายเหตุ: โจทย์ต้นทางระบุว่าเคสนี้ 'ยาว 10 bytes' แต่คณิตศาสตร์ไม่ตรงกับ 'ขาดครึ่งหนึ่งของ time field' พร้อมกัน (10 bytes = ไม่มี time field เลยแม้แต่ byte เดียว ไม่ใช่ขาดครึ่ง) QA จึงเลือกความยาว 12 bytes เพื่อให้ตรงกับคำอธิบาย 'ขาดครึ่งหนึ่ง' อย่างแท้จริง และยังคงพิสูจน์ประเด็นเดียวกัน: TLM มีความยาว fixed ต่อ frame ดังนั้น field ขาดกลางคันจับได้จากการเช็คความยาวรวมตั้งแต่ต้น (tooShort) ไม่ต้องมี reason แยกเป็น truncatedField สำหรับ frame ชนิดนี้ — ดู comment ใน eddystone_parser_test.dart",
+  "raw_hex": "20000bb81880000003e80000",
+  "expect": {
+    "result": "failure",
+    "reason": "tooShort"
+  }
+}

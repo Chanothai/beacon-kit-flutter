@@ -1,0 +1,11 @@
+{
+  "name": "ibeacon_too_short",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "ตัด ibeacon_valid_basic ให้เหลือ 20 bytes (company+prefix+UUID เต็ม แต่ไม่มี major/minor/txPower เลย) — ต่ำกว่าความยาวคงที่ 25 bytes ที่ ADR-3 กำหนดสำหรับ iBeacon manufacturer data",
+  "raw_hex": "4c000215e2c56db5dffb48d2b060d0f5a71096e0",
+  "expect": {
+    "result": "failure",
+    "reason": "tooShort"
+  }
+}
