@@ -237,6 +237,135 @@ void main() {
     await subscription.cancel();
   });
 
+  // ===================================================================
+  // Regression: บั๊ก "กด Start ครั้งที่ 2 แล้วเงียบสนิท" ที่เจอจากการทดสอบบน
+  // iPhone จริงรอบ 2 (27 ส.ค. 2026)
+  //
+  // ลำดับที่ผู้ใช้เจอ: Start #1 -> Don't Allow -> ได้ LOCATION_PERMISSION_DENIED
+  // ถูกต้อง -> Start #2 ไม่มีอะไรเกิดขึ้นเลย ไม่มี error ไม่ crash -> ไปเปิดสิทธิ์
+  // ใน Settings กลับมากด Start #3 ก็ยังเงียบ -> force quit แล้วเปิดใหม่ถึงใช้ได้
+  //
+  // สาเหตุอยู่ฝั่ง Dart ในไฟล์ที่เทสต์นี้คุม (ไม่ใช่ Swift): controller ที่ start
+  // ล้มเหลวถูกปล่อยค้างพร้อม listener เดิม การ listen รอบถัดไปจึงขยับผู้ฟัง
+  // 1 -> 2 ซึ่งไม่ยิง onListen -> ไม่มีการเรียก native อีกเลย
+  //
+  // เทสต์ชุดนี้เป็น Dart ล้วน ทดสอบได้โดยไม่ต้องมีอุปกรณ์ (Track A)
+  // ===================================================================
+
+  test('REGRESSION: start ล้มเหลว -> scan() รอบถัดไปต้องเรียก native start ใหม่จริง '
+      '(ไม่เงียบ) และรอบถัดไปสำเร็จได้ถ้า error หายไปแล้ว', () async {
+    final adapter = GenericIBeaconEddystoneAdapter(
+      iBeaconRegions: const [
+        IBeaconRegionConfig(identifier: 'k9p-default', uuid: 'UUID-1'),
+      ],
+    );
+
+    // --- Start #1: ผู้ใช้กด Don't Allow ---
+    fake.startIBeaconError = PlatformException(
+      code: 'LOCATION_PERMISSION_DENIED',
+    );
+    final firstErrors = <Object>[];
+    final firstSubscription = adapter.scan().listen(
+      (_) {},
+      onError: firstErrors.add,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(firstErrors, hasLength(1), reason: 'Start #1 ต้องได้ error');
+    expect(
+      fake.calls.where((c) => c == 'startIBeaconMonitoring'),
+      hasLength(1),
+    );
+
+    // --- Start #2: ยังไม่ได้สิทธิ์ ต้องเรียก native ซ้ำและได้ error อีกครั้ง ---
+    // (เดิมบั๊ก: onListen ไม่ยิง -> ไม่เรียก native เลย -> เงียบสนิท)
+    final secondErrors = <Object>[];
+    final secondSubscription = adapter.scan().listen(
+      (_) {},
+      onError: secondErrors.add,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      fake.calls.where((c) => c == 'startIBeaconMonitoring'),
+      hasLength(2),
+      reason: 'Start #2 ต้องเรียก native start ใหม่ ไม่ใช่เงียบไปเฉย ๆ',
+    );
+    expect(
+      secondErrors,
+      hasLength(1),
+      reason: 'Start #2 ต้องได้ error กลับมา ไม่ใช่ไม่มีอะไรเกิดขึ้น',
+    );
+
+    // --- Start #3: ผู้ใช้ไปเปิดสิทธิ์ใน Settings แล้วกลับมา (ไม่ force quit) ---
+    fake.startIBeaconError = null;
+    final thirdErrors = <Object>[];
+    final thirdSubscription = adapter.scan().listen(
+      (_) {},
+      onError: thirdErrors.add,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      fake.calls.where((c) => c == 'startIBeaconMonitoring'),
+      hasLength(3),
+      reason: 'Start #3 ต้องเรียก native start ใหม่',
+    );
+    expect(
+      thirdErrors,
+      isEmpty,
+      reason: 'สิทธิ์ผ่านแล้ว Start #3 ต้องสำเร็จโดยไม่ต้อง restart แอป',
+    );
+
+    // stream ที่ใช้งานได้จริงต้องส่ง advertisement ถึงผู้ฟังได้ด้วย
+    final received = <BeaconAdvertisement>[];
+    final activeSubscription = adapter.scan().listen(received.add);
+    fake.rangingController.add(_fakeCoreLocationEvent('AA'));
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(1));
+
+    await firstSubscription.cancel();
+    await secondSubscription.cancel();
+    await thirdSubscription.cancel();
+    await activeSubscription.cancel();
+  });
+
+  test('REGRESSION: start ล้มเหลว -> stream เดิมถูกปิด (ผู้ฟังได้ done) '
+      'ไม่ปล่อย controller ค้างไว้ให้ listen รอบถัดไปไปเกาะ', () async {
+    fake.startIBeaconError = PlatformException(
+      code: 'LOCATION_PERMISSION_DENIED',
+    );
+
+    final adapter = GenericIBeaconEddystoneAdapter(
+      iBeaconRegions: const [
+        IBeaconRegionConfig(identifier: 'k9p-default', uuid: 'UUID-1'),
+      ],
+    );
+
+    var isDone = false;
+    final errors = <Object>[];
+    final subscription = adapter.scan().listen(
+      (_) {},
+      onError: errors.add,
+      onDone: () => isDone = true,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(errors, hasLength(1));
+    expect(
+      isDone,
+      isTrue,
+      reason: 'stream ที่ start ไม่สำเร็จต้องถูกปิด ไม่ค้างเป็น zombie',
+    );
+    expect(
+      fake.calls,
+      contains('stopIBeaconMonitoring'),
+      reason: 'ต้องสั่งหยุด native scan ตอนรื้อ ไม่ leak การสแกนค้างไว้',
+    );
+
+    await subscription.cancel();
+  });
+
   test('supportsConnect == false', () {
     final adapter = GenericIBeaconEddystoneAdapter(
       iBeaconRegions: const [

@@ -46,6 +46,11 @@ class GenericIBeaconEddystoneAdapter implements BeaconAdapter {
     // broadcast controller เดียว re-use ข้ามการ listen หลายครั้ง — onListen จะ
     // ยิงเฉพาะตอนจำนวนผู้ฟังขยับจาก 0 -> 1 และ onCancel ยิงตอนขยับกลับเป็น 0
     // เพื่อไม่ให้เริ่ม/หยุด native scan ซ้ำซ้อนโดยไม่จำเป็น
+    //
+    // ข้อควรระวังที่เคยทำให้เกิดบั๊กจริง (ดู `_failAndTearDown`): ถ้า controller
+    // ตัวเดิมยังมี listener ค้างอยู่ การ listen รอบถัดไปจะทำให้จำนวนผู้ฟังขยับ
+    // 1 -> 2 ซึ่ง **ไม่ยิง onListen** แปลว่าจะไม่มีการเรียก native start อีกเลย
+    // เงียบ ๆ — controller ที่ start ไม่สำเร็จจึงต้องถูกรื้อทิ้งเสมอ ห้ามปล่อยค้าง
     _controller ??= StreamController<BeaconAdvertisement>.broadcast(
       onListen: _startScanning,
       onCancel: _stopScanning,
@@ -86,7 +91,32 @@ class GenericIBeaconEddystoneAdapter implements BeaconAdapter {
       }
     } catch (error, stackTrace) {
       controller.addError(error, stackTrace);
+      await _failAndTearDown(controller);
     }
+  }
+
+  /// รื้อ controller ที่ native start ล้มเหลวทิ้งให้หมด แล้วปิด stream
+  ///
+  /// **ทำไมต้องรื้อ ไม่ใช่แค่ addError แล้วปล่อยไว้** — บั๊กที่เจอจากการทดสอบบน
+  /// iPhone จริง (รอบ 2, 27 ส.ค. 2026): เดิมเมื่อ start ล้มเหลว (เช่นผู้ใช้กด
+  /// Don't Allow) โค้ดแค่ `addError` แล้วจบ ทำให้ `_controller` ตัวเดิมยังอยู่และ
+  /// ยังมี listener ของแอปค้างอยู่ 1 ตัว (การ addError ไม่ปิด stream และไม่ยกเลิก
+  /// subscription) พอผู้ใช้กด Start scan ครั้งถัดไป `scan()` จะ `??=` เจอ
+  /// controller ตัวเดิม แล้ว listener ขยับ 1 -> 2 ซึ่ง **onListen ไม่ยิง** →
+  /// `_startScanning()` ไม่ถูกเรียก → ไม่มีการเรียก native เลยแม้แต่ครั้งเดียว
+  /// → หน้าจอเงียบสนิท ไม่มี error ไม่ crash และจะเป็นแบบนี้ตลอดไปจนกว่าจะ
+  /// force quit แอป (สถานะค้างในหน่วยความจำ ไม่ใช่ปัญหา permission ของ OS)
+  ///
+  /// การปิด controller ทำให้ listener ที่ค้างอยู่ได้ `done` และถูกเก็บกวาด
+  /// การเรียก `scan()` ครั้งถัดไปจึงสร้าง controller ใหม่และ onListen ยิงตามปกติ
+  Future<void> _failAndTearDown(
+    StreamController<BeaconAdvertisement> controller,
+  ) async {
+    // ถ้ามีใครรื้อ/สลับ controller ไปแล้วระหว่างนี้ อย่าไปยุ่งกับของคนอื่น
+    if (!identical(_controller, controller)) return;
+
+    await _stopScanning();
+    if (!controller.isClosed) await controller.close();
   }
 
   Future<void> _stopScanning() async {

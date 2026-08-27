@@ -131,8 +131,21 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
 
     // ใช้ instance property (`locationManager.authorizationStatus`) ไม่ใช่ class
     // method `CLLocationManager.authorizationStatus()` ที่ deprecated ตั้งแต่ iOS 14
-    switch locationManager.authorizationStatus {
-    case .denied, .restricted:
+    //
+    // แปลง status -> การตัดสินใจ ผ่าน pure function ตัวเดียว (ดู
+    // `authorizationDecision(for:)`) เพื่อให้ XCTest ตรวจตารางการตัดสินใจนี้ได้บน
+    // simulator โดยไม่ต้องมี CLLocationManager จริง — ห้ามเขียน logic ซ้ำที่อื่น
+    switch Self.authorizationDecision(for: locationManager.authorizationStatus) {
+    case .denyImmediately:
+      // (ก) branch แยกชัดเจน — คืน error ทันทีเสมอ **ห้าม**ไหลไปฝาก pendingStart
+      // รอ delegate callback เด็ดขาด เพราะเมื่อสถานะเป็น .denied อยู่แล้ว การเรียก
+      // requestAlwaysAuthorization() เป็น no-op ของ CoreLocation (ไม่มี prompt ขึ้น
+      // ไม่มีการเปลี่ยนสถานะ) callback จึงไม่มีวันมา = คำขอค้างตลอดกาล
+      //
+      // (ข) ถ้ามีคำขอเก่าค้างอยู่ ต้องปลดให้หมดตรงนี้ด้วย ไม่ปล่อยข้ามไปครั้งถัดไป
+      failPendingStart(
+        message: "สิทธิ์ location ถูกปฏิเสธ/ถูกจำกัดระหว่างที่คำขอก่อนหน้ายังค้างอยู่"
+      )
       result(
         FlutterError(
           code: "LOCATION_PERMISSION_DENIED",
@@ -141,7 +154,7 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
         )
       )
 
-    case .notDetermined:
+    case .deferUntilAuthorizationCallback:
       // บั๊กที่เจอจากการทดสอบบน iPhone จริง (27 ส.ค. 2026): เดิมโค้ดตรงนี้เรียกขอ
       // สิทธิ์แล้วอ่าน authorization status ต่อทันทีแบบ synchronous ซึ่ง**ยังเป็น
       // .notDetermined อยู่เสมอ** เพราะ system prompt เพิ่งขึ้นบนจอ ผู้ใช้ยังไม่ทัน
@@ -160,16 +173,59 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       }
       locationManager.requestAlwaysAuthorization()
 
-    case .authorizedAlways, .authorizedWhenInUse:
+    case .proceed:
       // ranging ใช้ได้ทั้ง whenInUse และ always — ต่างกันแค่เรื่อง background
       applyParsedRegions(parsedRegions)
       result(nil)
+    }
+  }
 
+  /// การตัดสินใจว่าจะทำอะไรต่อ เมื่อรู้ `CLAuthorizationStatus` ปัจจุบัน
+  ///
+  /// แยกออกมาเป็น pure function เพื่อให้ทดสอบด้วย XCTest บน simulator ได้โดยไม่
+  /// ต้องมี `CLLocationManager` จริงหรืออุปกรณ์จริง — ดู
+  /// `example/ios/RunnerTests/RunnerTests.swift`
+  enum AuthorizationDecision: Equatable {
+    /// สิทธิ์ผ่านแล้ว เริ่ม monitor+range ได้ทันที
+    case proceed
+    /// ยังไม่เคยถาม — ขอสิทธิ์แล้วพักคำขอไว้รอ delegate callback
+    case deferUntilAuthorizationCallback
+    /// ถูกปฏิเสธ/จำกัด — คืน error ทันที **ห้ามพักรอ callback** เพราะเมื่อสถานะ
+    /// เป็น .denied อยู่แล้ว `requestAlwaysAuthorization()` เป็น no-op ของ
+    /// CoreLocation callback จึงไม่มีวันมา (บั๊กที่เจอจากทดสอบเครื่องจริงรอบ 2)
+    case denyImmediately
+  }
+
+  static func authorizationDecision(for status: CLAuthorizationStatus)
+    -> AuthorizationDecision
+  {
+    switch status {
+    case .authorizedAlways, .authorizedWhenInUse:
+      return .proceed
+    case .notDetermined:
+      return .deferUntilAuthorizationCallback
+    case .denied, .restricted:
+      return .denyImmediately
     @unknown default:
-      result(
+      // สถานะที่เราไม่รู้จัก = ไม่รับประกันว่า callback จะมา ถือว่าไม่ได้รับสิทธิ์
+      return .denyImmediately
+    }
+  }
+
+  /// ปลดคำขอที่ค้างรอ prompt อยู่ทั้งหมดด้วย `LOCATION_PERMISSION_DENIED` แล้ว
+  /// เคลียร์ `pendingStart` ทิ้ง — no-op ถ้าไม่มีอะไรค้าง
+  ///
+  /// เรียกเฉพาะตอนที่ **รู้แน่ว่า callback จะไม่มีวันมา** (สิทธิ์ถูกปฏิเสธไปแล้ว)
+  /// เท่านั้น — ไม่เรียกในเคส argument ผิดรูปแบบหรือเกินเพดาน region เพราะเคส
+  /// เหล่านั้นคำขอเก่ายังรอ prompt อยู่อย่างถูกต้อง delegate ยังจะมาตามปกติ
+  private func failPendingStart(message: String) {
+    guard let pending = pendingStart else { return }
+    pendingStart = nil
+    for pendingResult in pending.results {
+      pendingResult(
         FlutterError(
           code: "LOCATION_PERMISSION_DENIED",
-          message: "Unknown CLAuthorizationStatus — ถือว่าไม่ได้รับสิทธิ์",
+          message: message,
           details: nil
         )
       )
@@ -217,41 +273,22 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
     guard let pending = pendingStart else { return }
 
-    switch manager.authorizationStatus {
-    case .notDetermined:
+    // ใช้ตารางการตัดสินใจตัวเดียวกับ startMonitoring() เพื่อไม่ให้ logic แตกเป็น
+    // สองชุดที่ drift จากกันได้
+    switch Self.authorizationDecision(for: manager.authorizationStatus) {
+    case .deferUntilAuthorizationCallback:
       // ผู้ใช้ยังไม่ตอบ prompt — ยังไม่สรุปผล รอ callback รอบถัดไป
       return
 
-    case .authorizedAlways, .authorizedWhenInUse:
+    case .proceed:
       pendingStart = nil
       applyParsedRegions(pending.parsedRegions)
       for pendingResult in pending.results {
         pendingResult(nil)
       }
 
-    case .denied, .restricted:
-      pendingStart = nil
-      for pendingResult in pending.results {
-        pendingResult(
-          FlutterError(
-            code: "LOCATION_PERMISSION_DENIED",
-            message: "ผู้ใช้ปฏิเสธสิทธิ์ location จาก system prompt",
-            details: nil
-          )
-        )
-      }
-
-    @unknown default:
-      pendingStart = nil
-      for pendingResult in pending.results {
-        pendingResult(
-          FlutterError(
-            code: "LOCATION_PERMISSION_DENIED",
-            message: "Unknown CLAuthorizationStatus — ถือว่าไม่ได้รับสิทธิ์",
-            details: nil
-          )
-        )
-      }
+    case .denyImmediately:
+      failPendingStart(message: "ผู้ใช้ปฏิเสธสิทธิ์ location จาก system prompt")
     }
   }
 

@@ -457,6 +457,8 @@ flutter:
 
 เหตุผลที่ `startBluetoothScan` บังคับ `serviceUuids` ไม่มี wildcard scan: เพื่อให้ contract เดียวกันทำงานถูกทั้ง foreground และ background ตั้งแต่ต้น (background CoreBluetooth ที่ไม่ระบุ service UUID จะไม่รายงานอะไรเลย — ยืนยันแล้วในหัวข้อ "ข้อจำกัดของ iOS" ข้อ 3 ด้านบน) ถ้าปล่อยเป็น optional จะมีโค้ดที่ใช้ได้แค่ foreground หลุดเข้ามาได้ง่าย
 
+**สัญญาของ `BeaconAdapter.scan()` เมื่อ native start ล้มเหลว (เพิ่ม 27 ส.ค. 2026 หลังทดสอบเครื่องจริงรอบ 2):** adapter ที่ใช้ broadcast `StreamController` ตัวเดียว re-use ข้ามการเรียก **ต้องรื้อ controller ทิ้งและปิด stream ทุกครั้งที่ native start ล้มเหลว** ห้ามแค่ `addError` แล้วปล่อยค้าง เพราะ `onListen` ของ broadcast controller ยิงเฉพาะตอนผู้ฟังขยับ 0 → 1 เท่านั้น — ถ้า controller เดิมยังมี listener ค้าง การเรียก `scan()` รอบถัดไปจะไม่ trigger การเริ่ม native อีกเลยและเงียบสนิทจนกว่าจะ restart แอป (บั๊กจริงที่เจอบนเครื่อง: `docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 1 🐞 รอบ 2)
+
 **Event channel #1 — iBeacon ranging:** `beacon_kit_ios/ibeacon_ranging_events`
 - ยิง 1 event ต่อการเรียก `locationManager(_:didRange:satisfying:)` ของ CoreLocation 1 ครั้ง (เป็น batch ตามที่ OS ให้มา — **ไม่ flatten ฝั่ง native**)
 - Payload: `List<Map>` แต่ละ map = `{regionIdentifier, uuid, major, minor, rssi, proximity: String (immediate|near|far|unknown), timestamp: int (epoch ms)}`

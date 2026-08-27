@@ -69,10 +69,19 @@ class _ScanPageState extends State<ScanPage> {
         setState(() => _beacons[key] = advertisement);
       },
       onError: (Object error) {
+        if (!mounted) return;
         setState(() {
           _errorMessage = error.toString();
           _isScanning = false;
         });
+      },
+      // adapter ปิด stream ให้เมื่อ native start ล้มเหลว — ต้องทิ้ง subscription
+      // ที่ตายแล้วตรงนี้ ไม่งั้นจะถือ handle ค้างไว้เฉย ๆ และกด Start ครั้งถัดไป
+      // จะทับ field เดิมโดยที่ตัวเก่าไม่เคยถูกเก็บกวาด
+      onDone: () {
+        _subscription = null;
+        if (!mounted) return;
+        setState(() => _isScanning = false);
       },
     );
   }
