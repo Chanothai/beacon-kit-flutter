@@ -50,6 +50,38 @@
       `LOCATION_PERMISSION_DENIED` หรือ `BLUETOOTH_PERMISSION_DENIED` ตาม ADR-4
       ใน `ARCHITECTURE.md`)
 
+### 🐞 บั๊กที่เจอจากการทดสอบบน iPhone จริง — รอบที่ 1 (27 ส.ค. 2026)
+
+**รายงานโดย:** ผู้ใช้ (เจ้าของโปรเจกต์) จากการรันบนเครื่องจริง — ไม่ใช่ผลจาก unit
+test หรือการวิเคราะห์โค้ด นี่เป็นหลักฐานระดับ "ทดสอบจริง" ตาม `SPRINT.md`
+
+**อาการ:** เปิดแอปครั้งแรกบนเครื่องที่ยังไม่เคย grant permission แล้วกด Start scan
+→ system prompt ขึ้นถูกต้อง แต่ **ต่อให้กด Allow ranging ก็ไม่เริ่ม** ต้องกด Start
+scan ซ้ำอีกรอบถึงจะทำงาน
+
+**สาเหตุ:** `IBeaconRangingManager.startMonitoring()` เรียก
+`requestAlwaysAuthorization()` แล้วอ่าน authorization status ต่อทันทีแบบ
+synchronous ซึ่ง**ยังเป็น `.notDetermined` เสมอ** เพราะ prompt เพิ่งขึ้นบนจอ ผู้ใช้
+ยังไม่ทันกดตอบ โค้ดจึงคืน `LOCATION_PERMISSION_DENIED` แล้วจบ ไม่มีอะไรมาเริ่ม
+ranging ให้หลังผู้ใช้กด Allow — CoreLocation คืนผลของ prompt ผ่าน delegate
+เท่านั้น ไม่มีทางอ่านได้แบบ synchronous
+
+**แก้แล้ว (27 ส.ค. 2026):** ย้ายการเริ่ม `startRangingBeacons` ไปรอ
+`locationManagerDidChangeAuthorization(_:)` — เคส `.notDetermined` จะพักคำขอไว้ใน
+`pendingStart` (ไม่เรียก `FlutterResult` ทันที) แล้วให้ delegate callback เป็นคน
+สรุปผลครั้งเดียวหลังผู้ใช้ตอบ prompt พร้อมเปลี่ยนไปใช้ instance property
+`locationManager.authorizationStatus` แทน class method ที่ deprecated ตั้งแต่ iOS 14
+
+**สถานะการแก้:** `code-complete, unverified` — คอมไพล์ผ่าน แต่ **ยังไม่ได้ทดสอบซ้ำ
+บนเครื่องจริง** ต้องรันข้อ 1 นี้ใหม่ทั้งข้อบนเครื่องที่ลบแอปออกแล้ว จึงจะปิดได้
+
+- [ ] **(ทดสอบซ้ำหลังแก้)** ลบแอป → รันใหม่ → กด Start scan **ครั้งเดียว** → กด
+      Allow → ranging ต้องเริ่มเองทันทีโดยไม่ต้องกด Start scan ซ้ำ
+- [ ] **(ทดสอบซ้ำหลังแก้)** ลบแอป → รันใหม่ → กด Start scan → กด Don't Allow →
+      ต้องได้ `LOCATION_PERMISSION_DENIED` ครั้งเดียว ไม่ค้าง ไม่ crash
+- [ ] **(ทดสอบซ้ำหลังแก้)** กด Start scan รัว ๆ หลายครั้งขณะ prompt ยังค้างบนจอ →
+      ทุกคำขอต้องได้คำตอบครบ ไม่มี Future ฝั่ง Dart ค้างไม่ complete
+
 ## 2. iBeacon ranging ผ่าน CoreLocation (path หลัก)
 
 - [ ] ตั้งค่า K9P ให้ broadcast iBeacon ด้วย UUID ค่าโรงงาน
@@ -133,7 +165,7 @@ password/MD5 auth/connect timeout เป็นของ connect-path (`KkmK9pAda
 
 | ข้อ | ผ่าน/ไม่ผ่าน | วันที่ | อุปกรณ์ (iPhone รุ่น/iOS) | K9P (รุ่น/firmware) | หมายเหตุ/หลักฐาน |
 |---|---|---|---|---|---|
-| 1. Permission prompt | ยังไม่ทดสอบ | — | — | — | รอ K9P + iPhone จริง |
+| 1. Permission prompt | **ไม่ผ่าน (รอบ 1)** → แก้แล้ว **รอทดสอบซ้ำ** | 27 ส.ค. 2026 | _(ผู้ทดสอบกรอก)_ | _(ผู้ทดสอบกรอก)_ | เจอบั๊ก sync authorization check — ดูหัวข้อ 1 🐞 ด้านบน แก้แล้วแต่ยังไม่ verified |
 | 2. iBeacon ranging | ยังไม่ทดสอบ | — | — | — | — |
 | 3. หาย/ปิดเครื่อง | ยังไม่ทดสอบ | — | — | — | — |
 | 4. Background mode | ยังไม่ทดสอบ | — | — | — | — |
@@ -141,6 +173,11 @@ password/MD5 auth/connect timeout เป็นของ connect-path (`KkmK9pAda
 | 6. Eddystone/CoreBluetooth | ยังไม่ทดสอบ | — | — | — | — |
 | 7. Bluetooth ปิดกลางคัน | ยังไม่ทดสอบ | — | — | — | — |
 
-**ณ วันที่เขียนเช็คลิสต์นี้ (27 ส.ค. 2026): ทุกข้อ "ยังไม่ทดสอบ" — ห้าม subagent
-หรือคนใดอ้างว่า iOS broadcast scanning "ใช้งานได้จริง/verified" จนกว่าจะมีคนกรอก
-ตารางนี้ครบพร้อมหลักฐานจากอุปกรณ์จริง**
+**อัปเดต 27 ส.ค. 2026:** มีการทดสอบบนเครื่องจริงรอบแรกแล้วเฉพาะข้อ 1 ซึ่ง
+**ไม่ผ่าน** และทำให้เจอบั๊ก authorization (ดูหัวข้อ 1) บั๊กนั้นแก้แล้วแต่**ยังไม่ได้
+ทดสอบซ้ำ** ข้อ 2-7 ยังไม่เคยทดสอบเลย ช่องรุ่นเครื่อง/iOS/K9P ยังว่างอยู่ รอผู้ทดสอบ
+กรอก
+
+**ห้าม subagent หรือคนใดอ้างว่า iOS broadcast scanning "ใช้งานได้จริง/verified"
+จนกว่าจะมีคนกรอกตารางนี้ครบพร้อมหลักฐานจากอุปกรณ์จริง — การที่บั๊กหนึ่งตัวถูกแก้
+ไม่ได้แปลว่าข้ออื่นผ่าน และไม่ได้แปลว่าข้อ 1 ผ่านแล้วด้วย**

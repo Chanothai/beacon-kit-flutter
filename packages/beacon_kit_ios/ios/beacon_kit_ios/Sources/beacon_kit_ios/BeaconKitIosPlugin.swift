@@ -63,9 +63,13 @@ public class BeaconKitIosPlugin: NSObject, FlutterPlugin {
     guard let args = call.arguments as? [String: Any],
       let rawRegions = args["regions"] as? [[String: Any]]
     else {
+      // เหตุผลเดียวกับ handleStartBluetoothScan: เคสนี้คือ "argument ผิดรูปแบบ"
+      // (ส่งมาไม่ใช่ List<Map> เลย) ซึ่งเป็นบั๊กฝั่งผู้เรียก ไม่ใช่ "UUID string
+      // parse ไม่ผ่าน" INVALID_REGION_UUID สงวนไว้ให้เคสหลังเท่านั้น — ยิงจาก
+      // IBeaconRangingManager.startMonitoring() ตอน UUID(uuidString:) คืน nil
       result(
         FlutterError(
-          code: "INVALID_REGION_UUID",
+          code: "INVALID_ARGUMENT",
           message: "'regions' ต้องเป็น List<Map> ที่มี identifier/uuid",
           details: nil
         )

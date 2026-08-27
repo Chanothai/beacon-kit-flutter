@@ -22,6 +22,20 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// เพดาน region ที่ `CLLocationManager` รองรับพร้อมกันบน iOS
   private static let maxMonitoredRegions = 20
 
+  /// region ที่ parse ผ่านแล้วแต่ยังเริ่ม range ไม่ได้ เพราะ authorization ยังเป็น
+  /// `.notDetermined` (system prompt ค้างอยู่บนจอ) — จะถูกนำไปใช้จริงใน
+  /// `locationManagerDidChangeAuthorization(_:)` เมื่อผู้ใช้ตอบ prompt แล้ว
+  ///
+  /// `results` เป็น array เพราะแอปอาจเรียก `startMonitoring` ซ้ำได้ก่อนผู้ใช้จะกด
+  /// ตอบ prompt — ชุด region เอาครั้งล่าสุด (สอดคล้องกับ semantic "แทนที่ ไม่ merge")
+  /// แต่ทุก `FlutterResult` ที่ค้างอยู่ต้องถูกเรียกให้ครบพอดีครั้งเดียว ไม่งั้นฝั่ง
+  /// Dart จะมี Future ที่ไม่ complete ตลอดไป
+  private struct PendingStart {
+    var parsedRegions: [(identifier: String, constraint: CLBeaconIdentityConstraint)]
+    var results: [FlutterResult]
+  }
+  private var pendingStart: PendingStart?
+
   override init() {
     super.init()
     locationManager.delegate = self
@@ -44,38 +58,19 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   // MARK: - Method channel entry points
 
   /// เริ่ม monitor+range iBeacon ตาม [regions] — **แทนที่**ชุดที่ monitor อยู่เดิม
-  /// ทั้งหมด (ไม่ merge) เช็คสิทธิ์และเพดาน 20 regions **ก่อน**สร้าง `CLBeaconRegion`
-  /// แม้แต่ตัวเดียวเสมอ แบบ all-or-nothing ต่อการเรียกแต่ละครั้ง — ถ้า region ใด
-  /// region หนึ่ง parse ไม่ผ่าน จะไม่มี region ไหนถูกสร้าง/แทนที่เลย (ดู
-  /// ARCHITECTURE.md, ADR-4)
+  /// ทั้งหมด (ไม่ merge) แบบ all-or-nothing ต่อการเรียกแต่ละครั้ง: ถ้า region ใด
+  /// region หนึ่ง parse ไม่ผ่าน จะไม่มี region ไหนถูกสร้าง/แทนที่เลย
+  ///
+  /// **ลำดับการตรวจ: เพดาน region -> parse/validate -> authorization**
+  /// (เดิม authorization มาก่อน) เหตุผล: argument ที่ผิดรูปแบบเป็นบั๊กของผู้เรียก
+  /// ควรโผล่ทันทีไม่ว่าสิทธิ์จะเป็นสถานะไหน และการจะ "พัก" คำขอไว้รอ prompt ได้
+  /// ต้อง parse ให้เสร็จก่อนอยู่แล้ว
+  ///
+  /// **เมื่อ authorization เป็น `.notDetermined`** จะ **ไม่** เรียก [result] ทันที
+  /// แต่พักคำขอไว้ใน `pendingStart` แล้วรอ `locationManagerDidChangeAuthorization(_:)`
+  /// เป็นคนสรุปผล — ดูเหตุผลที่ห้ามเช็คสถานะแบบ synchronous ทันทีหลังขอสิทธิ์
+  /// ที่คอมเมนต์ในตัว case เอง
   func startMonitoring(regions: [[String: Any]], result: @escaping FlutterResult) {
-    let authorizationStatus = CLLocationManager.authorizationStatus()
-    switch authorizationStatus {
-    case .denied, .restricted:
-      result(
-        FlutterError(
-          code: "LOCATION_PERMISSION_DENIED",
-          message: "Location permission denied/restricted",
-          details: nil
-        )
-      )
-      return
-    case .notDetermined:
-      // ไม่ block รอผลแบบ async — ขอสิทธิ์แล้วคืน error ทันที บอกให้ผู้เรียก retry
-      // เองหลังผู้ใช้ตอบ system prompt
-      locationManager.requestAlwaysAuthorization()
-      result(
-        FlutterError(
-          code: "LOCATION_PERMISSION_DENIED",
-          message: "Location permission not determined yet — requested, retry after user responds",
-          details: nil
-        )
-      )
-      return
-    default:
-      break
-    }
-
     // เช็คเพดาน 20 regions ก่อนสร้าง CLBeaconRegion ใด ๆ ทั้งสิ้น (ตาม ADR-4:
     // regions.count + currentlyMonitoredCount > 20)
     let currentlyMonitoredCount = locationManager.monitoredRegions.count
@@ -98,9 +93,11 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       guard let identifier = rawRegion["identifier"] as? String,
         let uuidString = rawRegion["uuid"] as? String
       else {
+        // ขาด key ไปเลย = argument ผิดรูปแบบ ไม่ใช่ UUID พัง (INVALID_REGION_UUID
+        // สงวนไว้ให้ guard ถัดไปที่ UUID(uuidString:) คืน nil เท่านั้น)
         result(
           FlutterError(
-            code: "INVALID_REGION_UUID",
+            code: "INVALID_ARGUMENT",
             message: "region ขาด identifier หรือ uuid",
             details: nil
           )
@@ -132,7 +129,58 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       parsedRegions.append((identifier: identifier, constraint: constraint))
     }
 
-    // ทุก region parse ผ่านหมดแล้ว — แทนที่ของเดิมทั้งหมด (ไม่ merge) แล้วเริ่มใหม่
+    // ใช้ instance property (`locationManager.authorizationStatus`) ไม่ใช่ class
+    // method `CLLocationManager.authorizationStatus()` ที่ deprecated ตั้งแต่ iOS 14
+    switch locationManager.authorizationStatus {
+    case .denied, .restricted:
+      result(
+        FlutterError(
+          code: "LOCATION_PERMISSION_DENIED",
+          message: "Location permission denied/restricted",
+          details: nil
+        )
+      )
+
+    case .notDetermined:
+      // บั๊กที่เจอจากการทดสอบบน iPhone จริง (27 ส.ค. 2026): เดิมโค้ดตรงนี้เรียกขอ
+      // สิทธิ์แล้วอ่าน authorization status ต่อทันทีแบบ synchronous ซึ่ง**ยังเป็น
+      // .notDetermined อยู่เสมอ** เพราะ system prompt เพิ่งขึ้นบนจอ ผู้ใช้ยังไม่ทัน
+      // กดตอบด้วยซ้ำ ผลคือการเปิดแอปครั้งแรกจะคืน error และไม่เริ่ม ranging เลย
+      // แม้ผู้ใช้จะกด Allow ก็ตาม (ต้องกด start ซ้ำเองรอบสอง)
+      //
+      // CoreLocation คืนผลของ prompt ผ่าน delegate เท่านั้น จึงพักคำขอไว้แล้วให้
+      // locationManagerDidChangeAuthorization(_:) เป็นคนเรียก result ให้ครั้งเดียว
+      if pendingStart == nil {
+        pendingStart = PendingStart(parsedRegions: parsedRegions, results: [result])
+      } else {
+        // เรียกซ้ำระหว่าง prompt ค้างอยู่ — ชุด region เอาครั้งล่าสุด แต่เก็บ result
+        // ของทุกคำขอไว้ให้ครบ เพื่อไม่ให้มี Future ฝั่ง Dart ค้างไม่ complete
+        pendingStart?.parsedRegions = parsedRegions
+        pendingStart?.results.append(result)
+      }
+      locationManager.requestAlwaysAuthorization()
+
+    case .authorizedAlways, .authorizedWhenInUse:
+      // ranging ใช้ได้ทั้ง whenInUse และ always — ต่างกันแค่เรื่อง background
+      applyParsedRegions(parsedRegions)
+      result(nil)
+
+    @unknown default:
+      result(
+        FlutterError(
+          code: "LOCATION_PERMISSION_DENIED",
+          message: "Unknown CLAuthorizationStatus — ถือว่าไม่ได้รับสิทธิ์",
+          details: nil
+        )
+      )
+    }
+  }
+
+  /// แทนที่ region ที่ monitor อยู่เดิมทั้งหมดด้วย [parsedRegions] แล้วเริ่ม
+  /// monitor+range ใหม่ — เรียกได้เฉพาะตอนที่ authorization ผ่านแล้วเท่านั้น
+  private func applyParsedRegions(
+    _ parsedRegions: [(identifier: String, constraint: CLBeaconIdentityConstraint)]
+  ) {
     stopMonitoring(identifiers: nil)
 
     for parsedRegion in parsedRegions {
@@ -145,8 +193,6 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       locationManager.startMonitoring(for: region)
       locationManager.startRangingBeacons(satisfying: parsedRegion.constraint)
     }
-
-    result(nil)
   }
 
   /// หยุด monitor+range ตาม [identifiers] — nil = หยุดทั้งหมดที่กำลัง monitor อยู่
@@ -162,6 +208,52 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   }
 
   // MARK: - CLLocationManagerDelegate
+
+  /// จุดที่ CoreLocation คืนผลของ system permission prompt — เป็นทางเดียวที่รู้ผล
+  /// ได้จริง (อ่าน status แบบ synchronous ทันทีหลังขอสิทธิ์จะได้ .notDetermined เสมอ)
+  ///
+  /// callback นี้ยิงหนึ่งครั้งทันทีที่ตั้ง `locationManager.delegate` ด้วย จึงต้อง
+  /// guard ว่ามีคำขอค้างอยู่จริงก่อนเสมอ
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard let pending = pendingStart else { return }
+
+    switch manager.authorizationStatus {
+    case .notDetermined:
+      // ผู้ใช้ยังไม่ตอบ prompt — ยังไม่สรุปผล รอ callback รอบถัดไป
+      return
+
+    case .authorizedAlways, .authorizedWhenInUse:
+      pendingStart = nil
+      applyParsedRegions(pending.parsedRegions)
+      for pendingResult in pending.results {
+        pendingResult(nil)
+      }
+
+    case .denied, .restricted:
+      pendingStart = nil
+      for pendingResult in pending.results {
+        pendingResult(
+          FlutterError(
+            code: "LOCATION_PERMISSION_DENIED",
+            message: "ผู้ใช้ปฏิเสธสิทธิ์ location จาก system prompt",
+            details: nil
+          )
+        )
+      }
+
+    @unknown default:
+      pendingStart = nil
+      for pendingResult in pending.results {
+        pendingResult(
+          FlutterError(
+            code: "LOCATION_PERMISSION_DENIED",
+            message: "Unknown CLAuthorizationStatus — ถือว่าไม่ได้รับสิทธิ์",
+            details: nil
+          )
+        )
+      }
+    }
+  }
 
   func locationManager(
     _ manager: CLLocationManager,

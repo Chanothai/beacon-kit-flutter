@@ -196,6 +196,38 @@ void main() {
       );
     });
 
+    // ข้อจำกัดของเทสต์ตัวนี้ (อ่านก่อนเชื่อ): mock handler จำลอง native ว่าโยน
+    // INVALID_ARGUMENT — จึงพิสูจน์ได้แค่ว่า **ชั้น Dart forward code นี้ออกไปโดย
+    // ไม่กลืน/ไม่แปลง** ไม่ได้พิสูจน์ว่า BeaconKitIosPlugin.handleStartBluetoothScan
+    // ฝั่ง Swift โยน code นี้จริงตอนได้ argument ผิดรูปแบบ (ตาม SPRINT.md ข้อ 2:
+    // mock ไม่นับเป็นการยืนยันพฤติกรรมของ native)
+    // หลักฐานฝั่ง native ที่มีตอนนี้คือ string INVALID_ARGUMENT ถูกคอมไพล์ลง
+    // arm64 object จริง — การยืนยันเต็มรูปแบบต้องรันบนอุปกรณ์ตาม
+    // docs/test-checklists/ios_broadcast_scanning.md
+    test('startBluetoothScan: PlatformException(INVALID_ARGUMENT) จาก native '
+        '(argument ผิดรูปแบบ) หลุดออกมาถึงผู้เรียกตรง ๆ และไม่ถูกแปลงเป็น '
+        'BLUETOOTH_UNAVAILABLE', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(platform.methodChannel, (call) async {
+            throw PlatformException(
+              code: 'INVALID_ARGUMENT',
+              message:
+                  "'serviceUuids' ต้องเป็น List<String> (ไม่มี wildcard scan)",
+            );
+          });
+
+      await expectLater(
+        platform.startBluetoothScan([_eddystoneServiceUuid]),
+        throwsA(
+          isA<PlatformException>().having(
+            (e) => e.code,
+            'code',
+            'INVALID_ARGUMENT',
+          ),
+        ),
+      );
+    });
+
     test('startBluetoothScan: PlatformException(BLUETOOTH_UNAVAILABLE) '
         'หลุดออกมาถึงผู้เรียกตรง ๆ', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

@@ -444,10 +444,16 @@ flutter:
 
 | Method | Args | Return | Error code |
 |---|---|---|---|
-| `startIBeaconMonitoring` | `regions: List<Map>` — แต่ละ region `{identifier: String, uuid: String, major: int?, minor: int?}` | `void` | `TOO_MANY_REGIONS` (regions.length + จำนวนที่ monitor อยู่แล้ว > 20), `INVALID_REGION_UUID` (uuid parse เป็น `NSUUID` ไม่ได้), `LOCATION_PERMISSION_DENIED` |
+| `startIBeaconMonitoring` | `regions: List<Map>` — แต่ละ region `{identifier: String, uuid: String, major: int?, minor: int?}` | `void` | `TOO_MANY_REGIONS` (regions.length + จำนวนที่ monitor อยู่แล้ว > 20), `INVALID_ARGUMENT` (`regions` ไม่ใช่ `List<Map>` หรือ region ขาด key `identifier`/`uuid` — บั๊กฝั่งผู้เรียก), `INVALID_REGION_UUID` (**เฉพาะ**กรณี uuid string parse เป็น `NSUUID` ไม่ได้), `LOCATION_PERMISSION_DENIED` |
 | `stopIBeaconMonitoring` | `identifiers: List<String>?` (null = stop ทั้งหมด) | `void` | — |
 | `startBluetoothScan` | `serviceUuids: List<String>` (บังคับระบุเสมอ ไม่มี wildcard — ดูเหตุผลด้านล่าง) | `void` | `INVALID_ARGUMENT` (`serviceUuids` ไม่ใช่ `List<String>` — บั๊กฝั่งผู้เรียก), `BLUETOOTH_UNAVAILABLE` (CBManagerState != poweredOn — สภาวะเครื่อง ไม่ใช่บั๊กโค้ด), `BLUETOOTH_PERMISSION_DENIED` |
 | `stopBluetoothScan` | — | `void` | — |
+
+**`startIBeaconMonitoring` ตอบกลับแบบ async เมื่อสิทธิ์ยังเป็น `.notDetermined` (แก้ 27 ส.ค. 2026 หลังทดสอบบน iPhone จริง):** ถ้า authorization ยังไม่ถูกกำหนด native จะ **ไม่** ตอบ `FlutterResult` ทันที แต่พักคำขอไว้แล้วขอสิทธิ์ จากนั้นรอ `locationManagerDidChangeAuthorization(_:)` เป็นคนตอบครั้งเดียว — Allow → `null` (ranging เริ่มให้เอง ผู้เรียกไม่ต้อง retry), Don't Allow → `LOCATION_PERMISSION_DENIED` แปลว่า Future ฝั่ง Dart จะค้างอยู่นานเท่าที่ผู้ใช้ยังไม่กดตอบ prompt ซึ่งถูกต้องตามความเป็นจริงของ OS
+
+เหตุผลที่ต้องเป็นแบบนี้: อ่าน authorization status แบบ synchronous ทันทีหลังเรียก `requestAlwaysAuthorization()` จะได้ `.notDetermined` เสมอ (prompt เพิ่งขึ้น ผู้ใช้ยังไม่ทันตอบ) CoreLocation คืนผลผ่าน delegate ทางเดียวเท่านั้น — บั๊กเวอร์ชันแรกที่เจอจากการทดสอบเครื่องจริงคือแอปคืน error แล้วไม่เริ่ม ranging เลยแม้ผู้ใช้กด Allow ต้องกด start ซ้ำเอง (รายละเอียด: `docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 1)
+
+**ลำดับการตรวจใน `startIBeaconMonitoring` เปลี่ยนเป็น:** เพดาน region → parse/validate argument → authorization (เดิม authorization มาก่อน) เพื่อให้ `INVALID_ARGUMENT`/`INVALID_REGION_UUID` ซึ่งเป็นบั๊กของผู้เรียกโผล่ทันทีไม่ว่าสถานะสิทธิ์จะเป็นอะไร และเพราะการพักคำขอไว้รอ prompt ต้อง parse ให้เสร็จก่อนอยู่แล้ว
 
 เหตุผลที่ `startBluetoothScan` บังคับ `serviceUuids` ไม่มี wildcard scan: เพื่อให้ contract เดียวกันทำงานถูกทั้ง foreground และ background ตั้งแต่ต้น (background CoreBluetooth ที่ไม่ระบุ service UUID จะไม่รายงานอะไรเลย — ยืนยันแล้วในหัวข้อ "ข้อจำกัดของ iOS" ข้อ 3 ด้านบน) ถ้าปล่อยเป็น optional จะมีโค้ดที่ใช้ได้แค่ foreground หลุดเข้ามาได้ง่าย
 
