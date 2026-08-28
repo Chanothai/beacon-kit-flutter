@@ -3,7 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'beacon_kit_ios_platform.dart';
+import 'ibeacon_authorization_level.dart';
 import 'ibeacon_region_request.dart';
+import 'ibeacon_region_state_event.dart';
 
 /// Service UUID เต็มรูปของ Eddystone (`0000FEAA-...`) ตัวพิมพ์เล็ก — ตรงกับ key ที่
 /// `RawAdvertisementScanner.swift` ใช้ใส่ใน `serviceData` map (ดู ARCHITECTURE.md,
@@ -11,10 +13,12 @@ import 'ibeacon_region_request.dart';
 const String _eddystoneServiceUuid = '0000feaa-0000-1000-8000-00805f9b34fb';
 
 /// Implementation ของ [BeaconKitIosPlatform] ที่คุยกับ native (Swift) ผ่าน 1 method
-/// channel + 2 event channel ตาม `beacon_kit_ios/methods`,
-/// `beacon_kit_ios/ibeacon_ranging_events`, `beacon_kit_ios/raw_advertisement_events`
+/// channel + 3 event channel ตาม `beacon_kit_ios/methods`,
+/// `beacon_kit_ios/ibeacon_ranging_events`, `beacon_kit_ios/raw_advertisement_events`,
+/// `beacon_kit_ios/region_state_events` (ADR-6)
 ///
-/// อ้างอิง: ARCHITECTURE.md, ADR-4 "iOS platform channel contract"
+/// อ้างอิง: ARCHITECTURE.md, ADR-4 "iOS platform channel contract", ADR-6 "จาก
+/// ranging-only เป็น region monitoring (enter/exit)"
 class MethodChannelBeaconKitIos extends BeaconKitIosPlatform {
   /// The method channel used to interact with the native platform.
   @visibleForTesting
@@ -32,8 +36,17 @@ class MethodChannelBeaconKitIos extends BeaconKitIosPlatform {
     'beacon_kit_ios/raw_advertisement_events',
   );
 
+  /// Event channel ของ region enter/exit/unknown state (ADR-6) — แยกจาก
+  /// [iBeaconRangingEventChannel] โดยตั้งใจ เพราะยิงถี่ต่างกันมาก (ดู
+  /// ARCHITECTURE.md ADR-6 หัวข้อ 2)
+  @visibleForTesting
+  final regionStateEventChannel = const EventChannel(
+    'beacon_kit_ios/region_state_events',
+  );
+
   Stream<BeaconAdvertisement>? _iBeaconRangingEvents;
   Stream<BeaconAdvertisement>? _rawAdvertisementEvents;
+  Stream<IBeaconRegionStateEvent>? _regionStateEvents;
 
   @override
   Future<void> startIBeaconMonitoring(
@@ -87,6 +100,26 @@ class MethodChannelBeaconKitIos extends BeaconKitIosPlatform {
     return _rawAdvertisementEvents ??= rawAdvertisementEventChannel
         .receiveBroadcastStream()
         .map<BeaconAdvertisement>(_mapRawAdvertisementEvent);
+  }
+
+  @override
+  Stream<IBeaconRegionStateEvent> get regionStateEvents {
+    return _regionStateEvents ??= regionStateEventChannel
+        .receiveBroadcastStream()
+        .map<IBeaconRegionStateEvent>(_mapRegionStateEvent);
+  }
+
+  @override
+  Future<IBeaconAuthorizationLevel> getIBeaconAuthorizationLevel() async {
+    final value = await methodChannel.invokeMethod<String>(
+      'getIBeaconAuthorizationLevel',
+    );
+    // native ไม่ throw สำหรับ method นี้ (ดูคอมเมนต์ใน
+    // IBeaconRangingManager.currentAuthorizationLevel) แต่ invokeMethod เป็น
+    // async ที่คืน nullable เสมอในทางทฤษฎี — ถ้าเจอ null จริง (เช่น mock ที่ไม่
+    // สมบูรณ์ตอนเทสต์) ถือว่า insufficient เพื่อความปลอดภัย ไม่สมมติว่าดีกว่า
+    // ความจริง
+    return parseIBeaconAuthorizationLevel(value ?? '');
   }
 
   /// Event channel #1 ยิง 1 event ต่อ native `didRange` callback 1 ครั้ง เป็น
@@ -169,6 +202,34 @@ class MethodChannelBeaconKitIos extends BeaconKitIosPlatform {
       raw: raw,
       rawBytes: rawBytes,
     );
+  }
+
+  /// Event channel #3 (ADR-6) ยิง 1 event ต่อ native เรียกครั้งหนึ่ง (ไม่ใช่
+  /// batch เหมือน ranging) — payload shape ตาม ARCHITECTURE.md ADR-6 หัวข้อ 2
+  IBeaconRegionStateEvent _mapRegionStateEvent(dynamic event) {
+    final map = event as Map<dynamic, dynamic>;
+    return IBeaconRegionStateEvent(
+      regionIdentifier: map['regionIdentifier'] as String,
+      uuid: map['uuid'] as String,
+      major: map['major'] as int?,
+      minor: map['minor'] as int?,
+      state: _parseRegionState(map['state'] as String),
+      timestamp: DateTime.fromMillisecondsSinceEpoch(
+        map['timestamp'] as int,
+        isUtc: true,
+      ),
+    );
+  }
+
+  IBeaconRegionState _parseRegionState(String value) {
+    switch (value) {
+      case 'enter':
+        return IBeaconRegionState.enter;
+      case 'exit':
+        return IBeaconRegionState.exit;
+      default:
+        return IBeaconRegionState.unknown;
+    }
   }
 
   Uint8List _toUint8List(dynamic value) {

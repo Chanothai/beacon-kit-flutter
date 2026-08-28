@@ -2,16 +2,22 @@ import Flutter
 import UIKit
 
 /// Entry point ของ `beacon_kit_ios` — register 1 method channel (`beacon_kit_ios/methods`)
-/// + 2 event channel แล้ว route คำเรียกไปยัง manager ที่รับผิดชอบตาม path:
+/// + 3 event channel แล้ว route คำเรียกไปยัง manager ที่รับผิดชอบตาม path:
 ///
-/// - iBeacon path (CoreLocation, ranging เท่านั้น ไม่ผ่าน Dart parser) →
-///   `IBeaconRangingManager`
+/// - iBeacon path (CoreLocation, ranging + region monitoring ไม่ผ่าน Dart
+///   parser) → `IBeaconRangingManager`
 /// - non-iBeacon broadcast path (CoreBluetooth, raw bytes ให้ Dart parser ถอด) →
 ///   `RawAdvertisementScanner`
 ///
 /// เหตุผลที่ iOS แยกสอง API นี้เด็ดขาดและใช้ปนกันไม่ได้ ดู ARCHITECTURE.md หัวข้อ
 /// "ข้อจำกัดของ iOS ที่บังคับให้สถาปัตยกรรมต่างจาก Android" และ ADR-4
 /// "iOS platform channel contract"
+///
+/// **ADR-6 (28 ส.ค. 2026):** เพิ่ม event channel ที่ 3
+/// (`beacon_kit_ios/region_state_events`) สำหรับ enter/exit/unknown ของ region
+/// — ยิงจาก `IBeaconRangingManager.regionStateStreamHandler` (คนละ stream
+/// handler กับ ranging channel แม้จะเป็น manager ตัวเดียวกัน ดูเหตุผลที่
+/// `RegionStateEventStreamHandler` ใน `IBeaconRangingManager.swift`)
 public class BeaconKitIosPlugin: NSObject, FlutterPlugin {
   private let iBeaconRangingManager = IBeaconRangingManager()
   private let rawAdvertisementScanner = RawAdvertisementScanner()
@@ -36,6 +42,15 @@ public class BeaconKitIosPlugin: NSObject, FlutterPlugin {
       binaryMessenger: registrar.messenger()
     )
     rawAdvertisementEventChannel.setStreamHandler(instance.rawAdvertisementScanner)
+
+    // ADR-6: channel ใหม่ ไม่ reuse ของ ranging เพราะ semantic ต่างกันโดย
+    // พื้นฐาน (ยิงถี่มาก vs ยิงเฉพาะตอน state เปลี่ยนจริง — ดู ARCHITECTURE.md
+    // ADR-6 หัวข้อ 2 เหตุผลเต็ม)
+    let regionStateEventChannel = FlutterEventChannel(
+      name: "beacon_kit_ios/region_state_events",
+      binaryMessenger: registrar.messenger()
+    )
+    regionStateEventChannel.setStreamHandler(instance.iBeaconRangingManager.regionStateStreamHandler)
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -44,6 +59,11 @@ public class BeaconKitIosPlugin: NSObject, FlutterPlugin {
       handleStartIBeaconMonitoring(call, result: result)
     case "stopIBeaconMonitoring":
       handleStopIBeaconMonitoring(call, result: result)
+    case "getIBeaconAuthorizationLevel":
+      // B6: method ใหม่ ไม่แตะ signature ของ startIBeaconMonitoring/
+      // stopIBeaconMonitoring ตามที่ ADR-6 หัวข้อ 2 ล็อกไว้ — ดูเหตุผลเต็มที่
+      // คอมเมนต์ของ case .proceed ใน IBeaconRangingManager.startMonitoring()
+      iBeaconRangingManager.currentAuthorizationLevel(result: result)
     case "startBluetoothScan":
       handleStartBluetoothScan(call, result: result)
     case "stopBluetoothScan":

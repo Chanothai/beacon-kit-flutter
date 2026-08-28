@@ -10,14 +10,37 @@ import Flutter
 /// ยิง event ผ่าน `FlutterEventSink` ทุกครั้งที่ CoreLocation เรียก
 /// `locationManager(_:didRange:satisfying:)` — เป็น batch ตามที่ OS ให้มา 1:1 กับ
 /// callback (ฝั่ง Dart เป็นคน flatten เป็น `BeaconAdvertisement` ทีละตัวตาม ADR-4)
+///
+/// **ตั้งแต่ ADR-6 (28 ส.ค. 2026):** นอกจาก ranging แล้ว คลาสนี้ยังรับผิดชอบ
+/// region monitoring แบบเต็มรูป (`didEnterRegion`/`didExitRegion`/
+/// `didDetermineState`) และยิง event ผ่าน channel ที่สองแยกต่างหาก
+/// (`beacon_kit_ios/region_state_events`, ดู [regionStateStreamHandler]) —
+/// อยู่ในคลาสเดียวกับ ranging เพราะทั้งคู่เป็น `CLLocationManagerDelegate`
+/// callback ของ `CLLocationManager` instance เดียวกัน ไม่มีเหตุผลให้แยกคลาส
 final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
   private let locationManager = CLLocationManager()
   private var eventSink: FlutterEventSink?
 
+  /// stream handler ของ event channel ที่สอง (region state) — เป็นคลาสแยกเพราะ
+  /// `FlutterEventChannel.setStreamHandler(_:)` รับ 1 handler ต่อ 1 channel และ
+  /// handler หนึ่งตัวมี `onListen`/`onCancel` ได้แค่ชุดเดียว ผูก `eventSink` ของ
+  /// ranging channel ปนกับของ region-state channel ในเมธอดเดียวกันไม่ได้ — ดู
+  /// [RegionStateEventStreamHandler] ท้ายไฟล์นี้
+  let regionStateStreamHandler = RegionStateEventStreamHandler()
+
   /// region ที่กำลัง monitor+range อยู่ตอนนี้ keyed ด้วย identifier ที่แอปกำหนดมา —
   /// ใช้ทั้งตอน stop แบบเจาะจง และตอนหา regionIdentifier กลับจาก
-  /// `CLBeaconIdentityConstraint` ที่ `didRange` ส่งมา (ดู ค.ห. ท้ายไฟล์)
+  /// `CLBeaconIdentityConstraint` ที่ `didRange` ส่งมา (ดู ค.ห. ท้ายไฟล์) รวมถึงหา
+  /// uuid/major/minor กลับจาก `region.identifier` ที่ `didEnterRegion`/
+  /// `didExitRegion`/`didDetermineState` ส่งมา (ต่างจาก `didRange` ตรงที่
+  /// `CLRegion` มี `identifier` ตรงตัวอยู่แล้ว ไม่ต้องเทียบ constraint)
   private var constraintsByIdentifier: [String: CLBeaconIdentityConstraint] = [:]
+
+  /// state ล่าสุดที่รู้ต่อ region identifier หนึ่งตัว — ใช้ dedupe ระหว่าง
+  /// `didDetermineState` (ตอน `requestState(for:)` ตอบกลับ) กับ
+  /// `didEnterRegion`/`didExitRegion` (ตอน boundary transition จริง) ดูเหตุผล
+  /// เต็มที่ [emitRegionStateIfChanged(_:for:)]
+  private var lastKnownRegionState: [String: RegionMonitoringState] = [:]
 
   /// เพดาน region ที่ `CLLocationManager` รองรับพร้อมกันบน iOS
   private static let maxMonitoredRegions = 20
@@ -174,7 +197,19 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       locationManager.requestAlwaysAuthorization()
 
     case .proceed:
-      // ranging ใช้ได้ทั้ง whenInUse และ always — ต่างกันแค่เรื่อง background
+      // ranging/monitoring เริ่มได้ทั้ง whenInUse และ always ตัวโค้ดนี้เอง
+      // ไม่ต้องแยก branch ตามระดับสิทธิ์ — ต่างกันแค่เรื่อง background wake
+      // หลังแอปโดน terminate (Always เท่านั้น ตาม ADR-6 หัวข้อ 3) ซึ่งเป็นเรื่อง
+      // ที่ Dart layer ต้อง "รู้" ไม่ใช่เรื่องที่ native ต้องบล็อกการทำงาน — ดู
+      // ADR-6 หัวข้อ 5 (B6): `.authorizedWhenInUse` ไม่ได้แปลว่า background
+      // monitoring จะทำงานเต็มรูปเสมอไป (อาจเป็นแค่ "Allow Once" ชั่วคราว หรือ
+      // "When In Use" ถาวรที่ผู้ใช้ตั้งใจเลือก — แยกไม่ออกจากค่า status อย่าง
+      // เดียว) เพื่อไม่ให้ caller เข้าใจผิดว่า background wake ทำงานได้เต็มรูปทั้ง
+      // ที่จริงจะไม่ปลุกแอปที่ถูก kill จึงเพิ่ม `getIBeaconAuthorizationLevel`
+      // เป็น method แยกให้ Dart query ระดับสิทธิ์จริงได้ทุกเมื่อ (ไม่ผูกกับผลลัพธ์
+      // ของ startIBeaconMonitoring โดยตรง เพื่อไม่แตะ signature ของ
+      // startIBeaconMonitoring ตามที่ ADR-6 หัวข้อ 2 ล็อกไว้แล้วว่า "ไม่เปลี่ยน
+      // ชื่อ/signature") — ดู `authorizationLevel(for:)` ด้านล่าง
       applyParsedRegions(parsedRegions)
       result(nil)
     }
@@ -185,6 +220,20 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// แยกออกมาเป็น pure function เพื่อให้ทดสอบด้วย XCTest บน simulator ได้โดยไม่
   /// ต้องมี `CLLocationManager` จริงหรืออุปกรณ์จริง — ดู
   /// `example/ios/RunnerTests/RunnerTests.swift`
+  ///
+  /// **B6 — พฤติกรรมของ `.notDetermined` ที่เกิดจาก "Allow Once" หมดอายุ (ไม่ใช่
+  /// การกระทำของผู้ใช้ที่มองเห็นชัดเจน):** ยืนยันจาก Apple docs ว่า "Allow Once"
+  /// ไม่มีสถานะแยกใน `CLAuthorizationStatus` — รายงานเป็น `.authorizedWhenInUse`
+  /// ชั่วคราวแล้ว **เปลี่ยนกลับเป็น `.notDetermined` เอง** เมื่อ "app is no longer
+  /// in use" (ดู ARCHITECTURE.md ADR-6 หัวข้อ 5 คำพูดต้นฉบับจากหน้า
+  /// `requestAlwaysAuthorization()`) ฟังก์ชันนี้เป็น **pure function ของค่า status
+  /// ปัจจุบันเท่านั้น** (ไม่มี state/history) จึงจัดการเคสนี้ได้ถูกต้องโดยไม่ต้อง
+  /// แก้อะไรเพิ่ม: ไม่ว่า `.notDetermined` จะมาจาก "ยังไม่เคยถามเลย" หรือมาจาก
+  /// "เคยเป็น .authorizedWhenInUse แบบ Allow Once แล้วหมดอายุ" ผลลัพธ์เหมือนกัน
+  /// เป๊ะคือ `.deferUntilAuthorizationCallback` — ถ้าแอปเรียก
+  /// `startIBeaconMonitoring` ใหม่ตอนนี้ จะขอสิทธิ์ใหม่ตามปกติ (defer + prompt)
+  /// ไม่ error/ไม่ค้าง ยืนยันด้วย XCTest `testAllowOnceExpiryReturnsToDefer...`
+  /// ใน `RunnerTests.swift`
   enum AuthorizationDecision: Equatable {
     /// สิทธิ์ผ่านแล้ว เริ่ม monitor+range ได้ทันที
     case proceed
@@ -210,6 +259,51 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       // สถานะที่เราไม่รู้จัก = ไม่รับประกันว่า callback จะมา ถือว่าไม่ได้รับสิทธิ์
       return .denyImmediately
     }
+  }
+
+  /// B6: ระดับสิทธิ์ location ปัจจุบัน "แปลตรง ๆ" เป็นชื่อที่ Dart layer อ่านแล้ว
+  /// ตัดสินใจต่อได้ทันทีว่า background wake หลังแอปโดน terminate จะทำงานหรือไม่ —
+  /// ตาม ARCHITECTURE.md ADR-6 หัวข้อ 3 มีแค่ `.authorizedAlways` เท่านั้นที่
+  /// รับประกัน background wake ("region monitoring services" ถูกระบุชื่อตรง ๆ ว่า
+  /// ต้องมี Always) ส่วน `.authorizedWhenInUse` ทำงานได้แค่ตอนแอปยัง
+  /// foreground/suspended ไม่ terminate (ไม่ว่าจะเป็น Allow Once หรือ When In Use
+  /// ถาวร — แยกไม่ออกจากค่า status เพียงอย่างเดียวตามที่ยืนยันใน ADR-6 หัวข้อ 5
+  /// จึงตั้งใจใช้ชื่อ `whenInUse` เฉย ๆ ไม่แยกย่อยเป็น "allowOnce"/"whenInUsePermanent"
+  /// เพราะ native เองก็แยกไม่ได้จริง การตั้งชื่อแยกจะสร้างภาพลวงว่าระบบรู้ในสิ่งที่
+  /// ไม่รู้)
+  ///
+  /// แยกเป็น pure function เหมือน `authorizationDecision(for:)` เพื่อทดสอบด้วย
+  /// XCTest ได้โดยไม่ต้องมี `CLLocationManager` จริง
+  enum AuthorizationLevel: String {
+    /// Always — background wake หลังแอปโดน terminate ทำงานได้ (ranging +
+    /// region monitoring ครบ)
+    case always
+    /// When In Use (permanent หรือ Allow Once ชั่วคราว แยกไม่ออก) — ทำงานได้
+    /// เฉพาะตอนแอปยัง foreground/suspended เท่านั้น ไม่ปลุกแอปที่ถูก terminate
+    case whenInUse
+    /// notDetermined/denied/restricted — ไม่มีการ monitor ใด ๆ เกิดขึ้นเลย
+    case insufficient
+  }
+
+  static func authorizationLevel(for status: CLAuthorizationStatus) -> AuthorizationLevel {
+    switch status {
+    case .authorizedAlways:
+      return .always
+    case .authorizedWhenInUse:
+      return .whenInUse
+    case .notDetermined, .denied, .restricted:
+      return .insufficient
+    @unknown default:
+      return .insufficient
+    }
+  }
+
+  /// Method channel entry point ของ `getIBeaconAuthorizationLevel` —
+  /// คืนค่า `"always" | "whenInUse" | "insufficient"` เสมอ (ไม่ throw) เพราะการ
+  /// query สถานะปัจจุบันไม่มีทาง fail แบบที่ต้องรายงาน error กลับ ต่างจาก
+  /// `startIBeaconMonitoring` ที่ต้องรอ system prompt
+  func currentAuthorizationLevel(result: @escaping FlutterResult) {
+    result(Self.authorizationLevel(for: locationManager.authorizationStatus).rawValue)
   }
 
   /// ปลดคำขอที่ค้างรอ prompt อยู่ทั้งหมดด้วย `LOCATION_PERMISSION_DENIED` แล้ว
@@ -248,6 +342,15 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       constraintsByIdentifier[parsedRegion.identifier] = parsedRegion.constraint
       locationManager.startMonitoring(for: region)
       locationManager.startRangingBeacons(satisfying: parsedRegion.constraint)
+
+      // ADR-6 หัวข้อ 1: startMonitoring(for:) ยิง didEnterRegion/didExitRegion
+      // เฉพาะตอนมี "boundary crossing" ในอนาคตเท่านั้น — ถ้าอุปกรณ์อยู่ในโซนอยู่
+      // แล้วตั้งแต่ก่อนเรียก startMonitoring จะไม่มี event ใดยิงออกมาเลยจนกว่าจะ
+      // มีการออก-แล้วเข้าใหม่จริง ๆ requestState(for:) เป็นกลไกทางการเดียวที่
+      // Apple ให้มาเพื่อ query initial state ทันทีโดยไม่ต้องรอ boundary crossing
+      // จริง (ยืนยันจาก docs — ดู ARCHITECTURE.md ADR-6 หัวข้อ 1) ผลจะย้อนกลับมา
+      // ทาง didDetermineState(_:for:) แบบ async เช่นกัน
+      locationManager.requestState(for: region)
     }
   }
 
@@ -260,6 +363,10 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       locationManager.stopMonitoring(for: region)
       locationManager.stopRangingBeacons(satisfying: constraint)
       constraintsByIdentifier.removeValue(forKey: identifier)
+      // เคลียร์ dedupe state ทิ้งด้วย — ถ้า region เดิมถูก monitor ใหม่ในอนาคต
+      // (identifier เดิมถูกส่งมาอีกครั้งใน startIBeaconMonitoring) ต้องถือว่าเป็น
+      // การเริ่มต้นใหม่ ไม่ใช่ dedupe กับ state เก่าก่อนหยุดไปแล้ว
+      lastKnownRegionState.removeValue(forKey: identifier)
     }
   }
 
@@ -328,6 +435,105 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
     // forward ต่อไป Dart ได้ในสโคปสปรินต์นี้
   }
 
+  // MARK: - CLLocationManagerDelegate: region state (ADR-6, เพิ่ม 28 ส.ค. 2026)
+
+  /// เรียกเมื่อ CoreLocation ยืนยันว่าอุปกรณ์ "เข้า" โซนของ region — semantic
+  /// ยืนยันจาก Apple docs: "every active location manager object delivers this
+  /// message to its associated delegate ... use the region's identifier string"
+  /// (ดู ARCHITECTURE.md ADR-6 หัวข้อ 1) — ใช้ `region.identifier` ตรง ๆ ได้เลย
+  /// (ไม่ต้องเทียบ constraint แบบ `didRange` เพราะ `CLRegion` มี `identifier`
+  /// ตรงตัวอยู่แล้ว เป็นค่าเดียวกับที่ `applyParsedRegions` ตั้งตอนสร้าง region)
+  func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+    emitRegionStateIfChanged(.enter, for: region)
+  }
+
+  /// เช่นเดียวกับ `didEnterRegion` แต่ตอน "ออก" จากโซน
+  func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+    emitRegionStateIfChanged(.exit, for: region)
+  }
+
+  /// เรียกทั้งตอนมี boundary transition จริง (คู่กับ `didEnterRegion`/
+  /// `didExitRegion`) และตอนตอบกลับ `requestState(for:)` ที่ `applyParsedRegions`
+  /// เรียกทันทีหลัง `startMonitoring(for:)` สำเร็จ — นี่คือทางเดียวที่รู้ initial
+  /// state ของ region ได้โดยไม่ต้องรอ boundary crossing จริง (ดู ARCHITECTURE.md
+  /// ADR-6 หัวข้อ 1 คำพูดต้นฉบับจาก Apple docs) `.inside`/`.outside` map เป็น
+  /// enter/exit เดียวกับสองเมธอดข้างบนตาม payload contract ของ ADR-6 หัวข้อ 2
+  func locationManager(
+    _ manager: CLLocationManager,
+    didDetermineState state: CLRegionState,
+    for region: CLRegion
+  ) {
+    let mapped: RegionMonitoringState
+    switch state {
+    case .inside:
+      mapped = .enter
+    case .outside:
+      mapped = .exit
+    case .unknown:
+      mapped = .unknown
+    @unknown default:
+      mapped = .unknown
+    }
+    emitRegionStateIfChanged(mapped, for: region)
+  }
+
+  /// state ของ region หนึ่งตัวตามที่ ADR-6 หัวข้อ 2 กำหนด (`"enter"|"exit"|"unknown"`)
+  private enum RegionMonitoringState: String {
+    case enter
+    case exit
+    case unknown
+  }
+
+  /// **กลไก dedupe ระหว่าง `didDetermineState` กับ `didEnterRegion`/`didExitRegion`**
+  /// (จุดที่ ARCHITECTURE.md ADR-6 หัวข้อ 2-3 ตั้งใจปล่อยให้ตัดสินใจตอน implement):
+  ///
+  /// ปัญหา: `applyParsedRegions` เรียก `requestState(for:)` ทันทีหลัง
+  /// `startMonitoring(for:)` — ถ้าจังหวะนั้นบังเอิญมี boundary transition จริงเกิด
+  /// ขึ้นพอดี (เช่นผู้ใช้เพิ่งเดินเข้าโซนตอนแอปกำลังเริ่ม monitor) CoreLocation
+  /// อาจเรียกทั้ง `didDetermineState` (จาก requestState) และ `didEnterRegion`
+  /// (จาก boundary crossing จริง) ด้วย state เดียวกัน (`.inside`/enter) ถ้าไม่
+  /// dedupe จะมี event "enter" ซ้ำสองรอบให้ Dart layer ทั้งที่ state จริงเปลี่ยน
+  /// แค่ครั้งเดียว
+  ///
+  /// ทางแก้: เก็บ state ล่าสุดที่รู้ต่อ region ([lastKnownRegionState]) แล้วยิง
+  /// event ออกไปเฉพาะตอนที่ state ใหม่ต่างจากที่เก็บไว้ล่าสุดเท่านั้น — ใช้กฎ
+  /// เดียวกันไม่ว่า event จะมาจาก `didDetermineState` หรือ
+  /// `didEnterRegion`/`didExitRegion` ก็ตาม (ไม่แยก logic ตามแหล่งที่มา) เพราะทั้ง
+  /// สองแหล่งรายงาน "state จริงของ region ณ ตอนนี้" เหมือนกัน ต่างกันแค่ทริกเกอร์
+  /// ที่ทำให้ CoreLocation เรียก ไม่ใช่ความหมายของ state เอง — Dart layer ที่ฟัง
+  /// `beacon_kit_ios/region_state_events` จึงเห็นแค่ "การเปลี่ยนแปลงจริง" เท่านั้น
+  /// ไม่ต้อง dedupe เองอีกชั้น
+  private func emitRegionStateIfChanged(_ state: RegionMonitoringState, for region: CLRegion) {
+    let identifier = region.identifier
+    guard let constraint = constraintsByIdentifier[identifier] else {
+      // stale callback ของ region ที่ stopMonitoring ไปแล้ว (เช่น callback ค้างมา
+      // ระหว่างที่ applyParsedRegions กำลังแทนที่ชุด region เดิม) — ไม่มี
+      // uuid/major/minor ให้ประกอบ payload แล้ว ทิ้งไปเงียบ ๆ ปลอดภัยกว่ายิง
+      // event ที่ข้อมูลไม่ครบ
+      return
+    }
+    guard lastKnownRegionState[identifier] != state else {
+      // state ไม่เปลี่ยนจากที่รู้ล่าสุด — นี่คือจุด dedupe จริง (ดูคอมเมนต์ข้างบน)
+      return
+    }
+    lastKnownRegionState[identifier] = state
+
+    let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+    let payload: [String: Any] = [
+      "regionIdentifier": identifier,
+      "uuid": constraint.uuid.uuidString.lowercased(),
+      // constraint.major/minor เป็น UInt16? (ยืนยันจาก Apple docs:
+      // https://developer.apple.com/documentation/corelocation/clbeaconidentityconstraint/major
+      // "var major: UInt16? { get }") — nil = wildcard ตาม ADR-5, ส่งเป็น
+      // NSNull() ผ่าน StandardMethodCodec เพื่อให้ฝั่ง Dart ได้ `int?` ตรง ๆ
+      "major": constraint.major.map { NSNumber(value: $0) } ?? NSNull(),
+      "minor": constraint.minor.map { NSNumber(value: $0) } ?? NSNull(),
+      "state": state.rawValue,
+      "timestamp": timestamp,
+    ]
+    regionStateStreamHandler.regionStateEventSink?(payload)
+  }
+
   private static func proximityString(_ proximity: CLProximity) -> String {
     switch proximity {
     case .immediate:
@@ -341,5 +547,34 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
     @unknown default:
       return "unknown"
     }
+  }
+}
+
+/// Stream handler ของ event channel ที่สอง `beacon_kit_ios/region_state_events`
+/// (ADR-6) — เป็นคลาสแยกจาก `IBeaconRangingManager` (ซึ่งเป็น stream handler ของ
+/// `beacon_kit_ios/ibeacon_ranging_events` อยู่แล้ว) เพราะ
+/// `FlutterEventChannel.setStreamHandler(_:)` ผูก handler หนึ่งตัวกับหนึ่ง
+/// channel เท่านั้น และ `onListen`/`onCancel` ของ `FlutterStreamHandler` ไม่มี
+/// พารามิเตอร์บอกว่ามาจาก channel ไหน — ถ้าให้ `IBeaconRangingManager` implement
+/// `FlutterStreamHandler` ครั้งเดียวแล้วเอาไปผูกทั้งสอง channel จะไม่มีทางแยกได้
+/// ว่า `eventSink` ที่ได้มาเป็นของ ranging หรือ region-state channel
+///
+/// `IBeaconRangingManager` เป็นเจ้าของ instance นี้ (`regionStateStreamHandler`)
+/// และเรียก `regionStateEventSink` ตรง ๆ จาก `emitRegionStateIfChanged` —
+/// `BeaconKitIosPlugin.swift` เป็นคน register instance นี้เป็น stream handler
+/// ของ channel `beacon_kit_ios/region_state_events` ตอน `register(with:)`
+final class RegionStateEventStreamHandler: NSObject, FlutterStreamHandler {
+  fileprivate var regionStateEventSink: FlutterEventSink?
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+    -> FlutterError?
+  {
+    regionStateEventSink = events
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    regionStateEventSink = nil
+    return nil
   }
 }

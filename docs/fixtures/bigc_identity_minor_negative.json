@@ -1,0 +1,12 @@
+{
+  "name": "bigc_identity_minor_negative",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY. UUID จำลอง ไม่ใช่ค่า BigC จริง (ดู docs/sources/bigc_provisioning.md ตาม ADR-5) — major อยู่ในช่วงถูกต้อง เพื่อให้แน่ใจว่า failure reason ที่ได้คือ minorOutOfRange จริง ไม่ใช่ majorOutOfRange มาบัง",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [],
+  "query": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 1, "minor": -1 },
+  "expect": {
+    "result": "failure",
+    "reason": "minorOutOfRange"
+  }
+}

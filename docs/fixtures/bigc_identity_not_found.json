@@ -1,0 +1,17 @@
+{
+  "name": "bigc_identity_not_found",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY. UUID จำลอง ไม่ใช่ค่า BigC จริง (ดู docs/sources/bigc_provisioning.md ตาม ADR-5) — uuid ตรง, major/minor อยู่ในช่วง uint16 ถูกต้องทั้งคู่ แต่ triple นี้ไม่เคยถูก provision ไว้ใน repository เลย ต้องได้ notFound ไม่ใช่ exception หรือค่ามั่ว",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [
+    {
+      "identity": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 1, "minor": 100 },
+      "metadata": { "brand": "TestBrand", "lot": "LOT-001", "group": "GroupA", "location": "Store-01-Aisle-3" }
+    }
+  ],
+  "query": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 9, "minor": 9999 },
+  "expect": {
+    "result": "failure",
+    "reason": "notFound"
+  }
+}

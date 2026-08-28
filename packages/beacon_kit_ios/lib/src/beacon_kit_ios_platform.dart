@@ -1,7 +1,9 @@
 import 'package:beacon_kit_platform_interface/beacon_kit_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+import 'ibeacon_authorization_level.dart';
 import 'ibeacon_region_request.dart';
+import 'ibeacon_region_state_event.dart';
 import 'method_channel_beacon_kit_ios.dart';
 
 /// สัญญากลางของ `beacon_kit_ios` ตาม platform interface token pattern มาตรฐานของ
@@ -74,6 +76,28 @@ abstract class BeaconKitIosPlatform extends PlatformInterface {
   Stream<BeaconAdvertisement> get rawAdvertisementEvents {
     throw UnimplementedError(
       'rawAdvertisementEvents has not been implemented.',
+    );
+  }
+
+  /// event ใหม่ตาม ADR-6 — แต่ละ event = [IBeaconRegionStateEvent] 1 ตัว ยิง
+  /// เฉพาะตอน state ของ region เปลี่ยนจริงเท่านั้น (native dedupe ให้แล้ว ระหว่าง
+  /// `didDetermineState` ตอน initial state กับ `didEnterRegion`/`didExitRegion`
+  /// ตอน boundary transition จริง — ดูเหตุผลใน `IBeaconRangingManager.swift`)
+  ///
+  /// คนละ stream กับ [iBeaconRangingEvents] โดยตั้งใจ (semantic ต่างกันโดย
+  /// พื้นฐาน — ดู ARCHITECTURE.md ADR-6 หัวข้อ 2)
+  Stream<IBeaconRegionStateEvent> get regionStateEvents {
+    throw UnimplementedError('regionStateEvents has not been implemented.');
+  }
+
+  /// B6: query ระดับสิทธิ์ location ปัจจุบันที่มีผลต่อ background wake ของ
+  /// iBeacon monitoring — ดูเหตุผลที่ต้องมี method นี้แยกจาก
+  /// [startIBeaconMonitoring] ที่ [IBeaconAuthorizationLevel]
+  ///
+  /// ไม่ throw — การ query สถานะปัจจุบันไม่มีทาง fail แบบที่ต้องรายงาน error กลับ
+  Future<IBeaconAuthorizationLevel> getIBeaconAuthorizationLevel() {
+    throw UnimplementedError(
+      'getIBeaconAuthorizationLevel() has not been implemented.',
     );
   }
 }

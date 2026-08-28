@@ -1,0 +1,17 @@
+{
+  "name": "bigc_identity_success_uuid_case_insensitive",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY. UUID นี้ไม่ใช่ BigC proximity UUID จริง (ดู docs/sources/bigc_provisioning.md ตาม ADR-5) — ทดสอบว่า ResolveBigcBeaconMetadata เทียบ uuid แบบ case-insensitive ได้จริง โดย query.uuid เป็น lowercase ล้วน ในขณะที่ test_bigc_proximity_uuid ตั้งเป็น mixed/upper case",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [
+    {
+      "identity": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 2, "minor": 200 },
+      "metadata": { "brand": "TestBrand", "lot": "LOT-002", "group": "GroupB", "location": "Store-02-Aisle-1" }
+    }
+  ],
+  "query": { "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "major": 2, "minor": 200 },
+  "expect": {
+    "result": "success",
+    "metadata": { "brand": "TestBrand", "lot": "LOT-002", "group": "GroupB", "location": "Store-02-Aisle-1" }
+  }
+}

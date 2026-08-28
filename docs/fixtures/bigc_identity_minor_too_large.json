@@ -1,0 +1,12 @@
+{
+  "name": "bigc_identity_minor_too_large",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY. UUID จำลอง ไม่ใช่ค่า BigC จริง (ดู docs/sources/bigc_provisioning.md ตาม ADR-5) — minor = 65536 คือค่าแรกที่เกินขอบเขต uint16 (0-65535) พอดี",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [],
+  "query": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 1, "minor": 65536 },
+  "expect": {
+    "result": "failure",
+    "reason": "minorOutOfRange"
+  }
+}

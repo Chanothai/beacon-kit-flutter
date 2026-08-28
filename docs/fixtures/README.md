@@ -87,3 +87,61 @@ field `"parser"` (`"ibeacon"` หรือ `"eddystone"`) ระบุไว้�
 parser ตัวไหน — ใช้คู่กับ
 `packages/beacon_kit_platform_interface/test/parsers/fixture_loader.dart` ซึ่ง
 โหลด fixture ตาม field นี้โดยตรง
+
+---
+
+## โน้ตเพิ่มเติม (QA agent, A3 sprint 28 ส.ค. 2026): fixture กลุ่ม `bigc_identity_*.json` ต่างจาก fixture parser ยังไง
+
+Fixture ทั้งหมดที่ชื่อขึ้นต้นด้วย `bigc_identity_*` ใน `docs/fixtures/` **ไม่ใช่**
+fixture ของ ADV packet parser (`IBeaconParser`/`EddystoneParser`) — เป็นคนละชั้น
+กันโดยสิ้นเชิง อย่าปนกัน:
+
+- fixture `ibeacon_*`/`eddystone_*` ทดสอบ **การถอดรหัส byte ดิบจากอากาศ** (Track
+  A1 ของ ADR-3/ADR-4) จึงต้องมี `raw_hex` + `source` (`captured` /
+  `derived_from_sdk_source` / `vendor_doc`) เพื่อบอกว่าค่านี้เชื่อถือได้จากของจริง
+  แค่ไหน
+- fixture `bigc_identity_*` ทดสอบ **usecase `ResolveBigcBeaconMetadata`** (A3 —
+  domain entity/usecase ที่แปลง identity triple UUID/Major/Minor เป็นข้อมูล
+  ธุรกิจของ BigC) ซึ่งเป็น **business-domain mapping ล้วน ๆ ไม่มี byte จาก wire
+  เกี่ยวข้องเลย** จึง **ไม่มี field `raw_hex` และไม่มี field `source: captured`**
+  — เพราะไม่มีอุปกรณ์จริงตัวไหนให้ "จับ" ค่าพวกนี้ได้ ข้อมูลทั้งหมดเป็น
+  **synthetic test data** ที่ QA agent สร้างขึ้นเองล้วน ๆ เพื่อ exercise logic
+  การเทียบ uuid/ตรวจช่วง major-minor/ค้นหาใน repository เท่านั้น
+
+รูปแบบไฟล์ของ `bigc_identity_*.json`:
+
+```json
+{
+  "name": "bigc_identity_success_known_mapping",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY — คำเตือนชัดเจนว่า uuid ในไฟล์นี้เป็นค่าจำลอง",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [
+    { "identity": { "uuid": "...", "major": 1, "minor": 100 },
+      "metadata": { "brand": "...", "lot": "...", "group": "...", "location": "..." } }
+  ],
+  "query": { "uuid": "...", "major": 1, "minor": 100 },
+  "expect": { "result": "success", "metadata": { ... } }
+}
+```
+
+**สำคัญที่สุด — ห้ามใช้ UUID จริงของ BigC ในไฟล์กลุ่มนี้เด็ดขาด** ค่า UUID จริงที่
+generate ไว้ตาม A2 อยู่ที่ `docs/sources/bigc_provisioning.md` เพียงที่เดียวตาม
+ADR-5 (ห้าม copy ออกมาที่อื่นแม้แต่ในเทสต์ เพื่อไม่ให้ค่าจริงรั่วไปอยู่ในโค้ด/git
+history ที่ไม่ควรมี) ทุกไฟล์ในกลุ่มนี้ใช้ค่าจำลองที่ประกาศชัดใน field `"note"`
+เช่น `AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE` แทน
+
+เคสที่ครอบคลุมแล้ว (`packages/beacon_kit_platform_interface/test/usecases/resolve_bigc_beacon_metadata_test.dart`):
+
+- `bigc_identity_success_known_mapping` — uuid ตรง + triple อยู่ใน mapping →
+  ได้ metadata ที่ถูกต้อง
+- `bigc_identity_success_uuid_case_insensitive` — uuid ตรงแบบไม่สนตัวพิมพ์
+  เล็ก/ใหญ่ (query เป็น lowercase ทั้งหมด, configured เป็น mixed/upper case)
+- `bigc_identity_uuid_mismatch` — uuid ไม่ตรงกับ `bigcProximityUuid` ที่ inject
+  → `uuidMismatch` ทันทีโดยไม่แตะ repository เลย
+- `bigc_identity_major_negative` / `bigc_identity_major_too_large` — major
+  นอกช่วง uint16 ทั้งด้านติดลบและด้านเกิน 65535 → `majorOutOfRange`
+- `bigc_identity_minor_negative` / `bigc_identity_minor_too_large` — minor
+  นอกช่วง uint16 ทั้งด้านติดลบและด้านเกิน 65535 → `minorOutOfRange`
+- `bigc_identity_not_found` — uuid ตรง, major/minor อยู่ในช่วงถูกต้องทั้งคู่
+  แต่ repository ไม่มี mapping ให้ → `notFound`

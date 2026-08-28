@@ -40,6 +40,13 @@ class _FakeBeaconKitIosPlatform extends ios.BeaconKitIosPlatform {
       StreamController<BeaconAdvertisement>.broadcast();
   final StreamController<BeaconAdvertisement> rawController =
       StreamController<BeaconAdvertisement>.broadcast();
+  final StreamController<ios.IBeaconRegionStateEvent> regionStateController =
+      StreamController<ios.IBeaconRegionStateEvent>.broadcast();
+
+  /// ค่าที่ [getIBeaconAuthorizationLevel] คืน — ค่าเริ่มต้นเป็น [always]
+  /// (เคสที่ไม่มีอะไรผิดปกติ) ให้เทสต์ที่สนใจ B6 override เอง
+  ios.IBeaconAuthorizationLevel authorizationLevel =
+      ios.IBeaconAuthorizationLevel.always;
 
   @override
   Future<void> startIBeaconMonitoring(
@@ -78,9 +85,20 @@ class _FakeBeaconKitIosPlatform extends ios.BeaconKitIosPlatform {
   Stream<BeaconAdvertisement> get rawAdvertisementEvents =>
       rawController.stream;
 
+  @override
+  Stream<ios.IBeaconRegionStateEvent> get regionStateEvents =>
+      regionStateController.stream;
+
+  @override
+  Future<ios.IBeaconAuthorizationLevel> getIBeaconAuthorizationLevel() async {
+    calls.add('getIBeaconAuthorizationLevel');
+    return authorizationLevel;
+  }
+
   Future<void> dispose() async {
     await rangingController.close();
     await rawController.close();
+    await regionStateController.close();
   }
 }
 
@@ -388,4 +406,58 @@ void main() {
       throwsUnsupportedError,
     );
   });
+
+  // ===================================================================
+  // ADR-6 (B5/B6): regionStateEvents + getIBeaconAuthorizationLevel — เทสต์
+  // แค่ว่า adapter ระดับ beacon_kit forward ไปยัง BeaconKitIosPlatform ถูกต้อง
+  // (ไม่ได้พิสูจน์ CoreLocation จริง — Track B ตาม SPRINT.md)
+  // ===================================================================
+
+  test('regionStateEvents: forward event จาก BeaconKitIosPlatform.regionStateEvents '
+      'ตรง ๆ ไม่แปลง/กรองอะไรเพิ่ม', () async {
+    final adapter = GenericIBeaconEddystoneAdapter(
+      iBeaconRegions: const [
+        IBeaconRegionConfig(identifier: 'k9p-default', uuid: 'UUID-1'),
+      ],
+    );
+
+    final received = <ios.IBeaconRegionStateEvent>[];
+    final subscription = adapter.regionStateEvents.listen(received.add);
+
+    fake.regionStateController.add(
+      ios.IBeaconRegionStateEvent(
+        regionIdentifier: 'k9p-default',
+        uuid: 'uuid-1',
+        major: 1,
+        minor: 2,
+        state: ios.IBeaconRegionState.enter,
+        timestamp: DateTime.utc(2026, 8, 28),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received, hasLength(1));
+    expect(received.single.regionIdentifier, 'k9p-default');
+    expect(received.single.state, ios.IBeaconRegionState.enter);
+
+    await subscription.cancel();
+  });
+
+  test(
+    'getIBeaconAuthorizationLevel: forward ค่าจาก BeaconKitIosPlatform ตรง ๆ '
+    '(always/whenInUse/insufficient)',
+    () async {
+      final adapter = GenericIBeaconEddystoneAdapter(
+        iBeaconRegions: const [
+          IBeaconRegionConfig(identifier: 'k9p-default', uuid: 'UUID-1'),
+        ],
+      );
+
+      fake.authorizationLevel = ios.IBeaconAuthorizationLevel.whenInUse;
+      final level = await adapter.getIBeaconAuthorizationLevel();
+
+      expect(level, ios.IBeaconAuthorizationLevel.whenInUse);
+      expect(fake.calls, contains('getIBeaconAuthorizationLevel'));
+    },
+  );
 }

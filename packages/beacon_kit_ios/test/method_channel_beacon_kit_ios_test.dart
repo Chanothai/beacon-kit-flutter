@@ -10,12 +10,17 @@
 // 4. event channel #2 (raw advertisement) integration กับ EddystoneParser จริง
 //    (ไม่ mock parser) ด้วย byte layout จาก docs/fixtures/eddystone_uid_valid.json
 // 5. เคส parse ไม่สำเร็จ -> ยังได้ BeaconAdvertisement ออกมา ไม่ drop event
+// 6. event channel #3 (region state, ADR-6) — payload -> IBeaconRegionStateEvent
+//    ถูกต้องทั้ง enter/exit/unknown และ major/minor เป็น null ได้ (wildcard)
+// 7. getIBeaconAuthorizationLevel: method call ที่ถูกต้อง + parse ค่า string ที่
+//    native ส่งมาเป็น IBeaconAuthorizationLevel ถูกต้อง (รวมค่าที่ไม่รู้จัก ->
+//    insufficient)
 //
 // หมายเหตุ Track B (SPRINT.md): เทสต์ไฟล์นี้ mock method/event channel เอง —
 // พิสูจน์ได้แค่ว่าโค้ด Dart เข้ารหัส/ถอดรหัส message ตรงตามที่เรา *คิดว่า* ตรงกับ
-// ADR-4 เท่านั้น ไม่ได้พิสูจน์ว่า `BeaconKitIosPlugin.swift` ตัวจริงส่ง/รับ message
-// รูปแบบนี้บนอุปกรณ์จริง — ต้องรอ hardware-in-the-loop checklist ที่
-// docs/test-checklists/ios_broadcast_scanning.md
+// ADR-4/ADR-6 เท่านั้น ไม่ได้พิสูจน์ว่า `BeaconKitIosPlugin.swift`/
+// `IBeaconRangingManager.swift` ตัวจริงส่ง/รับ message รูปแบบนี้บนอุปกรณ์จริง —
+// ต้องรอ hardware-in-the-loop checklist ที่ docs/test-checklists/ios_broadcast_scanning.md
 library;
 
 import 'package:beacon_kit_ios/beacon_kit_ios.dart';
@@ -412,6 +417,181 @@ void main() {
         expect(events.single.rawBytes, isNull);
 
         await sub.cancel();
+      },
+    );
+  });
+
+  group('MethodChannelBeaconKitIos — regionStateEvents '
+      '(event channel #3: beacon_kit_ios/region_state_events, ADR-6)', () {
+    late MethodChannelBeaconKitIos platform;
+    late String channelName;
+
+    setUp(() {
+      platform = MethodChannelBeaconKitIos();
+      channelName = platform.regionStateEventChannel.name;
+      _mockEventChannelHandshake(channelName);
+    });
+
+    tearDown(() => _unmockEventChannel(channelName));
+
+    test(
+      'enter event: payload map -> IBeaconRegionStateEvent ค่าตรงตาม ADR-6 '
+      'หัวข้อ 2 (regionIdentifier/uuid/major/minor/state/timestamp)',
+      () async {
+        final events = <IBeaconRegionStateEvent>[];
+        final sub = platform.regionStateEvents.listen(events.add);
+        await Future<void>.delayed(Duration.zero);
+
+        await _pushEvent(channelName, {
+          'regionIdentifier': 'r1',
+          'uuid': 'uuid-1',
+          'major': 1,
+          'minor': 2,
+          'state': 'enter',
+          'timestamp': 1700000000000,
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(events, hasLength(1));
+        expect(events.single.regionIdentifier, 'r1');
+        expect(events.single.uuid, 'uuid-1');
+        expect(events.single.major, 1);
+        expect(events.single.minor, 2);
+        expect(events.single.state, IBeaconRegionState.enter);
+        expect(
+          events.single.timestamp,
+          DateTime.fromMillisecondsSinceEpoch(1700000000000, isUtc: true),
+        );
+
+        await sub.cancel();
+      },
+    );
+
+    test('exit event: state ถอดเป็น IBeaconRegionState.exit ถูกต้อง', () async {
+      final events = <IBeaconRegionStateEvent>[];
+      final sub = platform.regionStateEvents.listen(events.add);
+      await Future<void>.delayed(Duration.zero);
+
+      await _pushEvent(channelName, {
+        'regionIdentifier': 'r1',
+        'uuid': 'uuid-1',
+        'major': null,
+        'minor': null,
+        'state': 'exit',
+        'timestamp': 1700000000000,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(events.single.state, IBeaconRegionState.exit);
+      // major/minor เป็น null ได้จริง (region wildcard ตาม ADR-5)
+      expect(events.single.major, isNull);
+      expect(events.single.minor, isNull);
+
+      await sub.cancel();
+    });
+
+    test('unknown event (จาก didDetermineState ที่ CLRegionState.unknown): '
+        'state ถอดเป็น IBeaconRegionState.unknown', () async {
+      final events = <IBeaconRegionStateEvent>[];
+      final sub = platform.regionStateEvents.listen(events.add);
+      await Future<void>.delayed(Duration.zero);
+
+      await _pushEvent(channelName, {
+        'regionIdentifier': 'r1',
+        'uuid': 'uuid-1',
+        'major': null,
+        'minor': null,
+        'state': 'unknown',
+        'timestamp': 1700000000000,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(events.single.state, IBeaconRegionState.unknown);
+
+      await sub.cancel();
+    });
+  });
+
+  group('MethodChannelBeaconKitIos — getIBeaconAuthorizationLevel (B6)', () {
+    late MethodChannelBeaconKitIos platform;
+    late List<MethodCall> calls;
+
+    setUp(() {
+      platform = MethodChannelBeaconKitIos();
+      calls = <MethodCall>[];
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(platform.methodChannel, null);
+    });
+
+    test(
+      'เรียก method "getIBeaconAuthorizationLevel" โดยไม่มี argument',
+      () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(platform.methodChannel, (call) async {
+              calls.add(call);
+              return 'always';
+            });
+
+        await platform.getIBeaconAuthorizationLevel();
+
+        expect(calls, hasLength(1));
+        expect(calls.single.method, 'getIBeaconAuthorizationLevel');
+      },
+    );
+
+    test('"always" -> IBeaconAuthorizationLevel.always', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(platform.methodChannel, (call) async {
+            return 'always';
+          });
+
+      expect(
+        await platform.getIBeaconAuthorizationLevel(),
+        IBeaconAuthorizationLevel.always,
+      );
+    });
+
+    test('"whenInUse" -> IBeaconAuthorizationLevel.whenInUse (ครอบคลุมทั้ง '
+        'Allow Once ชั่วคราวและ When In Use ถาวร ดู ADR-6 หัวข้อ 5)', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(platform.methodChannel, (call) async {
+            return 'whenInUse';
+          });
+
+      expect(
+        await platform.getIBeaconAuthorizationLevel(),
+        IBeaconAuthorizationLevel.whenInUse,
+      );
+    });
+
+    test('"insufficient" -> IBeaconAuthorizationLevel.insufficient', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(platform.methodChannel, (call) async {
+            return 'insufficient';
+          });
+
+      expect(
+        await platform.getIBeaconAuthorizationLevel(),
+        IBeaconAuthorizationLevel.insufficient,
+      );
+    });
+
+    test(
+      'ค่าที่ native ส่งมาไม่รู้จัก (unexpected/null) -> ปลอดภัยไว้ก่อนถือว่า '
+      'insufficient ไม่สมมติว่าดีกว่าความจริง',
+      () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(platform.methodChannel, (call) async {
+              return null;
+            });
+
+        expect(
+          await platform.getIBeaconAuthorizationLevel(),
+          IBeaconAuthorizationLevel.insufficient,
+        );
       },
     );
   });

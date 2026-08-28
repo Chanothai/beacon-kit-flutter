@@ -1,0 +1,12 @@
+{
+  "name": "bigc_identity_uuid_mismatch",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY. ทั้งสอง UUID เป็นค่าจำลอง ไม่ใช่ค่า BigC จริง (ดู docs/sources/bigc_provisioning.md ตาม ADR-5) — ทดสอบว่า uuid ที่ไม่ตรงกับ bigcProximityUuid ที่ inject เข้ามาต้องคืน uuidMismatch ทันทีโดยไม่ query repository เลย",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [],
+  "query": { "uuid": "22222222-2222-4222-8222-222222222222", "major": 1, "minor": 100 },
+  "expect": {
+    "result": "failure",
+    "reason": "uuidMismatch"
+  }
+}

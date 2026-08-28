@@ -1,0 +1,17 @@
+{
+  "name": "bigc_identity_success_known_mapping",
+  "kind": "bigc_identity_mapping",
+  "note": "SYNTHETIC TEST DATA ONLY. UUID นี้ไม่ใช่ BigC proximity UUID จริง (ค่าจริงอยู่ docs/sources/bigc_provisioning.md เท่านั้นตาม ADR-5 ห้ามก็อปมาที่นี่) — ใช้ทดสอบ ResolveBigcBeaconMetadata ล้วน ๆ",
+  "test_bigc_proximity_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+  "repository_mappings": [
+    {
+      "identity": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 1, "minor": 100 },
+      "metadata": { "brand": "TestBrand", "lot": "LOT-001", "group": "GroupA", "location": "Store-01-Aisle-3" }
+    }
+  ],
+  "query": { "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "major": 1, "minor": 100 },
+  "expect": {
+    "result": "success",
+    "metadata": { "brand": "TestBrand", "lot": "LOT-001", "group": "GroupA", "location": "Store-01-Aisle-3" }
+  }
+}

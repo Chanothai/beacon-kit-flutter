@@ -9,12 +9,16 @@ library;
 import 'package:beacon_kit_platform_interface/beacon_kit_platform_interface.dart';
 
 import 'src/beacon_kit_ios_platform.dart';
+import 'src/ibeacon_authorization_level.dart';
 import 'src/ibeacon_region_request.dart';
+import 'src/ibeacon_region_state_event.dart';
 
 export 'package:beacon_kit_platform_interface/beacon_kit_platform_interface.dart';
 
 export 'src/beacon_kit_ios_platform.dart';
+export 'src/ibeacon_authorization_level.dart';
 export 'src/ibeacon_region_request.dart';
+export 'src/ibeacon_region_state_event.dart';
 export 'src/method_channel_beacon_kit_ios.dart';
 
 /// Facade หลักที่แอปเรียกใช้ — ห่อ [BeaconKitIosPlatform.instance] ไว้อีกชั้นตาม
@@ -59,4 +63,19 @@ class BeaconKitIos {
   /// `EddystoneParser` ให้เสร็จก่อนส่งออก
   Stream<BeaconAdvertisement> get rawAdvertisementEvents =>
       BeaconKitIosPlatform.instance.rawAdvertisementEvents;
+
+  /// event ใหม่ตาม ADR-6 — แต่ละ event = [IBeaconRegionStateEvent] 1 ตัว ยิง
+  /// เฉพาะตอน state ของ region เปลี่ยนจริงเท่านั้น (native dedupe ให้แล้ว) คนละ
+  /// stream กับ [iBeaconRangingEvents] โดยตั้งใจ (semantic ต่างกันโดยพื้นฐาน)
+  Stream<IBeaconRegionStateEvent> get regionStateEvents =>
+      BeaconKitIosPlatform.instance.regionStateEvents;
+
+  /// B6: query ระดับสิทธิ์ location ปัจจุบันที่มีผลต่อ background wake ของ
+  /// iBeacon monitoring — `.always` เท่านั้นที่ปลุกแอปที่ถูก terminate ได้
+  /// (ตาม ARCHITECTURE.md ADR-6 หัวข้อ 3) `.whenInUse` ครอบคลุมทั้ง Allow Once
+  /// ชั่วคราวและ When In Use ถาวร (แยกไม่ออกจากค่านี้อย่างเดียว ดูเหตุผลที่
+  /// [IBeaconAuthorizationLevel])
+  Future<IBeaconAuthorizationLevel> getIBeaconAuthorizationLevel() {
+    return BeaconKitIosPlatform.instance.getIBeaconAuthorizationLevel();
+  }
 }

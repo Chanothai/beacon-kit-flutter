@@ -155,4 +155,30 @@ class GenericIBeaconEddystoneAdapter implements BeaconAdapter {
       '$vendorId ไม่รองรับ connect (supportsConnect=false, broadcast-only)',
     );
   }
+
+  /// event enter/exit/unknown ของ region ตาม ARCHITECTURE.md ADR-6 — **ไม่ใช่**
+  /// ส่วนหนึ่งของ [BeaconAdapter] interface กลาง (ตั้งใจ) เพราะ region
+  /// monitoring แบบ enter/exit เป็นกลไกเฉพาะของ CoreLocation บน iOS เท่านั้น
+  /// ยังไม่มี contract ฝั่ง Android ที่เทียบเท่า (Android deferred ตาม
+  /// SPRINT.md) การใส่ลง [BeaconAdapter] ตอนนี้จะบังคับให้ Android adapter ใน
+  /// อนาคตต้อง implement getter ที่ยังไม่มีความหมายจริงบนแพลตฟอร์มนั้น จึงเปิด
+  /// เป็น getter เพิ่มเติมเฉพาะของ adapter นี้แทน — ผู้เรียกที่ต้องการ enter/exit
+  /// ต้อง cast/reference เป็น [GenericIBeaconEddystoneAdapter] ตรง ๆ (ไม่ผ่าน
+  /// [BeaconAdapter] abstraction)
+  ///
+  /// ยังไม่ต่อเข้ากับ [scan]/[BeaconManager.scanAll] — นอกสโคป B5/B6 ตาม
+  /// `SPRINT.md` (สโคปของสปรินต์นี้คือ code-complete ของ region monitoring
+  /// เท่านั้น ไม่รวมการต่อสาย UI ใน example app) ตัดสินใจเปิด getter นี้ไว้ที่
+  /// ระดับ `beacon_kit` (public API) แทนที่จะหยุดไว้แค่ `beacon_kit_ios` เพื่อ
+  /// ให้ทดสอบ end-to-end บนอุปกรณ์จริงได้ทันทีที่ต้องการโดยไม่ต้องรอรอบถัดไป
+  /// มาเปิด API เพิ่ม — ถ้อยคำนี้เป็นการอธิบายเหตุผลของผู้เขียนโค้ดเอง
+  /// ไม่ใช่คำพูดที่คัดลอกมาจาก `SPRINT.md` ตรง ๆ
+  Stream<IBeaconRegionStateEvent> get regionStateEvents =>
+      _platform.regionStateEvents;
+
+  /// B6: query ระดับสิทธิ์ location ปัจจุบัน (`always`/`whenInUse`/
+  /// `insufficient`) ที่มีผลต่อว่า background wake หลังแอปโดน terminate จะ
+  /// ทำงานได้จริงหรือไม่ — ดูเหตุผลเต็มที่ [IBeaconAuthorizationLevel]
+  Future<IBeaconAuthorizationLevel> getIBeaconAuthorizationLevel() =>
+      _platform.getIBeaconAuthorizationLevel();
 }
