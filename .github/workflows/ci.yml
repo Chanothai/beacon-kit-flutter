@@ -93,9 +93,13 @@ jobs:
   #       run: flutter build apk --debug
 
   build-ios:
-    name: Build iOS (debug, no signing)
+    name: Build iOS (${{ matrix.mode }}, no signing)
     runs-on: macos-latest
     needs: analyze-test
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, profile, release]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,6 +113,6 @@ jobs:
         working-directory: packages/beacon_kit/example
         run: flutter pub get
 
-      - name: flutter build ios --debug --no-codesign
+      - name: flutter build ios --${{ matrix.mode }} --no-codesign
         working-directory: packages/beacon_kit/example
-        run: flutter build ios --debug --no-codesign
+        run: flutter build ios --${{ matrix.mode }} --no-codesign
