@@ -4,17 +4,38 @@
 
 > **อัปเดต 28 ส.ค. 2026** — สปรินต์นี้เปลี่ยน focus จากสปรินต์ก่อน (iOS-first broadcast foundation ซึ่งจบไปแล้ว ดู "สิ่งที่ทำเสร็จไปแล้ว" ท้ายเอกสาร) มาเป็น **background broadcast scan + BigC ID scheme** เท่านั้น
 
-## Focus ของสปรินต์นี้
+## Focus ของสปรินต์นี้ — **definition of done มีข้อเดียว**
 
-**ทำ:** background broadcast scan (region monitoring) + BigC ID scheme สำหรับ multi-vendor provisioning
+> ### ยืนยัน B5/B6 บน API เดิม (`CLLocationManager` + `CLBeaconRegion`) ให้เห็นทำงานจริงบนอุปกรณ์
+>
+> **สปรินต์นี้จบเมื่อมีคนเห็นแอปถูกปลุกกลับมาเองจริงตอนถูก kill บน iPhone จริง**
+> ไม่ใช่เมื่อโค้ดคอมไพล์ผ่าน ไม่ใช่เมื่อ unit test เขียว ไม่ใช่เมื่อ XCTest ผ่าน
 
-**พักไว้ก่อน ไม่ต้องทำในสปรินต์นี้:**
-- `connect()` / GATT provisioning path ทั้งหมด
-- OTA firmware update
-- sensor history (อ่านประวัติย้อนหลัง)
-- `beacon_kit_android` (ยัง deferred ต่อจากสปรินต์ก่อน)
+ทุกอย่างอื่นในสปรินต์นี้เป็นงานที่ทำเพื่อให้ไปถึงข้อนี้ได้ ไม่ใช่เป้าหมายในตัวเอง
 
-**ไม่เร่ง (ทำได้ถ้ามีเวลาเหลือ ไม่นับเป็นเงื่อนไขปิดสปรินต์):** retest บั๊ก `LOCATION_PERMISSION_DENIED` บนเครื่องจริง (เช็คลิสต์ข้อ 1 รอบ 1 + รอบ 2 ที่ยังค้างอยู่ใน `docs/test-checklists/ios_broadcast_scanning.md`) — บั๊กแก้ไปแล้วและมี Dart regression test คุมอยู่ การ retest เป็นการยืนยันซ้ำ ไม่ใช่ตัวบล็อกงานใหม่
+**ทำไมต้องเป็นข้อนี้ข้อเดียว:** ตอนนี้ B5 (region monitoring) และ B6 (Always permission
+edge case) เป็น `code-complete, unverified` — **ไม่มีใครเคยเห็นมันทำงานบนอุปกรณ์เลย
+แม้แต่ครั้งเดียว** และประวัติของโปรเจกต์นี้แสดงให้เห็นแล้วว่าสถานะแบบนี้เชื่อไม่ได้: บั๊ก
+2 ตัวที่เจอจากการทดสอบเครื่องจริงรอบ 1-2 คอมไพล์ผ่านและเทสต์เขียวหมดทั้งคู่ แต่พังทันที
+ที่มีคนกดปุ่มจริง การสะสมฟีเจอร์ต่อบนฐานที่ยังไม่เคยพิสูจน์คือการสะสมความเสี่ยง
+
+### พักไว้ก่อน ไม่ต้องทำในสปรินต์นี้
+
+- **การย้ายไป `CLMonitor` — เป็นสปรินต์แยกที่ยังไม่เริ่ม ห้ามเขียนโค้ด `CLMonitor` ใด ๆ
+  ในรอบนี้เด็ดขาด** เหตุผลครบ 3 ข้อและแผนการย้ายอยู่ใน `ARCHITECTURE.md` ADR-6
+  หัวข้อ 4 โดยย่อ: (a) ต้องยกพื้นเป็น iOS 17+ ซึ่งเป็นการตัดสินใจทางธุรกิจที่ยังไม่มีใคร
+  อนุมัติ (b) `wake-from-terminate` ที่เราต้องการที่สุดคือส่วนที่ `CLMonitor` มีหลักฐาน
+  สาธารณะน้อยที่สุด (c) **ถ้าย้ายก่อนยืนยัน B5/B6 บน API เดิม แล้วพัง จะแยกไม่ออกว่า
+  เป็นปัญหาของ `CLMonitor` หรือของโค้ดเรา**
+- `connect()` / GATT provisioning / OTA / sensor history
+- `beacon_kit_android`
+
+### ไม่เร่ง (ทำได้ถ้ามีเวลาเหลือ ไม่นับเป็นเงื่อนไขปิดสปรินต์)
+
+- retest บั๊ก `LOCATION_PERMISSION_DENIED` ลำดับ Don't Allow → Settings → กลับแอป
+- เคสทดสอบใหม่ข้อ 9 (region ซ้อนทับ), 10 (ไม่มีเน็ต) ใน checklist — **ยกเว้นข้อ 9 ที่
+  ถ้าทำได้ควรทำก่อน** เพราะเป็น open question ที่บล็อกการเขียน dedupe logic
+- ข้อ 11 (เทียบ advertising mode) — **ยังทำไม่ได้** ติด GATT config ที่ยังไม่ implement
 
 ---
 
@@ -58,6 +79,20 @@
 - ใช้ `didEnterRegion` / `didExitRegion` สำหรับ background scan (ปัจจุบันมีแต่ ranging)
 - **ต้องขอสิทธิ์ Always ไม่ใช่ When In Use**
 - ระบุ Info.plist keys ที่ต้องเพิ่ม/แก้ให้ครบ
+
+> **A1-A4 เสร็จแล้ว** (ADR-5/6/7 + `bigc_provisioning.md` + mapping usecase) — คงไว้เป็นบันทึกขอบเขต ไม่ต้องทำซ้ำ
+
+### A5. Two-tier region registration — pure function + unit test (เพิ่ม 29 ส.ค. 2026)
+
+- ตัวเลือก region 2 ชั้นตาม `ARCHITECTURE.md` ADR-8: ชั้นกว้าง 1 อัน (ถาวร) + เจาะจงสาขาไม่เกิน 19 อัน
+- แยกส่วน "เลือกว่าจะลงทะเบียน region ชุดไหน" เป็น **pure function** ที่ไม่แตะ CoreLocation
+- unit test บังคับสัญญา 3 ข้อ: ชั้นที่ 1 ต้องอยู่เสมอไม่ว่ากรณีใด / รวมไม่เกิน 20 / ชั้นที่ 2 เรียงตามความใกล้แล้วตัดที่ 19
+- ส่วนที่เรียก CoreLocation จริงยังเป็น Track B ตามปกติ
+
+### A6. ADR-6 หัวข้อ 4: บันทึกการเลือกใช้ API ที่ deprecated โดยรู้ตัว (เพิ่ม 29 ส.ค. 2026)
+
+- ยืนยัน deprecation จาก **SDK header จริง** ไม่ใช่จากเว็บ/ความจำ
+- เหตุผลที่ยังไม่ย้าย 3 ข้อ + แผนการย้ายที่มีลำดับบังคับ
 
 ---
 
@@ -107,6 +142,11 @@
 - `IBeaconParser` + `EddystoneParser` (UID/URL/TLM) + fixtures 19 ไฟล์ (ADR-3)
 - iOS platform channel: CoreLocation ranging + CoreBluetooth raw adv (ADR-4)
 - แก้บั๊กจากทดสอบเครื่องจริง 2 รอบ (authorization delegate + broadcast controller ค้าง) พร้อม regression test
-- เทสต์ 49/49, analyze สะอาด, `flutter build ios --debug --no-codesign` ผ่าน, XCTest 4/4 บน simulator
+- BigC ID Scheme (ADR-5) + proximity UUID v4 จริงใน `docs/sources/bigc_provisioning.md`
+- domain mapping usecase `ResolveBigcBeaconMetadata` + fixture
+- region monitoring delegate + `region_state_events` channel + Always permission flow (B5/B6 — **code-complete, unverified**)
+- repo เตรียมเป็น SDK กลาง: LICENSE/NOTICE/README/CONTRIBUTING, แยก `DEVELOPMENT_TEAM`, tag `v0.1.0` push ขึ้น private remote แล้ว
 
-**สิ่งที่ยังไม่เคยยืนยันบนเครื่องจริงเลย:** เช็คลิสต์ `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 2-7 ทั้งหมด และข้อ 1 หลังแก้บั๊กทั้งสองรอบ
+**ยืนยันบนเครื่องจริงแล้ว (29 ส.ค. 2026):** เช็คลิสต์ข้อ 2 (iBeacon ranging — แยก K9P 2 ตัวด้วย major/minor ได้), ข้อ 6 (Eddystone URL frame จากอุปกรณ์บุคคลที่สาม), ข้อ 1 บางส่วน (Allow ครั้งเดียว + กด Start ซ้ำ)
+
+**ยังไม่เคยยืนยันบนเครื่องจริงเลย:** เช็คลิสต์ข้อ 3, 4, 5, 7, 9, 10 / ข้อ 1 ลำดับ Don't Allow → Settings / **B5 + B6 ทั้งหมด** ← นี่คือเป้าหมายเดียวของสปรินต์นี้

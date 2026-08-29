@@ -641,6 +641,73 @@ flutter:
 - **กลไก dedupe ระหว่าง `didDetermineState` (ตอน `requestState` เริ่มต้น) กับ `didEnterRegion`/`didExitRegion`** (ตอน boundary transition เกิดขึ้นพร้อมกัน) — ยังไม่ได้ออกแบบละเอียดในสปรินต์นี้ ให้ B6 ตัดสินใจ
 - **`locationManager(_:monitoringDidFailFor:withError:)`** — พบว่ามี delegate method นี้แยกจาก `didFailWithError` ทั่วไป (อ้างอิงพบชื่อในรายการ cross-reference ของหน้า `didEnterRegion`/`didExitRegion`) ยังไม่ได้ตัดสินใจว่าต้อง implement ในสปรินต์นี้หรือไม่ เพราะ ADR-4 เดิมบันทึกไว้แล้วว่า "ADR-4 ไม่ได้กำหนด error channel แยกสำหรับ ranging error รายครั้ง" — คงสถานะเดิมไว้ก่อน (ไม่ implement) ยกเว้น B6 พิจารณาแล้วเห็นว่าจำเป็น ให้บันทึกเป็น ADR เพิ่มตอนนั้น ไม่ใช่เดาตอนนี้
 
+### 4. เลือกใช้ API ที่ถูก deprecate โดยรู้ตัว — ยังไม่ย้ายไป `CLMonitor` รอบนี้ (เพิ่ม 29 ส.ค. 2026)
+
+**การตัดสินใจ: ยังใช้ `CLLocationManager` + `CLBeaconRegion` + `startMonitoring(for:)` ต่อไปในรอบนี้ ห้ามเขียนโค้ด `CLMonitor` ใด ๆ**
+
+#### ข้อเท็จจริง — ยืนยันจาก SDK header โดยตรง (ไม่ใช่จากเว็บ ไม่ใช่จากความจำ)
+
+ตรวจจาก `iPhoneOS26.5.sdk` ที่ติดตั้งอยู่ในเครื่องที่ build โปรเจกต์นี้จริง (Xcode 26.6):
+
+| สิ่งที่ deprecate | attribute ตรงตัวจาก header | ไฟล์ |
+|---|---|---|
+| `CLBeaconRegion` (ทั้งคลาส) | `API_DEPRECATED_WITH_REPLACEMENT("Use CLBeaconIdentityCondition", macos(10.15, API_TO_BE_DEPRECATED), ios(7.0, API_TO_BE_DEPRECATED))` | `CoreLocation.framework/Headers/CLBeaconRegion.h:32` |
+| `-startMonitoringForRegion:` (ตัวที่โค้ดเราเรียกจริง) | `API_DEPRECATED_WITH_REPLACEMENT("Use CLMonitor to start or stop monitoring constraint", ios(5.0, API_TO_BE_DEPRECATED), macos(10.8, API_TO_BE_DEPRECATED))` | `CoreLocation.framework/Headers/CLLocationManager.h:722` |
+| ตัวแทนที่ต้องการ iOS เท่าไหร่ | `API_AVAILABLE(macos(14.0), ios(17.0)) API_UNAVAILABLE(watchos, tvos, visionos)` บน `@interface CLBeaconIdentityCondition` | `CoreLocation.framework/Headers/CLBeaconIdentityCondition.h:53` |
+
+**ความแม่นยำของถ้อยคำที่ต้องระวัง (อย่าเขียนคลาดจากนี้):** ตัวเลขเวอร์ชันที่ปิดท้าย
+deprecation คือ **`API_TO_BE_DEPRECATED` ซึ่งเป็น placeholder ของ Apple ไม่ใช่เลข
+เวอร์ชันจริง** — แปลว่า "ถูกทำเครื่องหมายว่าจะเลิกใช้ ณ SDK ปัจจุบัน" การพูดว่า
+"deprecated ใน iOS 26" เป็น **การอนุมานจากข้อเท็จจริงว่า attribute นี้ปรากฏใน SDK
+26.5** ไม่ใช่ข้อความที่ Apple เขียนระบุเลขเวอร์ชันไว้ตรง ๆ ถ้าจะอ้างเลข 26 ต้องเขียน
+กำกับที่มาแบบนี้เสมอ
+
+#### เหตุผลที่ยังไม่ย้าย (3 ข้อ ทุกข้อต้องยังเป็นจริงถึงจะคงการตัดสินใจนี้ไว้ได้)
+
+**a. การขยับ min deployment target เป็น iOS 17+ เป็นการตัดสินใจทางธุรกิจ ไม่ใช่ของทีมพัฒนา**
+
+`CLBeaconIdentityCondition` ต้องการ iOS 17.0 ขึ้นไป (ยืนยันจาก header ด้านบน) การย้าย
+ไป `CLMonitor` จึงบังคับให้ยกพื้น min deployment target ของแอปทั้งตัว = **ตัดลูกค้าที่
+ใช้ iOS 16 และต่ำกว่าออกจากระบบทั้งหมด** สำหรับแอปค้าปลีกที่ฐานผู้ใช้กว้างและมีเครื่อง
+รุ่นเก่าปนอยู่มาก นี่เป็นการตัดสินใจที่มีผลต่อจำนวนลูกค้าที่เข้าถึงได้จริง
+
+**ยังไม่มีใครอนุมัติเรื่องนี้ — เป็น open question ที่ต้องถามฝ่ายธุรกิจ ทีมพัฒนาตัดสินเองไม่ได้**
+ต้องรู้สัดส่วนผู้ใช้ที่ยังอยู่บน iOS 16 และต่ำกว่าก่อน แล้วให้ฝ่ายธุรกิจชั่งกับประโยชน์ที่ได้
+
+**b. ฟีเจอร์ที่เราต้องการมากที่สุด คือส่วนที่ `CLMonitor` มีหลักฐานสาธารณะน้อยที่สุด**
+
+จุดประสงค์หลักของสปรินต์นี้คือ **wake-from-terminate** (แอปถูก iOS terminate ไปแล้ว
+ต้องถูกปลุกกลับมาเมื่อเข้าโซน) ซึ่งเป็นพฤติกรรมที่ยืนยันได้ยากที่สุดอยู่แล้วแม้บน API เดิม
+และเป็นจุดที่มีรายงานปัญหากับ `CLMonitor` โดยที่ยังไม่มีเอกสาร/หลักฐานสาธารณะที่ชัดพอ
+จะตัดสินได้ — การย้ายไป API ใหม่เพื่อไปเจอปัญหาที่ยังไม่มีใครเขียนวิธีแก้ไว้ ไม่ใช่การ
+ลดความเสี่ยง แต่เป็นการเพิ่ม
+
+**c. ยังไม่เคยเห็น B5/B6 ทำงานจริงบน API เดิมสักครั้ง — ย้ายตอนนี้จะแยกสาเหตุไม่ออก**
+
+นี่เป็นเหตุผลที่หนักที่สุด ตอนนี้สถานะของ B5 (region monitoring) และ B6 (Always
+permission edge case) คือ `code-complete, unverified` — **ไม่มีใครเคยเห็นมันทำงานบน
+อุปกรณ์จริงเลยแม้แต่ครั้งเดียว** ถ้าย้ายไป `CLMonitor` ตอนนี้แล้วมันไม่ทำงาน เราจะมีตัวแปร
+ที่เปลี่ยนพร้อมกันสองตัว (API ใหม่ + โค้ดที่ยังไม่เคยพิสูจน์) และ**แยกไม่ออกว่าพังเพราะ
+`CLMonitor` หรือเพราะโค้ดเราเอง** — ทำให้เสียเวลาดีบักในทิศทางที่ผิดได้ง่ายมาก
+
+แนวทาง "เทียบ API เก่ากับใหม่เคียงข้างกันบนอุปกรณ์เดียวกัน" เป็นสิ่งที่วิศวกร Apple DTS
+แนะนำเช่นกัน *(ที่มา: การปรึกษา Apple DTS ตามที่ผู้ใช้รายงาน — **ไม่ใช่เอกสารสาธารณะ
+ที่ตรวจสอบย้อนกลับได้** บันทึกไว้ในฐานะข้อมูลประกอบ ไม่ใช่หลักฐานระดับเดียวกับ SDK
+header/เอกสาร Apple ที่อ้างข้างบน)*
+
+#### แผนการย้าย (ลำดับบังคับ ห้ามสลับขั้น)
+
+1. **ยืนยัน B5/B6 บน API เดิมให้ผ่านจริงบนอุปกรณ์ก่อน** — ต้องเห็นแอปถูกปลุกกลับมา
+   จริงตอนถูก kill ไม่ใช่แค่คอมไพล์ผ่าน นี่คือ definition of done ของสปรินต์ปัจจุบัน
+2. implement `CLMonitor` **คู่ขนาน** (ไม่ลบของเดิมทิ้ง) หลังจากฝ่ายธุรกิจตัดสินเรื่อง
+   min deployment target แล้วเท่านั้น
+3. ทดสอบเทียบ **บนอุปกรณ์เครื่องเดียวกัน beacon ตัวเดียวกัน** เงื่อนไขเดียวกัน
+4. ตัดสินใจจาก**ผลจริงที่วัดได้** ไม่ใช่จากการที่ API ใหม่กว่า
+
+**เกณฑ์ที่จะทำให้ต้องกลับมาทบทวน ADR นี้ก่อนกำหนด:** Apple เปลี่ยน
+`API_TO_BE_DEPRECATED` เป็นเลขเวอร์ชันจริงพร้อมกำหนดวันหยุดรองรับ, หรือฝ่ายธุรกิจ
+อนุมัติ iOS 17+ แล้ว, หรือพบว่า API เดิมใช้ไม่ได้จริงบนอุปกรณ์
+
 ## ADR-7 (สั้น): ตำแหน่งของ domain entity/usecase สำหรับ BigC ID mapping (A3-decision, เพิ่ม 28 ส.ค. 2026)
 
 **คำถาม:** โค้ด pure-Dart ที่แปลง identity triple (UUID, Major, Minor) → ข้อมูลธุรกิจ (ยี่ห้อ/ล็อต/กลุ่ม/ตำแหน่ง ตาม ADR-5) ควรอยู่ที่ไหน — ยังไม่มี `lib/features/` ที่ไหนใน repo เลยตอนนี้ (ตรวจด้วย `find` แล้วไม่มีจริง) มีแต่ `packages/beacon_kit*` (federated plugin)
@@ -659,3 +726,93 @@ flutter:
 4. **ตัวเลือก (ค)** (แพ็กเกจใหม่ `packages/bigc_beacon_domain/`) พิจารณาแล้วว่ายังไม่คุ้ม — ยังไม่มีกรณีใช้ซ้ำข้ามหลายแอป/หลายแพ็กเกจที่ต้องแยก การเพิ่มแพ็กเกจใหม่ตอนนี้เพิ่ม maintenance overhead (pubspec, CI job, versioning) โดยไม่มีประโยชน์ที่จับต้องได้ในสปรินต์นี้ — ถ้าอนาคต `beacon_kit` ต้องถูกใช้นอกบริบท BigC จริง (org อื่น, ID scheme อื่น) ค่อยแยกออกมาเป็น (ค) ตอนนั้น
 
 **Trade-off ที่ต้องรู้ตัว (บันทึกไว้ ไม่ใช่ผลข้างเคียงที่ค้นพบทีหลัง):** `beacon_kit_platform_interface` ตามชื่อและโครงสร้างเดิมมีไว้เป็น "สัญญา method channel กลาง" (protocol-level, vendor-agnostic) — การใส่ business domain logic เฉพาะของ BigC (mapping ยี่ห้อ/ล็อต/กลุ่ม/ตำแหน่ง) เข้าไปในแพ็กเกจเดียวกันทำให้แพ็กเกจนี้ผูกกับ business scheme ของ BigC โดยเฉพาะ ไม่ใช่ pure protocol contract อีกต่อไป — ยอมรับ trade-off นี้ในตอนนี้เพราะ ADR-5 ทั้งฉบับเป็นสคีมเฉพาะของ BigC อยู่แล้วและ repo นี้ยังเป็น single-org monorepo ไม่มีผู้ใช้ภายนอก ถ้าถึงจุดที่ต้องแยก (เช่น reuse `beacon_kit` ข้ามองค์กร) ให้ย้าย entity/usecase กลุ่มนี้ออกไปเป็นตัวเลือก (ค) ในตอนนั้น ไม่ใช่ตอนนี้
+
+---
+
+## ADR-8: Two-tier region registration — ตาข่ายกว้าง 1 อัน + เจาะจงสาขาไม่เกิน 19 อัน (เพิ่ม 29 ส.ค. 2026)
+
+**บริบท:** ADR-5 กำหนดให้ BigC ใช้ proximity UUID เดียวทั้งบริษัท แยกอุปกรณ์ด้วย major/minor และ ADR-6 กำหนดให้ย้ายไปใช้ region monitoring (enter/exit) เพื่อทำงานตอน background คำถามที่ยังไม่ถูกตอบคือ **แล้วจะลงทะเบียน region อะไรบ้าง** ในเมื่อ iOS จำกัดที่ 20 region ต่อแอป แต่ BigC มีสาขามากกว่านั้นมาก
+
+### ข้อจำกัดที่บังคับดีไซน์นี้ (ยืนยันจากเอกสาร Apple)
+
+| ข้อเท็จจริง | คำพูดต้นฉบับ | แหล่งอ้างอิง |
+|---|---|---|
+| เพดาน 20 region ต่อแอป | "An app can register up to 20 regions at a time." | [`startMonitoring(for:)`](https://developer.apple.com/documentation/corelocation/cllocationmanager/startmonitoring(for:)) |
+| region เป็นทรัพยากรระบบที่ใช้ร่วมกัน | "Regions are a shared system resource, and the total number of regions available systemwide is limited. For this reason, Core Location limits to 20 the number of regions that may be simultaneously monitored by a single app." | [Region Monitoring and iBeacon (archived)](https://developer.apple.com/library/archive/documentation/UserExperience/Conceptual/LocationAwarenessPG/RegionMonitoring/RegionMonitoring.html) |
+| Apple แนะนำให้สลับ region ตามตำแหน่งผู้ใช้ | "To work around this limit, consider registering only those regions in the user's immediate vicinity." | แหล่งเดียวกับข้างบน |
+| identifier string คือทางเดียวที่การันตีว่าระบุ region ได้ | "The identifier string is the only guaranteed way for your app to identify a region later." | แหล่งเดียวกับข้างบน |
+| wildcard ได้เฉพาะภายใน UUID เดียวกัน | "Constraints always specify a UUID value, but the major and minor values are optional. ... Major and minor characteristics are wildcards if they have no value." | [`CLBeaconIdentityConstraint`](https://developer.apple.com/documentation/corelocation/clbeaconidentityconstraint) |
+
+### การตัดสินใจ: ลงทะเบียน region เป็น 2 ชั้น
+
+**ชั้นที่ 1 — region กว้าง 1 อัน (ตาข่ายกันพลาด, ลงทะเบียนถาวร)**
+
+- สร้างด้วย `init(uuid:identifier:)` — **ระบุแค่ UUID ของ BigC ไม่ระบุ major/minor**
+  จึงครอบคลุม beacon ของ BigC **ทุกตัวในฟลีต** ด้วย region เดียว (ตามกลไก wildcard
+  ที่ยืนยันไว้ข้างบน)
+- **ลงทะเบียนถาวร ห้ามถอดออกไม่ว่ากรณีใด** — ไม่ว่าจะสลับชั้นที่ 2 กี่รอบ ไม่ว่าผู้ใช้จะ
+  ย้ายไปไหน region นี้ต้องอยู่เสมอ
+- หน้าที่: **รับประกันว่าแอปตื่นเสมอเมื่อเจอ beacon ของ BigC** แม้เป็นสาขาที่ไม่ได้อยู่
+  ในรายการ 19 อันของชั้นที่ 2
+
+**ชั้นที่ 2 — region เจาะจงสาขา ไม่เกิน 19 อัน (สลับได้ตามตำแหน่ง)**
+
+- สร้างด้วย `init(uuid:major:identifier:)` — ระบุ major (= รหัสสาขาตาม ADR-5)
+  ไม่ระบุ minor เพื่อให้ครอบคลุม beacon ทุกตัวในสาขานั้น
+- **`identifier` string ตั้งเป็นรหัสสาขา** เพื่อให้ `didEnterRegion` บอกได้ทันทีว่า
+  เข้าสาขาไหน โดย**ไม่ต้องรอ ranging** — อ่านจาก `region.identifier` ตรง ๆ
+  (ตรงตามที่ Apple ระบุว่า identifier string คือทางเดียวที่การันตีว่าระบุ region ได้
+  จึง**ห้ามเทียบ pointer ของ object** หรือพึ่งลำดับใน `monitoredRegions`)
+- สลับชุดได้ตามตำแหน่งคร่าว ๆ ของผู้ใช้ ตามที่ Apple แนะนำ
+
+**19 + 1 = 20 พอดี** ตรงเพดานที่ Apple ระบุ
+
+### ทำไมต้องมีทั้งสองชั้น (ตัดชั้นใดชั้นหนึ่งออกไม่ได้)
+
+**ถ้ามีแต่ชั้นกว้างอย่างเดียว** — `didEnterRegion` จะบอกได้แค่ "เข้าโซนของ BigC สักที่หนึ่ง"
+ไม่รู้ว่าสาขาไหน ต้องรอ ranging ต่อเพื่อดู major/minor ซึ่ง **อาจไม่ทันในเวลา background
+ที่ iOS ให้มาอย่างจำกัด** (แอปที่ถูกปลุกจาก terminate ได้เวลาทำงานสั้นมาก) ผลคืออาจรู้ว่า
+เข้าโซนแต่ไม่ทันรู้ว่าสาขาไหนก่อนถูก suspend อีกครั้ง
+
+**ถ้ามีแต่ชั้นเจาะจงอย่างเดียว** — จะเกิด **จุดบอดถาวรที่มองไม่เห็น** ผู้ใช้ที่เดินเข้าสาขาที่ 21
+(หรือสาขาที่เพิ่งเปิดใหม่ หรือสาขาที่ระบบเลือกไม่ครอบคลุมเพราะตำแหน่งคร่าว ๆ ผิด) จะ
+**ไม่ปลุกแอปเลย** และ — นี่คือส่วนที่อันตรายที่สุด — **ความเงียบแบบนั้นมีหน้าตาเหมือนกับ
+"ไม่มีใครเดินผ่าน beacon" ทุกประการ แยกจากกันไม่ออกจากฝั่งเรา** ไม่มี error ไม่มี log
+ไม่มีสัญญาณใด ๆ ที่บอกว่าเราพลาดไป ระบบจะดูเหมือนทำงานปกติทั้งที่มีรูโหว่อยู่
+
+ชั้นที่ 1 จึงไม่ใช่ของสำรองที่ "มีก็ดี" แต่เป็นสิ่งที่ทำให้ความล้มเหลวของชั้นที่ 2
+**สังเกตเห็นได้** — ถ้าชั้นกว้างตื่นแต่ไม่มีสาขาไหนใน 19 อันตรงกัน นั่นคือสัญญาณชัดเจนว่า
+การเลือกสาขาของเราพลาด ซึ่งเป็นข้อมูลที่เอาไปแก้ได้
+
+### ส่วนที่เป็น pure function (Track A — ทดสอบได้โดยไม่ต้องมีฮาร์ดแวร์)
+
+การ **"เลือกว่าจะลงทะเบียน region ชุดไหน"** แยกออกมาเป็น pure function ที่ไม่แตะ
+CoreLocation เลย: รับรายการสาขา + ตำแหน่งคร่าว ๆ ของผู้ใช้ → คืนรายการ region ที่ควร
+ลงทะเบียน
+
+สัญญาที่ฟังก์ชันนี้ต้องรักษาเสมอ (บังคับด้วย unit test):
+
+1. **ชั้นที่ 1 ต้องอยู่ในผลลัพธ์เสมอ** ไม่ว่า input จะเป็นอะไร — สาขา 0 แห่ง, สาขา 10,000 แห่ง,
+   หรือไม่รู้ตำแหน่งผู้ใช้เลย
+2. **จำนวนรวมต้องไม่เกิน 20 เสมอ**
+3. ชั้นที่ 2 เรียงตามระยะจากผู้ใช้ (ใกล้ก่อน) แล้วตัดที่ 19
+
+ส่วนที่เรียก CoreLocation จริง (`startMonitoring(for:)`) ยังเป็น **Track B**
+`code-complete, unverified` ตามปกติ
+
+### Open question ที่ยังไม่ยืนยัน — ห้ามสมมติเอาเอง
+
+**เมื่อ beacon หนึ่งตัวตรงกับทั้ง region ชั้นกว้างและ region เจาะจงสาขาพร้อมกัน
+`didEnterRegion` จะถูกเรียกกี่ครั้ง — ครั้งเดียวหรือสองครั้ง (ครั้งละ region)?**
+
+**ไม่พบเอกสารของ Apple ที่ระบุพฤติกรรมของ region ที่ซ้อนทับกันในกรณี beacon region ไว้ชัด**
+(หน้า `didEnterRegion` อธิบายว่า callback ส่ง `region` ที่เข้ามาให้ แต่ไม่ได้ระบุว่าเมื่อมี
+หลาย region ที่ match พร้อมกันจะยิงกี่ครั้ง)
+
+ผลกระทบถ้าเดาผิด: ถ้ายิงสองครั้งจริงแล้วเราคิดว่าครั้งเดียว จะเกิด event ซ้ำที่ไหลไปถึง
+business logic (เช่น นับการเข้าสาขาซ้ำสองเท่า) ถ้ายิงครั้งเดียวจริงแล้วเราคิดว่าสองครั้ง
+อาจเขียน dedupe ที่กลืน event ที่ถูกต้องทิ้ง
+
+**ต้องทดสอบบนอุปกรณ์จริงก่อน** แล้วค่อยตัดสินใจว่าจะ dedupe ที่ชั้นไหน — เพิ่มเป็นเคส
+ทดสอบไว้ใน `docs/test-checklists/ios_broadcast_scanning.md` แล้ว จนกว่าจะรู้ผล
+**ห้ามเขียน dedupe logic ที่ตั้งอยู่บนข้อสมมติข้อใดข้อหนึ่ง**
