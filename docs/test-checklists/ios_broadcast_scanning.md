@@ -368,6 +368,79 @@ Apple ระบุไว้ตรงตัวในหน้า `startMonitoring
 provisioning โดยไม่ต้องแก้โค้ดแอปเลย** — เปลี่ยนการตั้งค่า beacon ตอนติดตั้ง
 ก็ได้ความเร็วกลับมา ซึ่งถูกกว่าและเร็วกว่าการไล่ optimize โค้ด
 
+## 12. เครื่องมือบันทึกหลักฐานใน example app — วิธีแยก "ถูกปลุกจากสถานะถูกฆ่า"
+
+**สถานะ: เครื่องมือพร้อมแล้ว (code-complete) — ยังไม่ได้ใช้ทดสอบจริง**
+
+เพื่อพิสูจน์ B5 ต้องแยกให้ออกว่า event ที่ได้มาเกิดตอน **แอปรันอยู่เบื้องหลังอยู่แล้ว**
+(ไม่ได้พิสูจน์อะไรมาก) หรือตอน **process ถูกฆ่าไปแล้วแล้ว iOS ปลุกขึ้นมาใหม่**
+(นี่คือสิ่งที่ต้องการ) — ปัญหาคือ **iOS ไม่มี API เดียวที่ตอบเรื่องนี้ตรง ๆ**
+
+### วิธีที่เลือกใช้ และเหตุผล (ค้นคว้าแล้ว ไม่ได้เดา)
+
+ใช้ **2 สัญญาณอิสระ** แล้วบันทึก**ทั้งสัญญาณดิบและข้อสรุป**ลง log ทุกบรรทัด
+
+| สัญญาณ | ที่มา | ใช้ยังไง |
+|---|---|---|
+| `UIApplication.LaunchOptionsKey.location` | Apple: "A key indicating that the app was launched to handle an incoming location event" / UIKit header: "The app was launched in response to a CoreLocation event" | **หลักฐานสนับสนุน** ไม่ใช่ตัวตัดสินหลัก |
+| แอปเคย `applicationDidBecomeActive` ใน process นี้หรือยัง | `UIApplication.State` + lifecycle callback | **ตัวตัดสินหลัก** |
+
+**สูตรที่ใช้สรุป:**
+- `applicationState == active` → `foreground`
+- ไม่เคย active เลยใน process นี้ + อยู่ background → **`relaunchedFromTerminated`**
+- เคย active แล้ว + อยู่ background → `background`
+
+**เหตุผลที่ไม่ใช้ launch key เป็นตัวตัดสินหลัก ทั้งที่ความหมายตรงที่สุด:**
+`UIApplicationLaunchOptionsLocationKey` **ถูก deprecate แล้วใน iOS 26.0** —
+ยืนยันจาก SDK header จริง (`UIApplication.h:586`):
+
+```
+API_DEPRECATED("Adopt CLLocationUpdate or CLMonitor, or use
+CLLocationManagerDelegate from CoreLocation to handle expected location events
+after scene connection.", ios(4.0, 26.0), ...)
+```
+
+สังเกตว่านี่เป็น **เลขเวอร์ชันจริง (26.0)** ไม่ใช่ `API_TO_BE_DEPRECATED` แบบที่
+`CLBeaconRegion` เป็น — และทางเลือกที่ Apple แนะนำคือ `CLMonitor` ซึ่ง **ADR-6
+หัวข้อ 4 ตัดสินแล้วว่ายังไม่ย้ายในรอบนี้** ถ้าพึ่ง key นี้ตัวเดียวแล้ววันหนึ่ง Apple
+ถอดออกจริง การทดสอบจะพัง**เงียบ ๆ** (ได้ `false` เสมอ = สรุปว่าไม่เคยถูกปลุกเลย
+ทั้งที่จริงถูกปลุก) ซึ่งเป็นความล้มเหลวชนิดที่แย่ที่สุดคือดูเหมือนทำงานปกติ
+
+ส่วนสัญญาณ "เคย active หรือยัง" **ไม่พึ่ง API ที่ deprecated เลย** และตั้งอยู่บน
+ข้อเท็จจริงของ lifecycle: process ที่ผู้ใช้เปิดเองต้องผ่าน active เสมอ ส่วน process
+ที่ระบบสร้างขึ้นมาเองเพื่อส่ง location event จะไม่เคยผ่าน
+
+**ทำไมถึงบันทึกสัญญาณดิบไว้ด้วย ไม่ใช่แค่ข้อสรุป:** ถ้าภายหลังพบว่าสูตรข้างบนผิด
+ข้อมูลดิบใน log ยังตรวจย้อนกลับได้โดยไม่ต้องทดสอบใหม่ทั้งรอบ (การทดสอบ B5 หนึ่ง
+รอบต้องรอให้ iOS terminate แอปจริง ซึ่งควบคุมเวลาไม่ได้ ทำซ้ำแพง)
+
+### รูปแบบแต่ละบรรทัดใน log
+
+```
+2026-08-29T14:23:07.123+07:00	enter	bigc-fleet-wide	relaunchedFromTerminated	launchKey=true everActive=false state=background uptime=0.8s
+```
+`timestamp(ISO8601+tz)` TAB `event` TAB `regionIdentifier` TAB `ข้อสรุป` TAB `สัญญาณดิบ`
+
+ไฟล์อยู่ใน **Application Support** ของแอป (ไม่ใช่ Documents — ไม่ต้องการให้โผล่ใน
+Files app และไม่ใช่ Caches ที่ระบบล้างเองได้) เขียนแบบ append + flush ทันทีทุกบรรทัด
+เพราะ iOS อาจ suspend process ทันทีหลังจบงาน ถ้าค้างใน buffer จะเสียหลักฐานทั้งบรรทัด
+
+### วิธีใช้ทดสอบ B5
+
+- [ ] เปิดแอป กด **"Start region monitoring"** (ไม่ใช่ "Start scan")
+- [ ] ตรวจว่าแผงบอกว่าสิทธิ์เป็น **Always** — ถ้าเป็น When In Use จะไม่ถูกปลุกตอนถูก kill
+      (ต้องไปตั้งที่ Settings เพราะ iOS ไม่ให้ขอ Always ซ้ำ)
+- [ ] กด **"ดู log" → ล้าง log** เพื่อเริ่มรอบสะอาด
+- [ ] **kill แอปจากตัวสลับแอป** (swipe ขึ้น) ให้ process ตายจริง
+- [ ] เดินออกนอกระยะ beacon แล้วเดินกลับเข้ามา
+- [ ] ต้องเห็น **notification บนหน้าจอล็อกโดยไม่ต้องเปิดแอป**
+- [ ] เปิดแอป → ดู log → **บรรทัดนั้นต้องเป็น `relaunchedFromTerminated`**
+      ถ้าเป็น `background` แปลว่า process ไม่ได้ตายจริง ให้ทำซ้ำ
+- [ ] บันทึกบรรทัดที่ได้ลงตารางสรุปด้านล่างเป็นหลักฐาน
+
+**เกณฑ์ผ่านของ B5: ต้องเห็นบรรทัด `relaunchedFromTerminated` จริงในไฟล์ log**
+notification อย่างเดียวไม่พอ เพราะไม่ได้บอกว่า process ตายจริงหรือแค่อยู่เบื้องหลัง
+
 ## สรุปผล (กรอกหลังทดสอบจริง)
 
 | ข้อ | ผ่าน/ไม่ผ่าน | วันที่ | อุปกรณ์ (iPhone รุ่น/iOS) | K9P (รุ่น/firmware) | หมายเหตุ/หลักฐาน |
@@ -382,6 +455,7 @@ provisioning โดยไม่ต้องแก้โค้ดแอปเล�
 | 9. region ซ้อนทับ (enter ซ้ำ?) | ยังไม่ทดสอบ | — | — | — | ADR-8 open question — ห้ามเขียน dedupe จนกว่าจะรู้ผล |
 | 10. ไม่มีอินเทอร์เน็ต | ยังไม่ทดสอบ | — | — | — | Apple ระบุว่า region monitoring ต้องการ network connectivity |
 | 11. เทียบ advertising mode | **ยังทำไม่ได้** | — | — | — | ติด GATT config ที่ยังไม่ implement |
+| 12. B5 wake-from-terminate | ยังไม่ทดสอบ | — | — | — | เครื่องมือบันทึกหลักฐานพร้อมแล้ว — เกณฑ์ผ่าน: เห็นบรรทัด `relaunchedFromTerminated` ใน log |
 
 **อัปเดต 29 ส.ค. 2026 — สรุปสถานะล่าสุด**
 
