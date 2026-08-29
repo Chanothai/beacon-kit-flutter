@@ -368,6 +368,154 @@ Apple ระบุไว้ตรงตัวในหน้า `startMonitoring
 provisioning โดยไม่ต้องแก้โค้ดแอปเลย** — เปลี่ยนการตั้งค่า beacon ตอนติดตั้ง
 ก็ได้ความเร็วกลับมา ซึ่งถูกกว่าและเร็วกว่าการไล่ optimize โค้ด
 
+## 12. เครื่องมือบันทึกหลักฐานใน example app — วิธีแยก "ถูกปลุกจากสถานะถูกฆ่า"
+
+**สถานะ: เครื่องมือพร้อมแล้ว (code-complete) — ยังไม่ได้ใช้ทดสอบจริง**
+
+เพื่อพิสูจน์ B5 ต้องแยกให้ออกว่า event ที่ได้มาเกิดตอน **แอปรันอยู่เบื้องหลังอยู่แล้ว**
+(ไม่ได้พิสูจน์อะไรมาก) หรือตอน **process ถูกฆ่าไปแล้วแล้ว iOS ปลุกขึ้นมาใหม่**
+(นี่คือสิ่งที่ต้องการ) — ปัญหาคือ **iOS ไม่มี API เดียวที่ตอบเรื่องนี้ตรง ๆ**
+
+### วิธีที่เลือกใช้ และเหตุผล (ค้นคว้าแล้ว ไม่ได้เดา)
+
+ใช้ **2 สัญญาณอิสระ** แล้วบันทึก**ทั้งสัญญาณดิบและข้อสรุป**ลง log ทุกบรรทัด
+
+| สัญญาณ | ที่มา | ใช้ยังไง |
+|---|---|---|
+| `UIApplication.LaunchOptionsKey.location` | Apple: "A key indicating that the app was launched to handle an incoming location event" / UIKit header: "The app was launched in response to a CoreLocation event" | **หลักฐานสนับสนุน** ไม่ใช่ตัวตัดสินหลัก |
+| แอปเคย `applicationDidBecomeActive` ใน process นี้หรือยัง | `UIApplication.State` + lifecycle callback | **ตัวตัดสินหลัก** |
+
+**สูตรที่ใช้สรุป:**
+- `applicationState == active` → `foreground`
+- ไม่เคย active เลยใน process นี้ + อยู่ background → **`relaunchedFromTerminated`**
+- เคย active แล้ว + อยู่ background → `background`
+
+**เหตุผลที่ไม่ใช้ launch key เป็นตัวตัดสินหลัก ทั้งที่ความหมายตรงที่สุด:**
+`UIApplicationLaunchOptionsLocationKey` **ถูก deprecate แล้วใน iOS 26.0** —
+ยืนยันจาก SDK header จริง (`UIApplication.h:586`):
+
+```
+API_DEPRECATED("Adopt CLLocationUpdate or CLMonitor, or use
+CLLocationManagerDelegate from CoreLocation to handle expected location events
+after scene connection.", ios(4.0, 26.0), ...)
+```
+
+สังเกตว่านี่เป็น **เลขเวอร์ชันจริง (26.0)** ไม่ใช่ `API_TO_BE_DEPRECATED` แบบที่
+`CLBeaconRegion` เป็น — และทางเลือกที่ Apple แนะนำคือ `CLMonitor` ซึ่ง **ADR-6
+หัวข้อ 4 ตัดสินแล้วว่ายังไม่ย้ายในรอบนี้** ถ้าพึ่ง key นี้ตัวเดียวแล้ววันหนึ่ง Apple
+ถอดออกจริง การทดสอบจะพัง**เงียบ ๆ** (ได้ `false` เสมอ = สรุปว่าไม่เคยถูกปลุกเลย
+ทั้งที่จริงถูกปลุก) ซึ่งเป็นความล้มเหลวชนิดที่แย่ที่สุดคือดูเหมือนทำงานปกติ
+
+ส่วนสัญญาณ "เคย active หรือยัง" **ไม่พึ่ง API ที่ deprecated เลย** และตั้งอยู่บน
+ข้อเท็จจริงของ lifecycle: process ที่ผู้ใช้เปิดเองต้องผ่าน active เสมอ ส่วน process
+ที่ระบบสร้างขึ้นมาเองเพื่อส่ง location event จะไม่เคยผ่าน
+
+**ทำไมถึงบันทึกสัญญาณดิบไว้ด้วย ไม่ใช่แค่ข้อสรุป:** ถ้าภายหลังพบว่าสูตรข้างบนผิด
+ข้อมูลดิบใน log ยังตรวจย้อนกลับได้โดยไม่ต้องทดสอบใหม่ทั้งรอบ (การทดสอบ B5 หนึ่ง
+รอบต้องรอให้ iOS terminate แอปจริง ซึ่งควบคุมเวลาไม่ได้ ทำซ้ำแพง)
+
+### รูปแบบแต่ละบรรทัดใน log
+
+```
+2026-08-29T14:23:07.123+07:00	enter	bigc-fleet-wide	relaunchedFromTerminated	launchKey=true everActive=false state=background uptime=0.8s
+```
+`timestamp(ISO8601+tz)` TAB `event` TAB `regionIdentifier` TAB `ข้อสรุป` TAB `สัญญาณดิบ`
+
+ไฟล์อยู่ใน **Application Support** ของแอป (ไม่ใช่ Documents — ไม่ต้องการให้โผล่ใน
+Files app และไม่ใช่ Caches ที่ระบบล้างเองได้) เขียนแบบ append + flush ทันทีทุกบรรทัด
+เพราะ iOS อาจ suspend process ทันทีหลังจบงาน ถ้าค้างใน buffer จะเสียหลักฐานทั้งบรรทัด
+
+### วิธีใช้ทดสอบ B5
+
+- [ ] เปิดแอป กด **"Start region monitoring"** (ไม่ใช่ "Start scan")
+- [ ] ตรวจว่าแผงบอกว่าสิทธิ์เป็น **Always** — ถ้าเป็น When In Use จะไม่ถูกปลุกตอนถูก kill
+      (ต้องไปตั้งที่ Settings เพราะ iOS ไม่ให้ขอ Always ซ้ำ)
+- [ ] กด **"ดู log" → ล้าง log** เพื่อเริ่มรอบสะอาด
+- [ ] **kill แอปจากตัวสลับแอป** (swipe ขึ้น) ให้ process ตายจริง
+- [ ] เดินออกนอกระยะ beacon แล้วเดินกลับเข้ามา
+- [ ] ต้องเห็น **notification บนหน้าจอล็อกโดยไม่ต้องเปิดแอป**
+- [ ] เปิดแอป → ดู log → **บรรทัดนั้นต้องเป็น `relaunchedFromTerminated`**
+      ถ้าเป็น `background` แปลว่า process ไม่ได้ตายจริง ให้ทำซ้ำ
+- [ ] บันทึกบรรทัดที่ได้ลงตารางสรุปด้านล่างเป็นหลักฐาน
+
+**เกณฑ์ผ่านของ B5: ต้องเห็นบรรทัด `relaunchedFromTerminated` จริงในไฟล์ log**
+notification อย่างเดียวไม่พอ เพราะไม่ได้บอกว่า process ตายจริงหรือแค่อยู่เบื้องหลัง
+
+## 13. เครื่องล็อกอยู่ตอนถูกปลุก — log ถูกเขียนครบหรือไม่ (Data Protection)
+
+**สถานะ: ยังไม่ทดสอบ — Track B (ทดสอบบน simulator ไม่ได้)**
+
+**ความเสี่ยงที่เคสนี้ป้องกัน:** สถานการณ์จริงของ B5 คือมือถืออยู่ในกระเป๋า **จอล็อก**
+แล้วแอปถูกปลุก ถ้าไฟล์ log ได้ Data Protection class ที่เข้มเกินไป การเขียนจะล้มเหลว
+เงียบ ๆ ตอนเครื่องล็อก = **แอปตื่นจริงแต่ไม่มีหลักฐาน** แล้วเราจะสรุปผิดว่า B5 ไม่ผ่าน
+ทั้งที่มันผ่าน — เป็นความล้มเหลวชนิดที่หลอกให้ตัดสินใจผิดทั้งสปรินต์
+
+### ค่าที่ตั้งไว้ในโค้ดตอนนี้ และเหตุผล
+
+ตั้งเป็น **`NSFileProtectionCompleteUntilFirstUserAuthentication`** อย่างชัดเจน
+(ทั้งที่ตัว directory และตัวไฟล์) ใน `AppDelegate.prepareLogFile`
+
+ค่าที่เป็นไปได้ ยืนยันจาก SDK header `Foundation/NSFileManager.h:602-606`
+(`iPhoneOS26.5.sdk`): `None`, `Complete`, `CompleteUnlessOpen`,
+`CompleteUntilFirstUserAuthentication`, `CompleteWhenUserInactive` (iOS 17+)
+
+**ค่า default ของ iOS คืออะไร — ตรวจจากเอกสาร Apple แล้ว ไม่ได้เดา:**
+
+> "If you do not specify a protection level when creating a file, iOS applies the
+> default protection level automatically."
+>
+> "**(Default)** The file is inaccessible until the first time the user unlocks the
+> device. After the first unlocking of the device, the file remains accessible until
+> the device shuts down or reboots."
+>
+> — [Encrypting your app's files](https://developer.apple.com/documentation/uikit/encrypting-your-app-s-files)
+
+**แปลว่า default ตรงกับที่เราต้องการอยู่แล้ว** — แต่ยังตั้งเองเพราะการพึ่ง default
+คือการพึ่งสิ่งที่เราไม่ได้ควบคุมและอาจเปลี่ยนตาม entitlement/เวอร์ชัน iOS ถ้าวันหนึ่ง
+กลายเป็น `.complete` การทดสอบ B5 ทั้งหมดจะให้ผลลบลวงโดยไม่มีอะไรสะกิด การตั้งค่าชัด
+คือการล็อกสมมติฐานที่การทดสอบทั้งชุดตั้งอยู่บนมัน
+
+**ข้อจำกัดที่ยอมรับ:** ถ้าเครื่อง**รีบูตแล้วยังไม่เคยปลดล็อกเลยสักครั้ง** ไฟล์ระดับนี้
+ยังเข้าถึงไม่ได้ → log จะหาย ระดับที่ต่ำกว่านี้คือ `.none` (ไม่เข้ารหัสเลย) ซึ่งไม่เหมาะ
+กับไฟล์ที่บันทึกว่าผู้ใช้อยู่สาขาไหนเวลาใด — จึงยอมรับข้อจำกัดนี้ **เคสนี้ต้องทดสอบ
+แยกด้วย** (ดู checklist ด้านล่าง)
+
+**state store อื่นในเส้นทางเดียวกัน:** ตรวจแล้ว — เส้นทางนี้**ไม่ใช้ `UserDefaults`,
+Keychain หรือที่เก็บ state อื่นเลย** ใช้แค่ไฟล์ log อย่างเดียว จึงไม่มีข้อจำกัดอื่น
+ต้องตรวจเพิ่ม (ถ้าอนาคตเพิ่ม `UserDefaults` ต้องกลับมาตรวจ เพราะมันมีข้อจำกัด
+protection class ของตัวเองเช่นกัน)
+
+### สิ่งที่ทดสอบอัตโนมัติได้แล้ว vs ต้องใช้เครื่องจริง
+
+| ส่วน | ทดสอบที่ไหน | สถานะ |
+|---|---|---|
+| `prepareLogFile` สร้างไฟล์ได้จริง | XCTest simulator | ✅ ผ่าน |
+| เรียก `prepareLogFile` ซ้ำไม่ล้างไฟล์เดิม | XCTest simulator | ✅ ผ่าน |
+| เขียนต่อท้ายได้จริง | XCTest simulator | ✅ ผ่าน |
+| protection class เป็นค่าที่ตั้งไว้จริง | **เครื่องจริงเท่านั้น** | ⏭️ skip บน simulator |
+| เขียนได้จริงตอนเครื่องล็อก | **เครื่องจริงเท่านั้น** | ❌ ยังไม่ทดสอบ |
+
+**ทำไม simulator ตรวจ protection class ไม่ได้ — ยืนยันด้วยการรันจริงแล้ว:**
+`attributesOfItem` คืน `.protectionKey` เป็น `nil` เสมอบน simulator แม้
+`setAttributes` จะสำเร็จ เพราะ simulator ไม่ได้ implement Data Protection
+(ไม่มี Secure Enclave ไม่มีสถานะล็อกแบบเครื่องจริง) XCTest 2 ตัวจึงใช้ `XCTSkip`
+พร้อมเหตุผล **ไม่ใช่ assert แบบหลอกให้ผ่าน** — จะ assert จริงเมื่อรันบนอุปกรณ์จริง
+
+### เช็คลิสต์
+
+- [ ] รัน XCTest **บนอุปกรณ์จริง** (ไม่ใช่ simulator) → 2 เทสต์ที่ skip ต้องเปลี่ยนเป็น
+      ผ่าน และยืนยันว่า protection class เป็น `CompleteUntilFirstUserAuthentication`
+- [ ] ตั้ง region monitoring แล้ว **ล็อกจอ** ทิ้งไว้ (อย่าแค่กดปิดหน้าจอชั่วคราว —
+      ต้องเป็นสถานะล็อกจริง มี passcode)
+- [ ] เดินออก/เข้าระยะ beacon ขณะจอยังล็อกอยู่
+- [ ] ปลดล็อกเปิดแอป → **log ต้องมีบรรทัดของช่วงที่จอล็อก ครบทุก event**
+      ถ้าขาดหายแปลว่า protection class ยังบล็อกการเขียนอยู่
+- [ ] เทียบจำนวนบรรทัดใน log กับจำนวน notification ที่เห็นบนหน้าจอล็อก —
+      **ถ้า notification มาแต่ log ไม่มีบรรทัด นั่นคืออาการของปัญหานี้พอดี**
+- [ ] **เคสสุดขั้ว:** รีบูตเครื่อง แล้ว**ไม่ปลดล็อกเลย** (ข้ามการใส่ passcode) →
+      เดินเข้าระยะ beacon → คาดว่า log จะเขียนไม่ได้ตามข้อจำกัดที่ยอมรับไว้
+      บันทึกผลที่ได้จริงว่าตรงกับที่คาดหรือไม่
+
 ## สรุปผล (กรอกหลังทดสอบจริง)
 
 | ข้อ | ผ่าน/ไม่ผ่าน | วันที่ | อุปกรณ์ (iPhone รุ่น/iOS) | K9P (รุ่น/firmware) | หมายเหตุ/หลักฐาน |
@@ -382,6 +530,8 @@ provisioning โดยไม่ต้องแก้โค้ดแอปเล�
 | 9. region ซ้อนทับ (enter ซ้ำ?) | ยังไม่ทดสอบ | — | — | — | ADR-8 open question — ห้ามเขียน dedupe จนกว่าจะรู้ผล |
 | 10. ไม่มีอินเทอร์เน็ต | ยังไม่ทดสอบ | — | — | — | Apple ระบุว่า region monitoring ต้องการ network connectivity |
 | 11. เทียบ advertising mode | **ยังทำไม่ได้** | — | — | — | ติด GATT config ที่ยังไม่ implement |
+| 12. B5 wake-from-terminate | ยังไม่ทดสอบ | — | — | — | เครื่องมือบันทึกหลักฐานพร้อมแล้ว — เกณฑ์ผ่าน: เห็นบรรทัด `relaunchedFromTerminated` ใน log |
+| 13. เครื่องล็อกตอนถูกปลุก (Data Protection) | ยังไม่ทดสอบ | — | — | — | Track B — simulator ตรวจไม่ได้ (XCTest skip) ถ้าพลาดข้อนี้จะสรุปผิดว่า B5 ไม่ผ่านทั้งที่ผ่าน |
 
 **อัปเดต 29 ส.ค. 2026 — สรุปสถานะล่าสุด**
 

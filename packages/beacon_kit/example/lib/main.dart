@@ -3,6 +3,10 @@ import 'dart:async';
 import 'package:beacon_kit/beacon_kit.dart';
 import 'package:flutter/material.dart';
 
+import 'diagnostics/launch_context.dart';
+import 'diagnostics/region_event_log.dart';
+import 'log_page.dart';
+
 /// UUID ค่าโรงงานของ K9P (ผู้ใช้ให้มาตรงในบรีฟ ไม่ใช่ secret — เป็น UUID
 /// สาธารณะที่ K9P broadcast ออกมา ไม่ใช่ password) ใช้เป็น region เริ่มต้นของ
 /// demo นี้เท่านั้น
@@ -43,6 +47,15 @@ class _ScanPageState extends State<ScanPage> {
       );
 
   StreamSubscription<BeaconAdvertisement>? _subscription;
+  StreamSubscription<IBeaconRegionStateEvent>? _regionSubscription;
+
+  // ---- เครื่องมือสำหรับพิสูจน์ B5/B6 (อยู่ใน example app เท่านั้น) ----
+  final RegionEventLog _log = const RegionEventLog();
+  final ExampleDiagnostics _diagnostics = const ExampleDiagnostics();
+
+  IBeaconAuthorizationLevel? _authorizationLevel;
+  bool _isMonitoringRegions = false;
+  String? _lastRegionEvent;
 
   /// รายการ beacon ล่าสุด key ด้วย `'${deviceId.kind}:${deviceId.value}'`
   /// (dedup ตามคู่ kind+value ตาม ADR-1 — ห้ามเทียบข้าม kind)
@@ -55,6 +68,86 @@ class _ScanPageState extends State<ScanPage> {
   void initState() {
     super.initState();
     BeaconManager.register(_adapter);
+    // เริ่มฟัง region event ทันทีตั้งแต่แอปเปิด **ไม่รอให้ผู้ใช้กดปุ่ม** —
+    // จำเป็นสำหรับ B5: ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาส่ง event ไม่มีใคร
+    // มากดปุ่มให้ ถ้าเริ่มฟังตอนกดปุ่มเท่านั้น event นั้นจะหายไปเงียบ ๆ
+    _listenToRegionEvents();
+    _refreshAuthorizationLevel();
+    unawaited(_diagnostics.requestNotificationAuthorization());
+  }
+
+  void _listenToRegionEvents() {
+    _regionSubscription = _adapter.regionStateEvents.listen(
+      _onRegionEvent,
+      onError: (Object error) {
+        if (!mounted) return;
+        setState(() => _errorMessage = 'region event error: $error');
+      },
+    );
+  }
+
+  /// บันทึกหลักฐาน + ยิง notification ทุกครั้งที่เข้า/ออก region
+  ///
+  /// ลำดับสำคัญ: **เขียน log ก่อน** แล้วค่อยยิง notification เพราะ log คือหลักฐาน
+  /// ที่ต้องรอด ส่วน notification เป็นแค่สัญญาณให้คนเห็น ถ้าเวลาที่ระบบให้หมดก่อน
+  /// อย่างน้อยหลักฐานต้องลงดิสก์แล้ว
+  Future<void> _onRegionEvent(IBeaconRegionStateEvent event) async {
+    final diagnostics = await _diagnostics.getLaunchDiagnostics();
+
+    try {
+      await _log.append(event, diagnostics);
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _errorMessage = 'เขียน log ไม่สำเร็จ: $error');
+      }
+    }
+
+    final context = diagnostics.context.name;
+    try {
+      await _diagnostics.postNotification(
+        title: 'Region ${event.state.name}: ${event.regionIdentifier}',
+        body: 'สถานะแอป: $context',
+      );
+    } on Object {
+      // notification ล้มเหลวไม่ควรทำให้ทั้ง flow พัง — log ที่เขียนไปแล้วยังเป็น
+      // หลักฐานที่ใช้ได้ (เช่นผู้ใช้ไม่ได้อนุญาต notification)
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _lastRegionEvent =
+          '${event.state.name} ${event.regionIdentifier} ($context)';
+    });
+  }
+
+  Future<void> _refreshAuthorizationLevel() async {
+    try {
+      final level = await _adapter.getIBeaconAuthorizationLevel();
+      if (!mounted) return;
+      setState(() => _authorizationLevel = level);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'อ่านสิทธิ์ไม่ได้: $error');
+    }
+  }
+
+  /// เริ่ม region monitoring (enter/exit) — คนละอย่างกับ "Start scan" ที่เป็น
+  /// ranging สำหรับดูรายการ beacon แบบ realtime
+  ///
+  /// การเรียก `startIBeaconMonitoring` ฝั่ง native สั่งทั้ง `startMonitoring(for:)`
+  /// และ `startRangingBeacons(satisfying:)` — ปุ่มนี้จึงเป็นทางที่ทำให้ region
+  /// ถูกลงทะเบียนกับ CoreLocation จริงโดยไม่ต้องเปิดหน้ารายการค้างไว้
+  Future<void> _startRegionMonitoring() async {
+    setState(() => _errorMessage = null);
+    try {
+      await _adapter.startIBeaconMonitoring();
+      if (!mounted) return;
+      setState(() => _isMonitoringRegions = true);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'เริ่ม region monitoring ไม่ได้: $error');
+    }
+    await _refreshAuthorizationLevel();
   }
 
   void _startScan() {
@@ -95,6 +188,7 @@ class _ScanPageState extends State<ScanPage> {
   @override
   void dispose() {
     _subscription?.cancel();
+    _regionSubscription?.cancel();
     BeaconManager.unregisterAll();
     super.dispose();
   }
@@ -139,6 +233,16 @@ class _ScanPageState extends State<ScanPage> {
                 ),
               ],
             ),
+          ),
+          _BackgroundTestPanel(
+            authorizationLevel: _authorizationLevel,
+            isMonitoringRegions: _isMonitoringRegions,
+            lastRegionEvent: _lastRegionEvent,
+            onStartRegionMonitoring: _startRegionMonitoring,
+            onRefreshAuthorization: _refreshAuthorizationLevel,
+            onOpenLog: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute<void>(builder: (_) => LogPage(log: _log))),
           ),
           Expanded(
             child: beacons.isEmpty
@@ -195,5 +299,117 @@ class _BeaconTile extends StatelessWidget {
     }
 
     return sourceLabel;
+  }
+}
+
+/// แผงเครื่องมือสำหรับทดสอบ B5/B6 บนอุปกรณ์จริง — **อยู่ใน example app เท่านั้น**
+///
+/// แยกจากส่วนแสดงรายการ beacon เพราะเป็นคนละงาน: ส่วนบนคือ ranging (ดู beacon
+/// แบบ realtime ตอนแอปเปิดอยู่) ส่วนนี้คือ region monitoring (enter/exit ที่ต้อง
+/// ทำงานตอนแอปปิด) ซึ่งเป็นสิ่งที่สปรินต์นี้ต้องพิสูจน์
+class _BackgroundTestPanel extends StatelessWidget {
+  const _BackgroundTestPanel({
+    required this.authorizationLevel,
+    required this.isMonitoringRegions,
+    required this.lastRegionEvent,
+    required this.onStartRegionMonitoring,
+    required this.onRefreshAuthorization,
+    required this.onOpenLog,
+  });
+
+  final IBeaconAuthorizationLevel? authorizationLevel;
+  final bool isMonitoringRegions;
+  final String? lastRegionEvent;
+  final Future<void> Function() onStartRegionMonitoring;
+  final Future<void> Function() onRefreshAuthorization;
+  final VoidCallback onOpenLog;
+
+  @override
+  Widget build(BuildContext context) {
+    final level = authorizationLevel;
+    // B6: ถ้าไม่ใช่ always แปลว่า wake-from-terminate จะไม่ทำงาน ต้องบอกให้ชัด
+    // ก่อนที่ผู้ทดสอบจะเสียเวลาทั้งรอบไปกับการรอ event ที่ไม่มีวันมา
+    final isAlways = level == IBeaconAuthorizationLevel.always;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Background region monitoring (B5/B6)',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  isAlways ? Icons.check_circle : Icons.warning_amber,
+                  size: 18,
+                  color: isAlways
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(switch (level) {
+                    null => 'สิทธิ์: กำลังตรวจสอบ…',
+                    IBeaconAuthorizationLevel.always =>
+                      'สิทธิ์: Always — พร้อมทดสอบ wake-from-terminate',
+                    IBeaconAuthorizationLevel.whenInUse =>
+                      'สิทธิ์: When In Use — แอปจะไม่ถูกปลุกตอนถูก kill',
+                    IBeaconAuthorizationLevel.insufficient =>
+                      'สิทธิ์: ไม่พอ — region monitoring จะไม่ทำงาน',
+                  }, style: Theme.of(context).textTheme.bodySmall),
+                ),
+              ],
+            ),
+            if (!isAlways && level != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'ต้องไปตั้งเป็น "Always" ที่ Settings > แอปนี้ > Location '
+                  '(iOS ไม่ให้แอปขอ Always ซ้ำหลังผู้ใช้เลือกไปแล้ว)',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonal(
+                  onPressed: onStartRegionMonitoring,
+                  child: Text(
+                    isMonitoringRegions
+                        ? 'ลงทะเบียน region ใหม่อีกครั้ง'
+                        : 'Start region monitoring',
+                  ),
+                ),
+                OutlinedButton(
+                  onPressed: onRefreshAuthorization,
+                  child: const Text('เช็คสิทธิ์ใหม่'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: onOpenLog,
+                  icon: const Icon(Icons.description_outlined),
+                  label: const Text('ดู log'),
+                ),
+              ],
+            ),
+            if (lastRegionEvent != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'event ล่าสุด: $lastRegionEvent',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }

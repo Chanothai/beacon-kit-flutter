@@ -708,6 +708,31 @@ header/เอกสาร Apple ที่อ้างข้างบน)*
 `API_TO_BE_DEPRECATED` เป็นเลขเวอร์ชันจริงพร้อมกำหนดวันหยุดรองรับ, หรือฝ่ายธุรกิจ
 อนุมัติ iOS 17+ แล้ว, หรือพบว่า API เดิมใช้ไม่ได้จริงบนอุปกรณ์
 
+
+#### ระดับความแน่นอนของ deprecation ต่างกัน — และมันสนับสนุนการตัดสินใจนี้ (เพิ่ม 29 ส.ค. 2026)
+
+เทียบ 2 อย่างที่ถูก deprecate ในเรื่องเดียวกัน จาก SDK header เดียวกัน (`iPhoneOS26.5.sdk`):
+
+| สิ่งที่ deprecate | เวอร์ชันปิดท้าย | ความหมาย |
+|---|---|---|
+| `CLBeaconRegion`, `-startMonitoringForRegion:` | `API_TO_BE_DEPRECATED` | **placeholder** ไม่ใช่เลขเวอร์ชัน |
+| `UIApplicationLaunchOptionsLocationKey` | `ios(4.0, 26.0)` | **เลขเวอร์ชันจริง** |
+
+**การตีความของทีมเรา (ไม่ใช่ถ้อยแถลงของ Apple — Apple ไม่ได้อธิบายเจตนาไว้ที่ไหน):**
+การที่ Apple ประทับ `API_TO_BE_DEPRECATED` ไว้กับ `CLBeaconRegion` แทนที่จะใส่เลข
+เวอร์ชันจริงแบบที่ทำกับ launch options key ในเรื่องเดียวกัน อ่านได้ว่า **ยังไม่ได้
+ผูกกำหนดการที่แน่นอนกับตัวหลัง** — ต่างจากตัวแรกที่ตัดสินใจแล้วว่าเลิกเมื่อไหร่
+
+ถ้าอ่านแบบนี้ถูก แปลว่าความเสี่ยงเฉพาะหน้าของการใช้ `CLBeaconRegion` ต่อไป
+**ต่ำกว่า**ที่คำว่า "deprecated" ทำให้รู้สึกตอนแรก จึงเป็นเหตุผลสนับสนุนเพิ่มเติม
+ของการตัดสินใจข้างบน ที่จะยังไม่ย้ายไป `CLMonitor` ในรอบนี้
+
+**ข้อควรระวังในการใช้การตีความนี้:** นี่เป็นการอ่านสัญญาณ ไม่ใช่คำรับประกัน
+`API_TO_BE_DEPRECATED` อาจกลายเป็นเลขจริงเมื่อไหร่ก็ได้ใน SDK รุ่นถัดไป —
+เกณฑ์ทบทวน ADR ที่ระบุไว้ข้างบน (ข้อ "Apple เปลี่ยน `API_TO_BE_DEPRECATED` เป็น
+เลขเวอร์ชันจริง") จึงยังใช้บังคับเหมือนเดิม ห้ามใช้ย่อหน้านี้เป็นเหตุผลที่จะไม่
+ตรวจสอบซ้ำในสปรินต์ถัด ๆ ไป
+
 ## ADR-7 (สั้น): ตำแหน่งของ domain entity/usecase สำหรับ BigC ID mapping (A3-decision, เพิ่ม 28 ส.ค. 2026)
 
 **คำถาม:** โค้ด pure-Dart ที่แปลง identity triple (UUID, Major, Minor) → ข้อมูลธุรกิจ (ยี่ห้อ/ล็อต/กลุ่ม/ตำแหน่ง ตาม ADR-5) ควรอยู่ที่ไหน — ยังไม่มี `lib/features/` ที่ไหนใน repo เลยตอนนี้ (ตรวจด้วย `find` แล้วไม่มีจริง) มีแต่ `packages/beacon_kit*` (federated plugin)
@@ -816,3 +841,56 @@ business logic (เช่น นับการเข้าสาขาซ้ำ
 **ต้องทดสอบบนอุปกรณ์จริงก่อน** แล้วค่อยตัดสินใจว่าจะ dedupe ที่ชั้นไหน — เพิ่มเป็นเคส
 ทดสอบไว้ใน `docs/test-checklists/ios_broadcast_scanning.md` แล้ว จนกว่าจะรู้ผล
 **ห้ามเขียน dedupe logic ที่ตั้งอยู่บนข้อสมมติข้อใดข้อหนึ่ง**
+
+---
+
+## ADR-9: สัญญา cross-platform ของ `startIBeaconMonitoring()` / `stopIBeaconMonitoring()` (เพิ่ม 29 ส.ค. 2026)
+
+**ทำไมเป็น ADR แยก ไม่ใช่หัวข้อย่อยของ ADR-6:** ADR-6 เป็นการตัดสินใจเรื่อง *iOS* (ย้ายจาก ranging ไป region monitoring บน CoreLocation) ส่วน ADR นี้เป็นสัญญาของ **public API ใน `beacon_kit`** ที่มีผลต่อผู้เรียกทุกแพลตฟอร์มและต่อคนที่จะมาทำ Android — คนคนนั้นจะค้นหาคำว่า "Android" แล้วควรเจอ ADR ที่พูดถึงเรื่องนี้ทั้งหัวข้อ ไม่ใช่ย่อหน้าที่ฝังอยู่กลาง ADR ที่ชื่อบอกว่าเป็นเรื่อง iOS
+
+**บริบท:** `GenericIBeaconEddystoneAdapter` เปิดเมธอด `startIBeaconMonitoring()` / `stopIBeaconMonitoring()` เพิ่มจาก `scan()` เพราะ B5 ต้องการให้ region ยังลงทะเบียนอยู่แม้ไม่มีใครฟัง stream และแม้ process ถูก terminate ซึ่ง `scan()` ทำไม่ได้ (อายุของ region ผูกกับ subscription)
+
+### เมธอดคู่นี้ตั้งอยู่บนความสามารถระดับ OS ที่ iOS มี — และยังไม่รู้ว่า Android มีเทียบเท่าหรือไม่
+
+**ฝั่ง iOS (ยืนยันจากเอกสาร Apple):** region ที่ลงทะเบียนแล้วถูกเก็บที่ระดับระบบและคงอยู่ข้าม process
+
+> "The location manager persists region data between launches of your app. If your app is terminated and then relaunched, the contents of this property are repopulated with region objects that contain the previously registered data."
+>
+> — [`CLLocationManager.monitoredRegions`](https://developer.apple.com/documentation/corelocation/cllocationmanager/monitoredregions)
+
+หน้าเดียวกันยังระบุว่า property นี้คือ "The set of shared regions monitored by all location-manager objects" — region ไม่ได้เป็นของ instance ใด instance หนึ่ง
+
+**นี่คือเหตุผลที่เมธอดคู่นี้มีหน้าตาแบบนี้:** `start` ไม่ใช่ "เริ่มทำงาน" แต่คือ **"ลงทะเบียนไว้กับระบบ"** และ `stop` คือ **"ถอนออกจากระบบ"** — ไม่มีอะไรต้องคงไว้ใน memory ของแอป ไม่มี stream ที่ต้อง subscribe ค้าง ถ้าไม่เรียก `stop` region จะอยู่ต่อไปแม้ผู้ใช้ปิดแอป (แต่หายเมื่อผู้ใช้ลบแอป)
+
+**ฝั่ง Android — ยังไม่ตัดสิน เป็น open question ที่ต้องตอบก่อนเริ่มงาน Android**
+
+สิ่งที่**ยืนยันแล้ว**จากเอกสาร Android: มี API ที่ส่งผลการสแกน BLE ไปยัง process ที่ไม่ได้รันอยู่ได้จริง
+
+> "Start Bluetooth LE scan using a PendingIntent. The scan results will be delivered via the PendingIntent. **Use this method of scanning if your process is not always running and it should be started when scan results are available.**"
+>
+> — [`BluetoothLeScanner.startScan(List<ScanFilter>, ScanSettings, PendingIntent)`](https://developer.android.com/reference/android/bluetooth/le/BluetoothLeScanner)
+
+สิ่งที่**ยังไม่ยืนยัน และห้ามเดาทั้งสองทาง**:
+
+| คำถาม | สถานะ |
+|---|---|
+| กลไกนี้ใช้แทน region monitoring ของ iOS ได้จริงในเชิง use case หรือไม่ | **ยังไม่ตัดสิน** — มันเป็น *scan result* ที่ filter ด้วย `ScanFilter` ไม่ใช่ *region enter/exit* ที่ OS คำนวณให้ ความหมายไม่เหมือนกัน |
+| Android เก็บ "ชุด region ที่ลงทะเบียนไว้" ข้าม process แบบ `monitoredRegions` หรือไม่ | **ยังไม่ยืนยัน** |
+| มี enter/exit semantics (รู้ว่า "ออก" จากโซนแล้ว) หรือต้องคำนวณเองจากการไม่เจอ scan result | **ยังไม่ยืนยัน** |
+| พฤติกรรมหลังผู้ใช้ force-stop แอป เป็นอย่างไร | **ยังไม่ยืนยัน** |
+| ข้อจำกัด background scan throttling ของ Android มีผลแค่ไหน | **ยังไม่ยืนยัน** |
+
+**สิ่งที่คนทำ Android ต้องรู้ก่อนแตะเมธอดคู่นี้ (จุดประสงค์หลักของ ADR นี้):**
+
+⚠️ **ห้ามสมมติว่า `startIBeaconMonitoring()` จะทำงานเหมือนกันทั้งสองแพลตฟอร์ม** สัญญาปัจจุบันของเมธอดนี้คือสัญญาแบบ iOS: *"ลงทะเบียน region ไว้กับ OS แล้วมันจะอยู่ข้าม process จนกว่าจะถอน"* ถ้า Android ทำแบบนั้นไม่ได้ **ห้าม implement ให้มัน "ดูเหมือนทำได้"** เช่นเลี้ยง foreground service ไว้เงียบ ๆ แล้วเรียกว่าสำเร็จ — เพราะผู้เรียกจะเข้าใจว่าได้พฤติกรรมเดียวกันทั้งสองแพลตฟอร์มทั้งที่ไม่ใช่ และจะไปเจอความจริงตอนอยู่หน้างานกับอุปกรณ์จริง
+
+ทางเลือกที่ต้องตัดสินตอนเริ่มงาน Android (ยังไม่ตัดสินตอนนี้ เพราะยังไม่มีข้อมูลพอ):
+1. ให้ Android throw `UnsupportedError` ตรง ๆ ถ้าทำไม่ได้จริง — ตรงไปตรงมาที่สุด
+2. เปลี่ยนชื่อ/แยกเมธอดตามความสามารถจริงของแต่ละแพลตฟอร์ม
+3. ถ้าค้นคว้าแล้วพบว่า Android ทำได้เทียบเท่าจริง ค่อยคงสัญญาเดียวกันไว้
+
+**ก่อนตัดสิน ต้องรัน skill `beacon-sdk-verify` หรือการค้นคว้าเทียบเท่ากับเอกสาร Android อย่างเป็นระบบก่อน** — ตอบตารางข้างบนให้ครบพร้อม citation แล้วกลับมาเขียน ADR ต่อจากนี้ ไม่ใช่ตัดสินจากความจำ
+
+### `IBeaconRegionStateEvent` ก็ผูกกับ iOS เช่นกัน
+
+`regionStateEvents` และ type ที่เกี่ยวข้อง (`IBeaconRegionState`, `IBeaconAuthorizationLevel`) ถูก export จาก `beacon_kit` โดย**ตั้งชื่อขึ้นต้นด้วย `IBeacon`/ผูกกับ iOS ชัดเจน**อยู่แล้ว (ดูคอมเมนต์ใน `beacon_kit.dart`) — เจตนาคือให้ผู้เรียกเห็นตั้งแต่ชื่อว่านี่ไม่ใช่ contract กลางข้ามแพลตฟอร์ม เมื่อถึงเวลาทำ Android ถ้าพบว่าต้องมี contract กลางจริง ให้ยกขึ้นไปที่ `beacon_kit_platform_interface` พร้อมชื่อที่เป็นกลาง แทนการดัด type ของ iOS ให้ครอบ Android

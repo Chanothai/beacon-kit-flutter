@@ -176,6 +176,40 @@ class GenericIBeaconEddystoneAdapter implements BeaconAdapter {
   Stream<IBeaconRegionStateEvent> get regionStateEvents =>
       _platform.regionStateEvents;
 
+  /// B5: เริ่ม region monitoring (enter/exit) ตาม [iBeaconRegions] **โดยไม่ต้อง
+  /// มีผู้ฟัง [scan] ค้างไว้**
+  ///
+  /// ต่างจาก [scan] ตรงที่ [scan] ผูกการลงทะเบียน region ไว้กับ lifecycle ของ
+  /// stream (ลงทะเบียนตอนมีผู้ฟังคนแรก ถอนตอนผู้ฟังคนสุดท้ายยกเลิก) ซึ่งเหมาะกับ
+  /// การดูรายการ beacon แบบ realtime แต่**ใช้กับ background monitoring ไม่ได้**
+  /// เพราะจุดประสงค์ของ B5 คือให้ region ยังลงทะเบียนอยู่แม้ไม่มีใครฟัง stream
+  /// และแม้ process จะถูก terminate ไปแล้ว
+  ///
+  /// เมธอดนี้จึงลงทะเบียน region กับ CoreLocation ตรง ๆ ครั้งเดียวแล้วจบ —
+  /// ฝั่ง native สั่งทั้ง `startMonitoring(for:)` และ `startRangingBeacons(satisfying:)`
+  /// ตาม ADR-4/ADR-6 การถอนทำผ่าน [stopIBeaconMonitoring]
+  ///
+  /// throw `PlatformException` ตาม error code ใน ADR-4
+  /// (`LOCATION_PERMISSION_DENIED`, `TOO_MANY_REGIONS`, `INVALID_REGION_UUID`,
+  /// `INVALID_ARGUMENT`)
+  Future<void> startIBeaconMonitoring() => _platform.startIBeaconMonitoring(
+    iBeaconRegions
+        .map(
+          (region) => IBeaconRegionRequest(
+            identifier: region.identifier,
+            uuid: region.uuid,
+            major: region.major,
+            minor: region.minor,
+          ),
+        )
+        .toList(),
+  );
+
+  /// ถอน region ที่ [startIBeaconMonitoring] ลงทะเบียนไว้ทั้งหมด
+  Future<void> stopIBeaconMonitoring() => _platform.stopIBeaconMonitoring(
+    iBeaconRegions.map((region) => region.identifier).toList(),
+  );
+
   /// B6: query ระดับสิทธิ์ location ปัจจุบัน (`always`/`whenInUse`/
   /// `insufficient`) ที่มีผลต่อว่า background wake หลังแอปโดน terminate จะ
   /// ทำงานได้จริงหรือไม่ — ดูเหตุผลเต็มที่ [IBeaconAuthorizationLevel]
