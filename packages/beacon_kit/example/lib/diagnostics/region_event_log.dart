@@ -23,10 +23,15 @@ class RegionEventLog {
 
   const RegionEventLog._(this._diagnostics);
 
-  Future<File> _file() async {
-    final dir = await _diagnostics.getLogDirectory();
-    return File('$dir/$_fileName');
-  }
+  /// เตรียมไฟล์ผ่าน native ทุกครั้ง เพื่อให้ **Data Protection class ถูกตั้งเสมอ**
+  /// ไม่ใช่แค่ตอนสร้างครั้งแรก — ถ้าไฟล์ถูกลบ/สร้างใหม่ระหว่างทาง (เช่นผู้ใช้กด
+  /// ล้าง log) ไฟล์ใหม่ต้องได้ค่าเดียวกัน ไม่ตกไปใช้ default ที่เราไม่ได้ควบคุม
+  Future<File> _file() async =>
+      File(await _diagnostics.prepareLogFile(_fileName));
+
+  /// protection class จริงที่ไฟล์ได้รับ — ใช้ตรวจสอบ ไม่ใช่เชื่อว่าตั้งสำเร็จ
+  Future<String?> protectionClass() =>
+      _diagnostics.getLogFileProtection(_fileName);
 
   /// ต่อท้ายหนึ่งบรรทัดต่อหนึ่ง event
   ///

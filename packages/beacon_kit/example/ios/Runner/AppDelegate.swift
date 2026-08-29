@@ -77,30 +77,46 @@ import UserNotifications
         "processUptimeSeconds": Date().timeIntervalSince(processStartedAt),
       ])
 
-    case "getLogDirectory":
-      // ใช้ Application Support ตามที่โจทย์กำหนด — ไม่ถูกล้างโดยระบบเหมือน caches
-      // และไม่โผล่ใน Files app เหมือน Documents
-      guard
-        let dir = FileManager.default.urls(
-          for: .applicationSupportDirectory,
-          in: .userDomainMask
-        ).first
+    case "prepareLogFile":
+      guard let args = call.arguments as? [String: Any],
+        let fileName = args["fileName"] as? String
       else {
         result(
           FlutterError(
-            code: "NO_APP_SUPPORT_DIR",
-            message: "หา Application Support directory ไม่เจอ",
+            code: "INVALID_ARGUMENT",
+            message: "ต้องมี fileName เป็น String",
             details: nil
           )
         )
         return
       }
-      // Application Support ไม่ได้ถูกสร้างมาให้อัตโนมัติเหมือน Documents
-      try? FileManager.default.createDirectory(
-        at: dir,
-        withIntermediateDirectories: true
-      )
-      result(dir.path)
+      do {
+        result(try Self.prepareLogFile(named: fileName))
+      } catch {
+        result(
+          FlutterError(
+            code: "PREPARE_LOG_FAILED",
+            message: error.localizedDescription,
+            details: nil
+          )
+        )
+      }
+
+    case "getLogFileProtection":
+      // ให้ Dart/เทสต์อ่านค่าจริงที่ไฟล์ได้รับกลับไปตรวจได้ ไม่ต้องเชื่อว่าเราตั้งสำเร็จ
+      guard let args = call.arguments as? [String: Any],
+        let fileName = args["fileName"] as? String
+      else {
+        result(
+          FlutterError(
+            code: "INVALID_ARGUMENT",
+            message: "ต้องมี fileName เป็น String",
+            details: nil
+          )
+        )
+        return
+      }
+      result(Self.protectionOfLogFile(named: fileName))
 
     case "requestNotificationAuthorization":
       UNUserNotificationCenter.current()
@@ -152,6 +168,87 @@ import UserNotifications
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+
+  // MARK: - Log file + Data Protection
+
+  /// protection class ที่ไฟล์ log **ต้อง**ได้รับ
+  ///
+  /// **ทำไมต้องตั้งเอง ทั้งที่นี่เป็นค่า default ของ iOS อยู่แล้ว:**
+  /// เอกสาร Apple ("Encrypting your app's files") ระบุว่า "If you do not specify
+  /// a protection level when creating a file, iOS applies the default protection
+  /// level automatically" และอธิบายระดับนี้ว่า "(Default) The file is inaccessible
+  /// until the first time the user unlocks the device. After the first unlocking of
+  /// the device, the file remains accessible until the device shuts down or reboots."
+  ///
+  /// นั่นแปลว่าค่า default **ตรงกับที่เราต้องการอยู่แล้ว** แต่การพึ่ง default คือการ
+  /// พึ่งสิ่งที่เราไม่ได้ควบคุมและอาจเปลี่ยนได้ตาม entitlement/เวอร์ชัน iOS —
+  /// ถ้าวันหนึ่งกลายเป็น `.complete` การเขียน log ตอนเครื่องล็อกจะล้มเหลว
+  /// ซึ่งแปลว่า **แอปตื่นจริงแต่ไม่มีหลักฐาน** แล้วเราจะสรุปผิดว่า B5 ไม่ผ่าน
+  /// การตั้งค่าให้ชัดจึงเป็นการล็อกสมมติฐานที่การทดสอบทั้งหมดตั้งอยู่บนมัน
+  ///
+  /// **ยังมีเคสที่เขียนไม่ได้อยู่ดี:** ถ้าเครื่องรีบูตแล้ว**ยังไม่เคยปลดล็อกเลย**
+  /// สักครั้ง ไฟล์ระดับนี้ยังเข้าถึงไม่ได้ — เป็นข้อจำกัดที่ยอมรับ เพราะระดับที่ต่ำ
+  /// กว่านี้ (`.none`) แปลว่าไม่เข้ารหัสเลย ซึ่งไม่เหมาะกับไฟล์ที่บันทึกว่าผู้ใช้
+  /// อยู่สาขาไหนเวลาใด
+  private static let logFileProtection = FileProtectionType.completeUntilFirstUserAuthentication
+
+  /// สร้าง (ถ้ายังไม่มี) ไฟล์ log พร้อมตั้ง protection class ให้ชัดเจน แล้วคืน path
+  ///
+  /// ตั้ง protection ทั้งที่ **directory** และ **ไฟล์**: directory เพื่อให้ไฟล์ใหม่
+  /// ที่ถูกสร้างในนั้นภายหลังได้ค่าเดียวกัน และไฟล์เพื่อให้ไฟล์ที่มีอยู่แล้วจากการ
+  /// ติดตั้งเวอร์ชันก่อนหน้าถูกอัปเดตด้วย
+  private static func prepareLogFile(named fileName: String) throws -> String {
+    let fm = FileManager.default
+    guard
+      let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    else {
+      throw NSError(
+        domain: "beacon_kit_example",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "หา Application Support directory ไม่เจอ"]
+      )
+    }
+
+    // Application Support ไม่ได้ถูกสร้างมาให้อัตโนมัติเหมือน Documents
+    try fm.createDirectory(
+      at: dir,
+      withIntermediateDirectories: true,
+      attributes: [.protectionKey: logFileProtection]
+    )
+    try fm.setAttributes([.protectionKey: logFileProtection], ofItemAtPath: dir.path)
+
+    let fileURL = dir.appendingPathComponent(fileName)
+    if !fm.fileExists(atPath: fileURL.path) {
+      fm.createFile(
+        atPath: fileURL.path,
+        contents: nil,
+        attributes: [.protectionKey: logFileProtection]
+      )
+    } else {
+      try fm.setAttributes([.protectionKey: logFileProtection], ofItemAtPath: fileURL.path)
+    }
+
+    return fileURL.path
+  }
+
+  /// อ่าน protection class จริงของไฟล์ log กลับมา (`nil` ถ้ายังไม่มีไฟล์)
+  static func protectionOfLogFile(named fileName: String) -> String? {
+    let fm = FileManager.default
+    guard
+      let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    else { return nil }
+    let path = dir.appendingPathComponent(fileName).path
+    guard let attrs = try? fm.attributesOfItem(atPath: path),
+      let protection = attrs[.protectionKey] as? FileProtectionType
+    else { return nil }
+    return protection.rawValue
+  }
+
+  /// เปิดให้ XCTest เรียกได้โดยไม่ต้องผ่าน method channel
+  static func prepareLogFileForTesting(named fileName: String) throws -> String {
+    try prepareLogFile(named: fileName)
   }
 
   private static func stateString(_ state: UIApplication.State) -> String {

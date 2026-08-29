@@ -3,6 +3,7 @@ import Flutter
 import UIKit
 import XCTest
 
+@testable import Runner
 @testable import beacon_kit_ios
 
 /// XCTest ที่รันได้บน **simulator** โดยไม่ต้องมี iPhone หรือ beacon จริง
@@ -155,6 +156,104 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(
       IBeaconRangingManager.authorizationLevel(for: .restricted),
       .insufficient
+    )
+  }
+
+  // MARK: - Data Protection ของไฟล์ log (ความเสี่ยงของ B5)
+
+  /// สถานการณ์จริงของ B5 คือมือถืออยู่ในกระเป๋า **จอล็อก** แล้วแอปถูกปลุก
+  /// ถ้าไฟล์ log ได้ protection class ที่เข้มเกินไป (`.complete`) การเขียนจะล้มเหลว
+  /// ตอนเครื่องล็อก = **แอปตื่นจริงแต่ไม่มีหลักฐาน** แล้วจะสรุปผิดว่า B5 ไม่ผ่าน
+  ///
+  /// **ข้อจำกัดที่ยืนยันด้วยการรันจริงแล้ว (สำคัญ อย่าลบคอมเมนต์นี้):**
+  /// บน **simulator** `attributesOfItem` คืน `.protectionKey` เป็น `nil` เสมอ
+  /// แม้เราจะเรียก `setAttributes` สำเร็จ — เพราะ simulator ไม่ได้ implement
+  /// Data Protection จริง (ไม่มี Secure Enclave ไม่มีสถานะล็อกแบบเครื่องจริง)
+  /// เทสต์นี้จึง **skip บน simulator** และจะ assert จริงเมื่อรันบนอุปกรณ์จริงเท่านั้น
+  ///
+  /// การยืนยันว่า "เขียนได้จริงตอนเครื่องล็อก" เป็น **Track B** ต้องทดสอบบนอุปกรณ์
+  /// จริงตามเช็คลิสต์หัวข้อ 13 — เทสต์นี้ต่อให้ผ่านบนเครื่องจริงก็พิสูจน์แค่ว่า
+  /// attribute ถูกตั้ง ไม่ได้พิสูจน์ว่า iOS ยอมให้เขียนตอนล็อก
+  func testLogFileGetsExplicitProtectionClassNotDefault() throws {
+    let fileName = "protection_probe_\(UUID().uuidString).log"
+
+    let path = try AppDelegate.prepareLogFileForTesting(named: fileName)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: path),
+      "prepareLogFile ต้องสร้างไฟล์จริง (ส่วนนี้ทดสอบได้ทุกที่)"
+    )
+
+    let attributes = try FileManager.default.attributesOfItem(atPath: path)
+    guard let protection = attributes[.protectionKey] as? FileProtectionType else {
+      throw XCTSkip(
+        "แพลตฟอร์มนี้ไม่รายงาน .protectionKey (simulator ไม่ implement Data "
+          + "Protection) — ต้องรันบนอุปกรณ์จริงถึงจะตรวจข้อนี้ได้ ดู Track B "
+          + "เช็คลิสต์หัวข้อ 13"
+      )
+    }
+
+    XCTAssertEqual(
+      protection,
+      .completeUntilFirstUserAuthentication,
+      "ไฟล์ log ต้องได้ completeUntilFirstUserAuthentication เพื่อให้เขียนได้ตอน "
+        + "เครื่องล็อก (หลังปลดล็อกครั้งแรกหลังบูต) — ถ้าเป็น .complete จะเขียนไม่ได้ "
+        + "ตอนถูกปลุกขณะจอล็อก ซึ่งทำให้เสียหลักฐานของ B5 ทั้งรอบ"
+    )
+  }
+
+  /// เขียนต่อท้ายไฟล์ที่เตรียมไว้ได้จริง และ protection class ไม่ถูกรีเซ็ตหลังเขียน
+  ///
+  /// ส่วน "เขียนต่อท้ายได้" ทดสอบได้ทุกแพลตฟอร์ม (Track A) ส่วน protection class
+  /// skip บน simulator ด้วยเหตุผลเดียวกับเทสต์ด้านบน
+  func testAppendWriteWorksAndProtectionClassSurvives() throws {
+    let fileName = "protection_append_\(UUID().uuidString).log"
+
+    let path = try AppDelegate.prepareLogFileForTesting(named: fileName)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data("probe line\n".utf8))
+    try handle.close()
+
+    let contents = try String(contentsOfFile: path, encoding: .utf8)
+    XCTAssertTrue(
+      contents.contains("probe line"),
+      "ต้องเขียนต่อท้ายไฟล์ที่ prepareLogFile เตรียมไว้ได้จริง"
+    )
+
+    guard let after = AppDelegate.protectionOfLogFile(named: fileName) else {
+      throw XCTSkip(
+        "แพลตฟอร์มนี้ไม่รายงาน .protectionKey (simulator) — ตรวจบนอุปกรณ์จริงเท่านั้น"
+      )
+    }
+    XCTAssertEqual(
+      after,
+      FileProtectionType.completeUntilFirstUserAuthentication.rawValue,
+      "protection class ต้องไม่เปลี่ยนหลังเขียนต่อท้าย"
+    )
+  }
+
+  /// prepareLogFile ต้องเรียกซ้ำได้โดยไม่ทำลายเนื้อหาเดิม — สำคัญเพราะโค้ดจริง
+  /// เรียกทุกครั้งก่อน append เพื่อให้ protection class ถูกตั้งเสมอ ถ้ามันล้าง
+  /// ไฟล์ทุกครั้ง หลักฐานทั้งหมดจะเหลือบรรทัดเดียว
+  func testPrepareLogFileIsIdempotentAndDoesNotTruncate() throws {
+    let fileName = "protection_idempotent_\(UUID().uuidString).log"
+
+    let path = try AppDelegate.prepareLogFileForTesting(named: fileName)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    try "line one\n".write(toFile: path, atomically: true, encoding: .utf8)
+
+    let pathAgain = try AppDelegate.prepareLogFileForTesting(named: fileName)
+
+    XCTAssertEqual(path, pathAgain, "path ต้องคงที่ทุกครั้งที่เรียก")
+    let contents = try String(contentsOfFile: path, encoding: .utf8)
+    XCTAssertEqual(
+      contents,
+      "line one\n",
+      "เรียกซ้ำต้องไม่ล้างเนื้อหาเดิม ไม่งั้นหลักฐานจะเหลือบรรทัดเดียว"
     )
   }
 }

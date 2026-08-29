@@ -101,7 +101,63 @@ CoreBluetooth หรือตัว beacon ตอบแบบนั้นจร�
 เมื่อทดสอบกับอุปกรณ์จริงแล้ว ให้กรอกผลลงตารางใน `docs/test-checklists/` พร้อมรุ่นเครื่อง
 เวอร์ชัน OS และวันที่ — ผลที่ไม่ระบุอุปกรณ์ตรวจสอบย้อนกลับไม่ได้
 
-## 5. ห้าม commit ของพวกนี้
+## 5. ข้อเท็จจริงเรื่อง API — ยึด header/ซอร์สจริงในเครื่อง **ก่อน** เอกสารเว็บเสมอ
+
+เมื่อต้องรู้ว่า API ตัวหนึ่งมีอยู่จริงไหม ชื่ออะไร deprecated หรือยัง ต้องการเวอร์ชันไหน
+**ให้เปิดอ่านจากไฟล์จริงในเครื่องก่อน** แล้วค่อยใช้เอกสารเว็บเป็นตัวเสริม —
+ไม่ใช่กลับกัน และห้ามตอบจากความจำ
+
+### วิธีทำจริง
+
+**Apple SDK (CoreLocation, UIKit, Foundation, …)**
+```bash
+SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+grep -rn "startMonitoringForRegion" \
+  "$SDK/System/Library/Frameworks/CoreLocation.framework/Headers/"
+```
+
+**Flutter engine (FlutterEngine.h, FlutterPlugin.h, …)**
+```bash
+grep -rn "FlutterImplicitEngineBridge" \
+  "$(dirname $(dirname $(which flutter)))/bin/cache/artifacts/engine/ios/\
+Flutter.xcframework/ios-arm64/Flutter.framework/Headers/"
+```
+
+**เอกสาร Apple บนเว็บ** — `developer.apple.com` เป็น JS SPA ที่ `curl`/WebFetch อ่านไม่ได้
+ต้องดึงผ่าน JSON API:
+```bash
+curl -sL -A "Mozilla/5.0" \
+  "https://developer.apple.com/tutorials/data/documentation/<path>.json"
+```
+
+### ทำไมกฎนี้ถึงมี — เกิดขึ้นจริงในโปรเจกต์นี้แล้ว 2 ครั้ง
+
+**ครั้งที่ 1 — เอกสารเว็บไม่ครบ** JSON API ของ `developer.apple.com` **ไม่แสดง
+deprecation string ที่มีอยู่จริงใน SDK header** ตอนค้นเรื่อง `CLBeaconRegion` และ
+`startMonitoring(for:)` การค้นจากเว็บอย่างเดียวได้ผลว่า "ไม่พบข้อมูล deprecation"
+ทั้งที่ header ระบุไว้ชัดเจนพร้อมข้อความแทนที่ (`"Use CLBeaconIdentityCondition"`,
+`"Use CLMonitor to start or stop monitoring constraint"`) — ถ้าเชื่อเว็บอย่างเดียว
+ADR-6 จะถูกเขียนบนข้อเท็จจริงที่ผิด
+
+**ครั้งที่ 2 — ความจำผิด** การเดาชื่อ property ของ `FlutterImplicitEngineBridge`
+จากความจำได้ `applicationMessenger` ซึ่ง **ไม่มีอยู่จริง** โค้ดคอมไพล์ไม่ผ่าน
+ของจริงคือ `applicationRegistrar.messenger()` ซึ่งรู้ได้จากการเปิดอ่าน
+`FlutterEngine.h` + `FlutterPlugin.h` ของ Flutter เวอร์ชันที่โปรเจกต์ใช้จริง
+
+**บทเรียนที่ต่างกันของสองเคส:** เคสที่ 2 พังทันทีตอนคอมไพล์ (เสียเวลาไม่กี่นาที)
+แต่**เคสที่ 1 ไม่พังเลย** — มันจะกลายเป็นเอกสารสถาปัตยกรรมที่ผิดและถูกใช้อ้างอิง
+ต่อไปเรื่อย ๆ โดยไม่มีอะไรมาสะกิด นี่คือเหตุผลที่กฎนี้เข้มกับ **"ข้อเท็จจริงที่จะ
+เขียนลงเอกสาร"** มากกว่ากับโค้ดที่คอมไพลเลอร์ตรวจให้อยู่แล้ว
+
+### เขียนลงเอกสารยังไง
+
+เมื่ออ้างข้อเท็จจริงจาก header ให้ระบุ **ไฟล์ + บรรทัด + เวอร์ชัน SDK** เช่น
+`CLBeaconRegion.h:32 (iPhoneOS26.5.sdk)` เพื่อให้คนอื่นเปิดตรวจซ้ำได้ และแยกให้ชัด
+ระหว่าง **สิ่งที่ header เขียน** กับ **การตีความของเรา** — เช่น `API_TO_BE_DEPRECATED`
+เป็น placeholder ไม่ใช่เลขเวอร์ชัน การสรุปว่า "deprecated ใน iOS 26" เป็นการอนุมาน
+ต้องเขียนกำกับว่าอนุมานจากอะไร ไม่ใช่เขียนเป็นถ้อยแถลงของ Apple
+
+## 6. ห้าม commit ของพวกนี้
 
 - ค่าเฉพาะเครื่อง — `Local.xcconfig` (ดู `Local.xcconfig.example`), `DEVELOPMENT_TEAM`
   ห้ามกลับไป hardcode ใน `project.pbxproj` อีก
@@ -111,7 +167,7 @@ CoreBluetooth หรือตัว beacon ตอบแบบนั้นจร�
 **หมายเหตุ:** `flutter build ios` จะแก้ `example/ios/Runner/Base.lproj/Main.storyboard`
 เอง (Xcode auto-format) ถ้าเห็นไฟล์นี้โผล่ใน `git status` โดยที่คุณไม่ได้แตะ ให้ revert ทิ้ง
 
-## 6. เอกสารที่ต้องอัปเดตคู่กับโค้ด
+## 7. เอกสารที่ต้องอัปเดตคู่กับโค้ด
 
 | แก้อะไร | ต้องอัปเดต |
 |---|---|

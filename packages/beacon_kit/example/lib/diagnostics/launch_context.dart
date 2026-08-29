@@ -99,13 +99,21 @@ class ExampleDiagnostics {
     );
   }
 
-  Future<String> getLogDirectory() async {
-    final path = await _channel.invokeMethod<String>('getLogDirectory');
+  /// สร้างไฟล์ log (ถ้ายังไม่มี) พร้อมตั้ง Data Protection class ให้ชัดเจน
+  /// แล้วคืน path — ดูเหตุผลที่ต้องตั้งเองใน `AppDelegate.logFileProtection`
+  Future<String> prepareLogFile(String fileName) async {
+    final path = await _channel.invokeMethod<String>('prepareLogFile', {
+      'fileName': fileName,
+    });
     if (path == null) {
-      throw StateError('native ไม่คืน path ของ log directory');
+      throw StateError('native ไม่คืน path ของไฟล์ log');
     }
     return path;
   }
+
+  /// อ่าน protection class จริงของไฟล์ log กลับมาเพื่อตรวจสอบ (`null` = ยังไม่มีไฟล์)
+  Future<String?> getLogFileProtection(String fileName) => _channel
+      .invokeMethod<String>('getLogFileProtection', {'fileName': fileName});
 
   Future<bool> requestNotificationAuthorization() async =>
       await _channel.invokeMethod<bool>('requestNotificationAuthorization') ??

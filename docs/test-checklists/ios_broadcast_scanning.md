@@ -441,6 +441,81 @@ Files app และไม่ใช่ Caches ที่ระบบล้าง�
 **เกณฑ์ผ่านของ B5: ต้องเห็นบรรทัด `relaunchedFromTerminated` จริงในไฟล์ log**
 notification อย่างเดียวไม่พอ เพราะไม่ได้บอกว่า process ตายจริงหรือแค่อยู่เบื้องหลัง
 
+## 13. เครื่องล็อกอยู่ตอนถูกปลุก — log ถูกเขียนครบหรือไม่ (Data Protection)
+
+**สถานะ: ยังไม่ทดสอบ — Track B (ทดสอบบน simulator ไม่ได้)**
+
+**ความเสี่ยงที่เคสนี้ป้องกัน:** สถานการณ์จริงของ B5 คือมือถืออยู่ในกระเป๋า **จอล็อก**
+แล้วแอปถูกปลุก ถ้าไฟล์ log ได้ Data Protection class ที่เข้มเกินไป การเขียนจะล้มเหลว
+เงียบ ๆ ตอนเครื่องล็อก = **แอปตื่นจริงแต่ไม่มีหลักฐาน** แล้วเราจะสรุปผิดว่า B5 ไม่ผ่าน
+ทั้งที่มันผ่าน — เป็นความล้มเหลวชนิดที่หลอกให้ตัดสินใจผิดทั้งสปรินต์
+
+### ค่าที่ตั้งไว้ในโค้ดตอนนี้ และเหตุผล
+
+ตั้งเป็น **`NSFileProtectionCompleteUntilFirstUserAuthentication`** อย่างชัดเจน
+(ทั้งที่ตัว directory และตัวไฟล์) ใน `AppDelegate.prepareLogFile`
+
+ค่าที่เป็นไปได้ ยืนยันจาก SDK header `Foundation/NSFileManager.h:602-606`
+(`iPhoneOS26.5.sdk`): `None`, `Complete`, `CompleteUnlessOpen`,
+`CompleteUntilFirstUserAuthentication`, `CompleteWhenUserInactive` (iOS 17+)
+
+**ค่า default ของ iOS คืออะไร — ตรวจจากเอกสาร Apple แล้ว ไม่ได้เดา:**
+
+> "If you do not specify a protection level when creating a file, iOS applies the
+> default protection level automatically."
+>
+> "**(Default)** The file is inaccessible until the first time the user unlocks the
+> device. After the first unlocking of the device, the file remains accessible until
+> the device shuts down or reboots."
+>
+> — [Encrypting your app's files](https://developer.apple.com/documentation/uikit/encrypting-your-app-s-files)
+
+**แปลว่า default ตรงกับที่เราต้องการอยู่แล้ว** — แต่ยังตั้งเองเพราะการพึ่ง default
+คือการพึ่งสิ่งที่เราไม่ได้ควบคุมและอาจเปลี่ยนตาม entitlement/เวอร์ชัน iOS ถ้าวันหนึ่ง
+กลายเป็น `.complete` การทดสอบ B5 ทั้งหมดจะให้ผลลบลวงโดยไม่มีอะไรสะกิด การตั้งค่าชัด
+คือการล็อกสมมติฐานที่การทดสอบทั้งชุดตั้งอยู่บนมัน
+
+**ข้อจำกัดที่ยอมรับ:** ถ้าเครื่อง**รีบูตแล้วยังไม่เคยปลดล็อกเลยสักครั้ง** ไฟล์ระดับนี้
+ยังเข้าถึงไม่ได้ → log จะหาย ระดับที่ต่ำกว่านี้คือ `.none` (ไม่เข้ารหัสเลย) ซึ่งไม่เหมาะ
+กับไฟล์ที่บันทึกว่าผู้ใช้อยู่สาขาไหนเวลาใด — จึงยอมรับข้อจำกัดนี้ **เคสนี้ต้องทดสอบ
+แยกด้วย** (ดู checklist ด้านล่าง)
+
+**state store อื่นในเส้นทางเดียวกัน:** ตรวจแล้ว — เส้นทางนี้**ไม่ใช้ `UserDefaults`,
+Keychain หรือที่เก็บ state อื่นเลย** ใช้แค่ไฟล์ log อย่างเดียว จึงไม่มีข้อจำกัดอื่น
+ต้องตรวจเพิ่ม (ถ้าอนาคตเพิ่ม `UserDefaults` ต้องกลับมาตรวจ เพราะมันมีข้อจำกัด
+protection class ของตัวเองเช่นกัน)
+
+### สิ่งที่ทดสอบอัตโนมัติได้แล้ว vs ต้องใช้เครื่องจริง
+
+| ส่วน | ทดสอบที่ไหน | สถานะ |
+|---|---|---|
+| `prepareLogFile` สร้างไฟล์ได้จริง | XCTest simulator | ✅ ผ่าน |
+| เรียก `prepareLogFile` ซ้ำไม่ล้างไฟล์เดิม | XCTest simulator | ✅ ผ่าน |
+| เขียนต่อท้ายได้จริง | XCTest simulator | ✅ ผ่าน |
+| protection class เป็นค่าที่ตั้งไว้จริง | **เครื่องจริงเท่านั้น** | ⏭️ skip บน simulator |
+| เขียนได้จริงตอนเครื่องล็อก | **เครื่องจริงเท่านั้น** | ❌ ยังไม่ทดสอบ |
+
+**ทำไม simulator ตรวจ protection class ไม่ได้ — ยืนยันด้วยการรันจริงแล้ว:**
+`attributesOfItem` คืน `.protectionKey` เป็น `nil` เสมอบน simulator แม้
+`setAttributes` จะสำเร็จ เพราะ simulator ไม่ได้ implement Data Protection
+(ไม่มี Secure Enclave ไม่มีสถานะล็อกแบบเครื่องจริง) XCTest 2 ตัวจึงใช้ `XCTSkip`
+พร้อมเหตุผล **ไม่ใช่ assert แบบหลอกให้ผ่าน** — จะ assert จริงเมื่อรันบนอุปกรณ์จริง
+
+### เช็คลิสต์
+
+- [ ] รัน XCTest **บนอุปกรณ์จริง** (ไม่ใช่ simulator) → 2 เทสต์ที่ skip ต้องเปลี่ยนเป็น
+      ผ่าน และยืนยันว่า protection class เป็น `CompleteUntilFirstUserAuthentication`
+- [ ] ตั้ง region monitoring แล้ว **ล็อกจอ** ทิ้งไว้ (อย่าแค่กดปิดหน้าจอชั่วคราว —
+      ต้องเป็นสถานะล็อกจริง มี passcode)
+- [ ] เดินออก/เข้าระยะ beacon ขณะจอยังล็อกอยู่
+- [ ] ปลดล็อกเปิดแอป → **log ต้องมีบรรทัดของช่วงที่จอล็อก ครบทุก event**
+      ถ้าขาดหายแปลว่า protection class ยังบล็อกการเขียนอยู่
+- [ ] เทียบจำนวนบรรทัดใน log กับจำนวน notification ที่เห็นบนหน้าจอล็อก —
+      **ถ้า notification มาแต่ log ไม่มีบรรทัด นั่นคืออาการของปัญหานี้พอดี**
+- [ ] **เคสสุดขั้ว:** รีบูตเครื่อง แล้ว**ไม่ปลดล็อกเลย** (ข้ามการใส่ passcode) →
+      เดินเข้าระยะ beacon → คาดว่า log จะเขียนไม่ได้ตามข้อจำกัดที่ยอมรับไว้
+      บันทึกผลที่ได้จริงว่าตรงกับที่คาดหรือไม่
+
 ## สรุปผล (กรอกหลังทดสอบจริง)
 
 | ข้อ | ผ่าน/ไม่ผ่าน | วันที่ | อุปกรณ์ (iPhone รุ่น/iOS) | K9P (รุ่น/firmware) | หมายเหตุ/หลักฐาน |
@@ -456,6 +531,7 @@ notification อย่างเดียวไม่พอ เพราะไม
 | 10. ไม่มีอินเทอร์เน็ต | ยังไม่ทดสอบ | — | — | — | Apple ระบุว่า region monitoring ต้องการ network connectivity |
 | 11. เทียบ advertising mode | **ยังทำไม่ได้** | — | — | — | ติด GATT config ที่ยังไม่ implement |
 | 12. B5 wake-from-terminate | ยังไม่ทดสอบ | — | — | — | เครื่องมือบันทึกหลักฐานพร้อมแล้ว — เกณฑ์ผ่าน: เห็นบรรทัด `relaunchedFromTerminated` ใน log |
+| 13. เครื่องล็อกตอนถูกปลุก (Data Protection) | ยังไม่ทดสอบ | — | — | — | Track B — simulator ตรวจไม่ได้ (XCTest skip) ถ้าพลาดข้อนี้จะสรุปผิดว่า B5 ไม่ผ่านทั้งที่ผ่าน |
 
 **อัปเดต 29 ส.ค. 2026 — สรุปสถานะล่าสุด**
 
