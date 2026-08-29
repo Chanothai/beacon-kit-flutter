@@ -1,1 +1,5 @@
 #include "Generated.xcconfig"
+
+// ค่าเฉพาะเครื่องนักพัฒนา (DEVELOPMENT_TEAM ฯลฯ) — ใช้ `#include?` แบบ optional
+// เพื่อให้ clone ใหม่ที่ยังไม่มี Local.xcconfig ยัง build ผ่าน ดู Local.xcconfig.example
+#include? "Local.xcconfig"

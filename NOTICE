@@ -1,0 +1,76 @@
+# NOTICE — ที่มาของข้อมูลและซอฟต์แวร์ภายนอกที่โปรเจกต์นี้อ้างอิง
+
+ไฟล์นี้บันทึกว่า `beacon_kit` อ้างอิงอะไรจากภายนอกบ้าง และอ้างอิงใน "ระดับไหน"
+เพราะการอ้างอิง **ข้อเท็จจริงเชิงโปรโตคอล** กับการ **คัดลอกโค้ด** มีเงื่อนไข
+ทางลิขสิทธิ์ต่างกันสิ้นเชิง
+
+## สรุปสั้น: โปรเจกต์นี้ยังไม่มีการคัดลอกหรือพอร์ตโค้ดจาก SDK ของยี่ห้อใดเลย
+
+ตรวจสอบเมื่อ 29 สิงหาคม 2026 โดยไล่ดูซอร์สทั้งหมดใน `packages/` (Dart + Swift)
+และ `pubspec.yaml`/`podspec` ทุกไฟล์ ผลคือ:
+
+- **ไม่มี dependency ของ SDK ยี่ห้อใดในโปรเจกต์** — `kbeaconlib2` (Android AAR /
+  iOS CocoaPod) **ยังไม่ถูกเพิ่มเข้ามา** เพราะ path `connect()`/GATT/OTA ยังไม่ได้
+  implement (ดู README ตารางสถานะฟีเจอร์)
+- **ไม่มีไฟล์ใดที่พอร์ต/แปลงมาจากซอร์สของ KKM หรือผู้ผลิตรายอื่น** — ตัวถอดรหัส
+  sensor payload เฉพาะเจ้า (เช่น "Ksensor" ของ KKM ที่ ARCHITECTURE.md เคยระบุว่า
+  พอร์ตจาก `KBAdvPacketSensor` ได้ตามสิทธิ์ MIT) **ยังไม่ได้เขียนเลย** มีแต่การ
+  กล่าวถึงในคอมเมนต์ว่าเป็นงานอนาคต
+- สิ่งที่อ้างอิงจริงคือ **ข้อเท็จจริงเชิงโปรโตคอล/สเปก** ที่ได้จากการอ่านเอกสารและ
+  ซอร์สสาธารณะเพื่อ *ยืนยันความถูกต้อง* ไม่ใช่การนำโค้ดมาใช้ (รายละเอียดด้านล่าง)
+
+**ถ้าในอนาคตมีการเพิ่ม `kbeaconlib2` เป็น dependency หรือพอร์ตโค้ดใด ๆ จริง
+ต้องกลับมาแก้ไฟล์นี้ให้ใส่ข้อความลิขสิทธิ์ MIT ฉบับเต็มของต้นทางทันที** ตามเงื่อนไข
+MIT ที่บังคับให้แนบ copyright notice และ permission notice ไปกับการแจกจ่ายทุกครั้ง
+
+## ข้อเท็จจริงเชิงโปรโตคอลที่อ้างอิง (ไม่ใช่โค้ด)
+
+### 1. รูปแบบ payload ของ iBeacon
+`packages/beacon_kit_platform_interface/lib/src/parsers/ibeacon_parser.dart`
+
+byte layout ของ iBeacon (Apple company ID `0x004C` + prefix `0x02 0x15` + UUID 16
+ไบต์ + major 2 ไบต์ + minor 2 ไบต์ + txPower 1 ไบต์) เป็น **ฟอร์แมตมาตรฐานสาธารณะ
+ของ Apple** ไม่ใช่ทรัพย์สินของผู้ผลิต beacon รายใด
+
+การตรวจสอบความถูกต้องทำโดย **อ่านเทียบ** ซอร์สสาธารณะสองแหล่งที่ไม่เกี่ยวข้องกัน
+(`KBUtility.java` ของ KKM ซึ่งเป็น MIT และ `BeaconParser.kt` ของ Flutter plugin
+สาธารณะตัวหนึ่ง) เพื่อยืนยันว่าค่าคงที่ตรงกัน — **ไม่ได้คัดลอกโค้ดจากทั้งสองแหล่ง**
+implementation ใน `ibeacon_parser.dart` เขียนขึ้นใหม่ทั้งหมด
+
+ค่าคงที่ของฟอร์แมตเปิดและ byte offset เป็นข้อเท็จจริง ไม่ใช่งานสร้างสรรค์ที่มี
+ลิขสิทธิ์ — แต่บันทึกที่มาไว้ตรงนี้เพื่อความโปร่งใสและให้ตรวจสอบย้อนกลับได้
+
+### 2. รูปแบบ Eddystone (UID / URL / TLM)
+`packages/beacon_kit_platform_interface/lib/src/parsers/eddystone_parser.dart`
+
+Eddystone เป็นสเปกเปิด (service UUID `0xFEAA`) เผยแพร่โดย Google implementation
+เขียนขึ้นใหม่จากสเปก ไม่ได้คัดลอกโค้ดจาก repository ใด
+
+### 3. ข้อมูล GATT / auth ของ KKM K9P
+`docs/sources/kkm_k9p.md`
+
+เป็น **เอกสารบันทึกผลการค้นคว้า** (service/characteristic UUID, กลไก MD5
+challenge-response, ข้อมูล license ของ SDK ต้นทาง) ที่ได้จากการอ่านซอร์สและ README
+สาธารณะของ `kbeaconlib2` ซึ่งเผยแพร่ภายใต้ **MIT License, Copyright (c) 2021 hogen**
+
+ข้อมูลนี้ **ยังไม่ถูกนำไป implement เป็นโค้ดใด ๆ** ในโปรเจกต์นี้ ณ วันที่เขียน
+
+### 4. เอกสารทางการของ Apple
+`ARCHITECTURE.md` (ADR-4, ADR-5, ADR-6)
+
+ข้อความที่ยกมา (quote) จาก Apple Developer Documentation ใช้เพื่ออ้างอิงข้อจำกัดทาง
+เทคนิคของแพลตฟอร์ม (เพดาน 20 region, กลไก wildcard ของ `CLBeaconIdentityConstraint`,
+เงื่อนไข Always authorization) พร้อม URL กำกับทุกจุด — เป็นการอ้างอิงเอกสารตาม
+ปกติวิสัย ไม่ใช่การนำโค้ดตัวอย่างมาใช้
+
+## เครื่องมือ/ไลบรารีที่เป็น dependency จริงของโปรเจกต์
+
+| แพ็กเกจ | License | ใช้ทำอะไร |
+|---|---|---|
+| Flutter SDK | BSD-3-Clause | framework หลัก |
+| `flutter_lints` | BSD-3-Clause | กติกา lint (dev dependency) |
+| `plugin_platform_interface` | BSD-3-Clause | federated plugin contract |
+| `async` | BSD-3-Clause | `StreamGroup.merge` ใน `BeaconManager.scanAll()` |
+
+ทั้งหมดเป็นแพ็กเกจมาตรฐานจากทีม Dart/Flutter เอง เผยแพร่ภายใต้ BSD-3-Clause
+ข้อความลิขสิทธิ์ฉบับเต็มมาพร้อมกับแต่ละแพ็กเกจตอนติดตั้งผ่าน `flutter pub get`

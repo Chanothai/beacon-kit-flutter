@@ -1,41 +1,146 @@
-# beacon_kit — AI Agent Team Scaffold
+# beacon_kit
 
-ชุดโครงสร้าง Claude Code (subagent + skill + hook) สำหรับพัฒนา `beacon_kit` — Flutter cross-platform library เชื่อมต่อ/รับข้อมูลจาก BLE beacon หลายยี่ห้อ (เริ่มจากมาตรฐานเปิด iBeacon/Eddystone + KKM K9P) ต่อยอดจาก K9P Integration Playbook ก่อนหน้าในบทสนทนาเดียวกัน
+Flutter SDK กลางของ BigC สำหรับรับข้อมูล BLE beacon แบบ broadcast (iBeacon / Eddystone)
+ออกแบบให้ **ไม่ผูกกับยี่ห้อ** — ใช้ได้กับ beacon ทุกยี่ห้อที่ broadcast ตามมาตรฐานเปิด
+โดยไม่ต้องรอ SDK เฉพาะของผู้ผลิต
 
-## วิธีติดตั้งเข้าโปรเจกต์จริง
+> **สถานะ: 0.x — API ยังไม่ stable** อาจมี breaking change ระหว่าง minor version
+> อ่านตารางสถานะฟีเจอร์ด้านล่างให้ครบก่อนตัดสินใจใช้ในงานจริง
 
-1. คัดลอกโฟลเดอร์ `.claude/` ทั้งหมดไปวางที่ root ของ repo โปรเจกต์ Flutter จริง (ถ้ามี `.claude/` อยู่แล้ว ให้ merge ไฟล์ทีละส่วน อย่าทับของเดิม)
-2. คัดลอก `docs/sources/` ไปวางที่ root เดียวกัน — มีไฟล์ `kkm_k9p.md` ให้แล้วเป็นตัวอย่าง/ใช้งานจริง
-3. เอา `ARCHITECTURE.md` และ `PIPELINE.md` ไปวางที่ root เช่นกัน (หรือย้ายเข้า `docs/` ตามธรรมเนียมของทีม — แค่ต้องอัปเดต path ในไฟล์ hook ให้ตรงถ้าย้าย)
-4. ตรวจสอบว่า `jq` ติดตั้งอยู่ในเครื่องที่จะรัน Claude Code (hook ทั้ง 3 ตัวใช้ `jq` parse JSON) และติดตั้ง `flutter_lints` ด้วย `flutter pub add --dev flutter_lints` เมื่อสร้างโปรเจกต์ Flutter จริงแล้ว
-5. เปิด Claude Code ในโปรเจกต์นั้น แล้วลองพิมพ์ `/agents` เพื่อดูว่าเห็น `beacon-architect`, `flutter-dev`, `beacon-qa`, `beacon-reviewer` ครบหรือไม่
+---
 
-## สิ่งที่อยู่ในนี้
+## ตารางสถานะฟีเจอร์ (ณ 29 ส.ค. 2026)
+
+| ฟีเจอร์ | สถานะ | อ่านว่ายังไง |
+|---|---|---|
+| **Broadcast scan: iBeacon (ranging) + Eddystone** บน **iOS** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | ใช้ได้ แต่ดู "ขอบเขตของการทดสอบ" ด้านล่างว่าทดสอบครอบคลุมแค่ไหน |
+| **Background region monitoring** (enter/exit, ปลุกแอปตอนถูก kill) | ⚠️ code-complete — **ยังไม่ verified** | โค้ดเขียนครบและคอมไพล์ผ่าน แต่**ยังไม่เคยรันบนอุปกรณ์จริงสักครั้ง** ห้ามพึ่งพาในงานจริงจนกว่าจะทดสอบ |
+| **GATT connect / auth / config / OTA** | ❌ **ยังไม่ implement** | ไม่มีโค้ดส่วนนี้อยู่เลย `connect()` throw `UnsupportedError` ทันที |
+| **อ่านประวัติ sensor ย้อนหลัง** | ❌ **ยังไม่ implement** | มีแต่ interface ว่าง ๆ ไม่มี implementation |
+| **Android** (ทุกฟีเจอร์) | ❌ **ยังไม่มี** | เรียกจาก Android จะได้ `MissingPluginException` — ยังไม่มีแพ็กเกจ `beacon_kit_android` |
+
+**คำที่ใช้ในตารางนี้แปลว่า:**
+
+- **ทดสอบบนอุปกรณ์จริงแล้ว** — มีคนรันบน iPhone จริงและเห็นผลจริง
+- **code-complete, ยังไม่ verified** — โค้ดครบ คอมไพล์ผ่าน unit test เขียว แต่**ไม่มีใครเคยเห็นมันทำงานบนอุปกรณ์จริง** unit test ที่เขียวเป็น mock ซึ่งพิสูจน์ได้แค่ว่าโค้ดเราเรียกตามสัญญาที่เรา*คิดว่า*ถูก ไม่ได้พิสูจน์ว่า OS ตอบแบบนั้นจริง
+- **ยังไม่ implement** — ไม่มีโค้ดอยู่เลย
+
+เอกสารนี้ **เลี่ยงคำว่า "รองรับ"** โดยตั้งใจ เพราะคำนั้นถูกอ่านว่า "ใช้งานได้จริงแล้ว"
+ซึ่งจริงเฉพาะแถวแรกแถวเดียวเท่านั้น
+
+### ขอบเขตของการทดสอบบนอุปกรณ์จริง (อ่านก่อนพึ่งพาแถวแรก)
+
+สิ่งที่**ยืนยันแล้ว**บน iPhone จริง: แอปขอสิทธิ์ location ได้ถูกต้อง, เริ่มสแกนได้จริง
+หลังได้รับสิทธิ์, และบั๊ก 2 ตัวที่เจอจากการทดสอบ (authorization callback + state ค้าง
+ระหว่าง session) ถูกแก้แล้วพร้อม regression test
+
+สิ่งที่**ยังไม่ได้ทำเป็นระบบ**: เช็คลิสต์ hardware-in-the-loop ที่
+`docs/test-checklists/ios_broadcast_scanning.md` ยังมีข้อที่สถานะ "ยังไม่ทดสอบ" อยู่
+(เช่น พฤติกรรมตอน beacon หายจากระยะ, Eddystone ผ่าน CoreBluetooth, Bluetooth ปิด
+กลางคัน) — **ให้ถือเช็คลิสต์นั้นเป็นแหล่งความจริงที่ละเอียดกว่าตารางนี้เสมอ**
+
+---
+
+## วิธีติดตั้ง
+
+`beacon_kit` **ไม่ได้เผยแพร่บน pub.dev** (เป็น internal SDK — ดู LICENSE)
+ให้ใช้ผ่าน git dependency และ **pin ที่ tag เสมอ อย่า pin ที่ branch**
+
+```yaml
+dependencies:
+  beacon_kit:
+    git:
+      url: <URL ของ private remote>
+      ref: v0.1.0            # <-- pin ที่ tag เสมอ
+      path: packages/beacon_kit
+```
+
+**ทำไมต้อง pin ที่ tag ไม่ใช่ branch:** `ref: main` จะดึงคอมมิตล่าสุดของ branch นั้นมา
+ทุกครั้งที่ resolve ใหม่ แปลว่าบิลด์ของคุณเปลี่ยนพฤติกรรมได้เองโดยไม่มีใครแก้อะไรในแอป
+และ reproduce บิลด์เก่าไม่ได้ — อันตรายมากกับ SDK ที่ API ยังไม่ stable อย่าง 0.x
+
+### สิ่งที่ต้องตั้งค่าเพิ่มฝั่ง iOS
+
+ใส่ key เหล่านี้ใน `Info.plist` ของแอปที่เรียกใช้ (ดูตัวอย่างครบใน
+`packages/beacon_kit/example/ios/Runner/Info.plist`):
+
+| Key | จำเป็นเมื่อ |
+|---|---|
+| `NSLocationWhenInUseUsageDescription` | สแกน iBeacon ขณะใช้งานแอป |
+| `NSLocationAlwaysAndWhenInUseUsageDescription` | ต้องการ background region monitoring |
+| `NSBluetoothAlwaysUsageDescription` | สแกน non-iBeacon (Eddystone) ผ่าน CoreBluetooth |
+| `UIBackgroundModes` = `location`, `bluetooth-central` | ทำงานต่อเนื่องตอน background |
+
+---
+
+## ตัวอย่างการใช้งาน
+
+```dart
+import 'package:beacon_kit/beacon_kit.dart';
+
+// 1. สร้าง adapter พร้อมระบุ region ที่จะเฝ้าฟัง
+//    iOS บังคับให้รู้ proximity UUID ล่วงหน้า — ไม่มีโหมด wildcard สแกนหาทุก UUID
+//    (ดู ARCHITECTURE.md หัวข้อ "ข้อจำกัดของ iOS")
+final adapter = GenericIBeaconEddystoneAdapter(
+  iBeaconRegions: const [
+    IBeaconRegionConfig(identifier: 'bigc-fleet', uuid: '<BIGC_PROXIMITY_UUID>'),
+  ],
+);
+
+BeaconManager.register(adapter);
+
+// 2. ฟัง stream — event มาจากทั้ง CoreLocation (iBeacon) และ CoreBluetooth (Eddystone)
+final subscription = BeaconManager.scanAll().listen(
+  (advertisement) {
+    switch (advertisement.source) {
+      case AdvertisementSource.coreLocation:
+        // iOS ถอด uuid/major/minor/proximity มาให้แล้ว ไม่ต้อง parse เอง
+        print('${advertisement.ibeaconMajor}/${advertisement.ibeaconMinor} '
+            '${advertisement.rssi} dBm ${advertisement.proximity?.name}');
+      case AdvertisementSource.coreBluetooth:
+        // ได้ raw bytes มา Dart parser ถอดให้แล้วใส่ไว้ใน raw
+        print(advertisement.raw['eddystone']);
+      case AdvertisementSource.android:
+        break; // ยังไม่มี Android
+    }
+  },
+  onError: (Object error) => print('scan error: $error'),
+);
+
+// 3. ยกเลิกเมื่อเลิกใช้ — ไม่ยกเลิกจะปล่อยให้ native scan ค้างกินแบต
+await subscription.cancel();
+```
+
+`<BIGC_PROXIMITY_UUID>` คือ proximity UUID กลางของบริษัท — ค่าจริงอยู่ที่
+`docs/sources/bigc_provisioning.md` ให้ดึงจาก config/backend ตอน runtime
+อย่า hardcode ลงในแอป (เหตุผล: ADR-5 ใน `ARCHITECTURE.md`)
+
+---
+
+## โครงสร้าง repo
 
 ```
-.claude/
-  agents/                    # 5 subagent: sprint-lead, architect, dev (BLoC+Clean Arch), qa, reviewer
-  skills/beacon-sdk-verify/  # skill วิจัย SDK ยี่ห้อใหม่แบบห้ามเดา
-  settings.json              # ลงทะเบียน hook 3 ตัว
-  hooks/                     # สคริปต์ hook (ทดสอบ logic แล้วด้วย mock input ทุกตัว)
-.github/workflows/ci.yml     # GitHub Actions: format check → analyze → test
-analysis_options.yaml        # flutter_lints (มาตรฐานทีม Flutter เอง)
-SPRINT.md                    # นิยาม "เสร็จ" + แบ่ง Track A (จบวันนี้ได้) / Track B (ต้องมีฮาร์ดแวร์)
-docs/fixtures/README.md      # วิธีเทสต์ ADV decoder 100% โดยไม่ต้องมี beacon
-docs/sources/kkm_k9p.md      # ผลวิจัย K9P แบบย่อ (ตัวอย่าง citation file)
-ARCHITECTURE.md              # federated plugin pattern + app layer (feature-first/Clean Arch/BLoC)
-PIPELINE.md                  # ใครทำอะไรในแต่ละขั้น + ตัวอย่างสั่งงาน E2E + โหมดสปรินต์
+packages/
+  beacon_kit/                     # API ที่แอปเรียกใช้ (BeaconManager, BeaconAdapter)
+    example/                      # แอปตัวอย่าง หน้าจอเดียว แสดง beacon แบบ realtime
+  beacon_kit_platform_interface/  # entity + parser + usecase (pure Dart ทดสอบได้ไม่ต้องมีอุปกรณ์)
+  beacon_kit_ios/                 # implementation ฝั่ง iOS (Swift)
+docs/
+  sources/                        # ผลการค้นคว้าโปรโตคอลรายยี่ห้อ + BigC provisioning
+  fixtures/                       # ข้อมูลทดสอบ parser/usecase
+  test-checklists/                # เช็คลิสต์ที่ต้องทำกับอุปกรณ์จริง
+ARCHITECTURE.md                   # การตัดสินใจเชิงสถาปัตยกรรมทั้งหมด (ADR-1 ถึง ADR-7)
+SPRINT.md                         # ขอบเขตสปรินต์ปัจจุบัน + กติกาการรายงานสถานะ
+CONTRIBUTING.md                   # กติกาที่ต้องผ่านก่อนเปิด PR
 ```
 
-## เริ่มเร็วสุด (โหมดสปรินต์)
+## เอกสารที่ควรอ่านต่อ
 
-```
-ใช้ sprint-lead แตกงานทั้งหมดเป็น Track A/B ตาม SPRINT.md
-แล้วสั่งงานขนานกันให้จบภายในวันนี้
-```
+- **`ARCHITECTURE.md`** — ทำไมถึงออกแบบแบบนี้ โดยเฉพาะหัวข้อ "ข้อจำกัดของ iOS"
+  ที่อธิบายว่าทำไม iBeacon กับ Eddystone ต้องเดินคนละทางบน iOS
+- **`docs/test-checklists/`** — สิ่งที่ยังต้องยืนยันกับอุปกรณ์จริง
+- **`CONTRIBUTING.md`** — กติกาก่อนส่ง PR
 
-## สิ่งที่ยังไม่ได้ทำในรอบนี้ (ตามที่ตกลงกันไว้)
+## License
 
-- ยังไม่มีการเขียนโค้ด Dart/Kotlin/Swift จริง — งานนี้คือการเตรียม "ทีม AI agent" ตามที่ขอ ขั้นถัดไปคือให้ `beacon-architect` เริ่มดีไซน์ละเอียด แล้ว `flutter-dev` เริ่ม implement
-- ยังไม่มี adapter ของยี่ห้ออื่นนอกจาก KKM K9P — รอระบุยี่ห้อที่ต้องการจริง แล้วรัน skill `beacon-sdk-verify`
-- Hook ยังไม่ได้รันจริงในสภาพแวดล้อม Claude Code + repo จริง (ทดสอบแค่ logic ของสคริปต์ด้วย mock input) — ให้ทดสอบอีกรอบหลังติดตั้งจริง โดยเฉพาะ path pattern `lib/src/vendors/...` ที่ต้องตรงกับโครงสร้างโฟลเดอร์จริงที่ทีมจะสร้าง
+Proprietary / internal use only — ดู `LICENSE` และ `NOTICE`

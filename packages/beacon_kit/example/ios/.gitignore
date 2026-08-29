@@ -32,3 +32,6 @@ Runner/GeneratedPluginRegistrant.*
 !default.mode2v3
 !default.pbxuser
 !default.perspectivev3
+
+# ค่าเฉพาะเครื่องนักพัฒนา (DEVELOPMENT_TEAM) — ดู Flutter/Local.xcconfig.example
+Flutter/Local.xcconfig

@@ -1,0 +1,40 @@
+Copyright (c) 2026 Big C Supercenter Public Company Limited.
+All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL — INTERNAL USE ONLY
+
+This software and its accompanying documentation ("the Software") are the
+proprietary and confidential property of Big C Supercenter Public Company
+Limited ("the Company").
+
+1. GRANT OF USE
+   The Software is licensed, not sold, for internal use by the Company and
+   its authorised employees, contractors, and subsidiaries solely for the
+   purpose of developing, operating, and maintaining the Company's own
+   products and services.
+
+2. RESTRICTIONS
+   Except as expressly authorised in writing by the Company, no person may:
+   (a) copy, distribute, publish, sublicense, sell, or otherwise transfer
+       the Software or any portion of it to any third party;
+   (b) disclose the Software or its source code outside the Company;
+   (c) use the Software for the benefit of any third party or in any product
+       offered to third parties other than the Company's own.
+
+3. NO OPEN SOURCE GRANT
+   The Company has NOT made a decision to release the Software under an
+   open source licence. Nothing in this file constitutes such a grant. Any
+   future open source release requires an explicit, separate written
+   decision by the Company, replacing this file.
+
+4. THIRD-PARTY MATERIAL
+   See the NOTICE file in the root of this repository for the provenance of
+   third-party material referenced by this project.
+
+5. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE COMPANY BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+   USE OR OTHER DEALINGS IN THE SOFTWARE.

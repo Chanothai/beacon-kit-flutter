@@ -1,0 +1,24 @@
+// ==========================================================================
+// Local.xcconfig.example — เทมเพลตของค่าเฉพาะเครื่องนักพัฒนาแต่ละคน
+//
+// วิธีใช้:
+//   1. คัดลอกไฟล์นี้เป็น Local.xcconfig ในโฟลเดอร์เดียวกัน
+//        cp Flutter/Local.xcconfig.example Flutter/Local.xcconfig
+//   2. ใส่ Apple Developer Team ID ของตัวเองลงไป (10 ตัวอักษร)
+//      หาได้จาก Xcode > Settings > Accounts เลือก account แล้วดู Team ID
+//      หรือหน้า Membership ที่ developer.apple.com
+//
+// ทำไมต้องแยกไฟล์: Team ID เป็น account identifier ของแต่ละคน/แต่ละองค์กร
+// ถ้า hardcode ไว้ใน project.pbxproj คนอื่นที่ clone repo ไปจะชนกันทุกครั้ง
+// (Xcode จะพยายาม sign ด้วย team ที่ตัวเองไม่มีสิทธิ์) และเป็นค่าที่ไม่ควร
+// อยู่ใน repo ที่แชร์กันในองค์กร
+//
+// Local.xcconfig อยู่ใน .gitignore แล้ว — ห้าม commit ไฟล์นั้นเข้ามา
+//
+// หมายเหตุ: ถ้าไม่สร้าง Local.xcconfig เลย โปรเจกต์ยัง build ได้ตามปกติ
+// ด้วย `flutter build ios --no-codesign` (Debug/Release.xcconfig ใช้
+// `#include?` ซึ่งข้ามไปเงียบ ๆ ถ้าไม่พบไฟล์) — จำเป็นเฉพาะตอนจะ sign
+// เพื่อรันบนอุปกรณ์จริง
+// ==========================================================================
+
+DEVELOPMENT_TEAM =
