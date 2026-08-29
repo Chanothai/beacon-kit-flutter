@@ -1,0 +1,60 @@
+{
+  // Launch configuration ของ example app (packages/beacon_kit/example)
+  //
+  // repo นี้เป็น monorepo — ตัวแอปจริงไม่ได้อยู่ที่ root ทั้ง `program` และ `cwd`
+  // จึงต้องชี้ลงไปที่ packages/beacon_kit/example ถ้าปล่อยว่างหรือชี้ผิด VS Code
+  // จะหาแอปไม่เจอ (root ไม่มี pubspec.yaml ของแอปเลย)
+  //
+  // ┌───────────────────────────────────────────────────────────────────────┐
+  // │ โหมดไหนรันที่ไหนได้ — ยืนยันด้วยการรันจริงบนเครื่องนี้ (30 ส.ค. 2026)      │
+  // │ Flutter 3.47.0 / Xcode 26.6 / simulator iPhone 17 (iOS 26.5)          │
+  // ├──────────┬────────────┬───────────────────────────────────────────────┤
+  // │ โหมด      │ simulator  │ อุปกรณ์จริง                                    │
+  // ├──────────┼────────────┼───────────────────────────────────────────────┤
+  // │ debug    │ ✅ ได้      │ ✅ ได้ (ต้องมี signing)                        │
+  // │ profile  │ ❌ ไม่ได้   │ ✅ ได้ (ต้องมี signing)                        │
+  // │ release  │ ❌ ไม่ได้   │ ✅ ได้ (ต้องมี signing)                        │
+  // └──────────┴────────────┴───────────────────────────────────────────────┘
+  //
+  // ข้อความ error จริงที่จะเจอถ้าเลือก profile/release แล้วชี้ไป simulator:
+  //     "Profile mode is not supported by iPhone 17."
+  //     "Release mode is not supported by iPhone 17."
+  // ไม่ใช่บั๊กของ config นี้ — เป็นข้อจำกัดของ Flutter บน iOS simulator
+  //
+  // signing: profile/release บนอุปกรณ์จริงต้องมี DEVELOPMENT_TEAM ซึ่งอ่านจาก
+  // ios/Flutter/Local.xcconfig (ไฟล์เฉพาะเครื่อง ไม่ได้ commit)
+  // ถ้ายังไม่มี ให้ copy จาก ios/Flutter/Local.xcconfig.example แล้วใส่ Team ID
+  // ของตัวเอง — ดู CONTRIBUTING.md หัวข้อ "เลือก build mode ไหนตอนไหน"
+  //
+  // ⚠️ ทดสอบ B5 (background wake-from-terminate): อย่าใช้ debug
+  // debug mode มี debugger เกาะอยู่ ซึ่งเปลี่ยนพฤติกรรมตอนแอปถูก terminate
+  // ให้ใช้ "Flutter (profile)" หรือ "Flutter (release)" บนอุปกรณ์จริงแทน
+  // เหตุผลเต็มอยู่ใน CONTRIBUTING.md
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter (debug) — simulator หรือเครื่องจริง",
+      "request": "launch",
+      "type": "dart",
+      "program": "${workspaceFolder}/packages/beacon_kit/example/lib/main.dart",
+      "cwd": "${workspaceFolder}/packages/beacon_kit/example",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "Flutter (profile) — เครื่องจริงเท่านั้น",
+      "request": "launch",
+      "type": "dart",
+      "program": "${workspaceFolder}/packages/beacon_kit/example/lib/main.dart",
+      "cwd": "${workspaceFolder}/packages/beacon_kit/example",
+      "flutterMode": "profile"
+    },
+    {
+      "name": "Flutter (release) — เครื่องจริงเท่านั้น · ใช้ทดสอบ B5",
+      "request": "launch",
+      "type": "dart",
+      "program": "${workspaceFolder}/packages/beacon_kit/example/lib/main.dart",
+      "cwd": "${workspaceFolder}/packages/beacon_kit/example",
+      "flutterMode": "release"
+    }
+  ]
+}
