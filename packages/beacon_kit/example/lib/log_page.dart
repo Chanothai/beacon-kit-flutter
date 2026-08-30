@@ -1,12 +1,25 @@
+import 'dart:async';
+
+import 'package:beacon_kit/beacon_kit.dart';
 import 'package:flutter/material.dart';
 
 import 'diagnostics/region_event_log.dart';
 
 /// หน้าดู log ของ region enter/exit ที่บันทึกไว้ พร้อมปุ่มล้างเพื่อเริ่มรอบทดสอบใหม่
 class LogPage extends StatefulWidget {
-  const LogPage({super.key, required this.log});
+  const LogPage({super.key, required this.log, required this.regionEvents});
 
   final RegionEventLog log;
+
+  /// stream ของ region event — ใช้เป็นตัว **trigger ให้อ่านไฟล์ใหม่** เมื่อมี
+  /// event เข้ามาขณะเปิดหน้านี้ค้างไว้
+  ///
+  /// จงใจไม่เอาข้อมูลจาก stream มาแสดงตรง ๆ แต่ให้ไปอ่านไฟล์ซ้ำแทน เพราะหน้านี้
+  /// มีหน้าที่แสดง **สิ่งที่อยู่ในไฟล์จริง** ถ้าเอาจาก stream มาต่อท้ายในหน่วยความจำ
+  /// หน้าจอจะดูเหมือนมีบรรทัดครบทั้งที่การเขียนไฟล์อาจล้มเหลว (เช่นเครื่องล็อก
+  /// แล้ว Data Protection บล็อก — ดูเช็คลิสต์หัวข้อ 13) ซึ่งจะกลบปัญหาที่เรา
+  /// ต้องการจับพอดี
+  final Stream<IBeaconRegionStateEvent> regionEvents;
 
   @override
   State<LogPage> createState() => _LogPageState();
@@ -16,11 +29,26 @@ class _LogPageState extends State<LogPage> {
   List<String>? _lines;
   String? _path;
   String? _error;
+  StreamSubscription<IBeaconRegionStateEvent>? _subscription;
+  DateTime? _lastReloadedAt;
 
   @override
   void initState() {
     super.initState();
     _reload();
+    // อัปเดตอัตโนมัติเมื่อมี event ใหม่ ระหว่างเปิดหน้านี้ค้างไว้ — สำคัญตอนทดสอบ
+    // foreground เพราะผู้ทดสอบถือเครื่องเปิดหน้านี้อยู่ ถ้าไม่อัปเดตเองจะเข้าใจผิด
+    // ว่าไม่มี event เกิดขึ้น ทั้งที่มันเขียนลงไฟล์ไปแล้ว
+    _subscription = widget.regionEvents.listen(
+      (_) => _reload(),
+      onError: (Object _) {},
+    );
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _reload() async {
@@ -32,6 +60,7 @@ class _LogPageState extends State<LogPage> {
         _lines = lines;
         _path = path;
         _error = null;
+        _lastReloadedAt = DateTime.now();
       });
     } on Object catch (error) {
       if (!mounted) return;
@@ -91,9 +120,20 @@ class _LogPageState extends State<LogPage> {
           if (_path != null)
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(
-                'ไฟล์: $_path',
-                style: Theme.of(context).textTheme.bodySmall,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ไฟล์: $_path',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Text(
+                    '${lines?.length ?? 0} บรรทัด · อ่านไฟล์ล่าสุด '
+                    '${_lastReloadedAt?.toIso8601String().substring(11, 19) ?? '-'}'
+                    ' · อัปเดตอัตโนมัติเมื่อมี event ใหม่',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
             ),
           if (_error != null)

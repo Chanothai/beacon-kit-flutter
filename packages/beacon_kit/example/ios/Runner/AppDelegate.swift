@@ -45,7 +45,57 @@ import UserNotifications
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     launchedByLocationKey = launchOptions?[.location] != nil
+
+    // ต้องตั้ง delegate ตรงนี้ ไม่งั้น `userNotificationCenter(_:willPresent:...)`
+    // จะไม่ถูกเรียกเลย และ **notification จะไม่แสดงตอนแอปอยู่ foreground**
+    // (ดูเหตุผลเต็มที่เมธอดนั้น) — ตั้งใน didFinishLaunching ตามที่ header ระบุว่า
+    // "The delegate must be set before the application returns from
+    //  application:didFinishLaunchingWithOptions:"
+    UNUserNotificationCenter.current().delegate = self
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  /// แสดง notification แม้ตอนแอปอยู่ **foreground**
+  ///
+  /// **ทำไมต้องมีเมธอดนี้ — จากคอมเมนต์ใน header จริง**
+  /// (`UserNotifications.framework/Headers/UNUserNotificationCenter.h:96`,
+  /// iPhoneOS26.5.sdk):
+  ///
+  /// > "The method will be called on the delegate only if the application is in
+  /// > the foreground. **If the method is not implemented or the handler is not
+  /// > called in a timely manner then the notification will not be presented.**"
+  ///
+  /// นี่คือสาเหตุที่การทดสอบข้อ 1 (foreground) ไม่เห็นอะไรเลย ทั้งที่ข้อ 2
+  /// (background) ได้ notification ปกติ — ไม่ใช่ปัญหาของ CoreLocation/region
+  /// แต่เป็นเพราะ iOS ไม่แสดง notification ให้แอปที่กำลังเปิดอยู่ ถ้าแอปไม่บอกว่า
+  /// ต้องการให้แสดง
+  ///
+  /// ใช้ `[.banner, .list, .sound]` ไม่ใช่ `.alert` เพราะ
+  /// `UNNotificationPresentationOptionAlert` ถูก deprecate ตั้งแต่ iOS 14
+  /// (`API_DEPRECATED_WITH_REPLACEMENT("UNNotificationPresentationOptionList | `
+  /// `UNNotificationPresentationOptionBanner", ..., ios(10.0, 14.0), ...)`
+  /// ที่ `UNUserNotificationCenter.h:84`) — deployment target ของโปรเจกต์นี้คือ
+  /// iOS 15 จึงใช้ตัวใหม่ได้เลย
+  /// `.banner` = เด้งขึ้นมาให้เห็นทันที, `.list` = ค้างไว้ใน Notification Center
+  /// ให้ย้อนดูได้
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler:
+      @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    // ส่งต่อให้ FlutterAppDelegate ก่อน เพื่อไม่ให้ plugin ที่พึ่ง callback นี้เสียหาย
+    // (FlutterAppDelegate conform UNUserNotificationCenterDelegate ผ่าน
+    //  FlutterAppLifeCycleProvider อยู่แล้ว — ดู FlutterPlugin.h:521)
+    // ใช้ completion handler ของตัวเองเป็นตัวตอบสุดท้าย เพราะ contract ของ iOS คือ
+    // ต้องเรียก handler ครั้งเดียวเสมอ
+    super.userNotificationCenter(
+      center,
+      willPresent: notification,
+      withCompletionHandler: { _ in }
+    )
+    completionHandler([.banner, .list, .sound])
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
