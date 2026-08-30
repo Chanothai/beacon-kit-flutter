@@ -440,7 +440,41 @@ provisioning โดยไม่ต้องแก้โค้ดแอปเล�
 
 ## 12. เครื่องมือบันทึกหลักฐานใน example app — วิธีแยก "ถูกปลุกจากสถานะถูกฆ่า"
 
-**สถานะ: เครื่องมือพร้อมแล้ว (code-complete) — ยังไม่ได้ใช้ทดสอบจริง**
+**สถานะ: ทดสอบแล้วครั้งที่ 1 → ไม่ผ่าน → เจอสาเหตุและแก้แล้ว → รอทดสอบซ้ำ**
+
+### 🐞 ผลทดสอบ B5 ครั้งที่ 1 — ไม่ผ่าน (30 ส.ค. 2026)
+
+| ขั้นตอน | ผลที่ได้ |
+|---|---|
+| ปัดแอปทิ้งจาก app switcher | process ตาย |
+| ถอด/ใส่แบต K9P แล้วรอ 5 นาที | **ไม่มี notification** |
+| เปิดแอปดู log | **ไม่มีบรรทัดใด ๆ เลย** |
+| (เทียบ) ข้อ 2 background ไม่ kill | ผ่านปกติ |
+
+**สาเหตุที่พบ (ตรวจจากโค้ดจริง + header ไม่ใช่การเดา — เหตุผลเต็มใน ARCHITECTURE.md
+ADR-10):** `CLLocationManager` ถูกสร้างที่ `IBeaconRangingManager.init()` ที่เดียว
+ซึ่งวิ่งตอน `BeaconKitIosPlugin.register(with:)` เท่านั้น และ register วิ่งจาก
+`didInitializeImplicitFlutterEngine` ที่ header ของ Flutter ระบุว่าเกิด "such as
+when created by a FlutterViewController from a storyboard"
+(`FlutterEngine.h:476-490`) — คือผูกกับการที่ **UI ถูกสร้าง**
+
+ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลัง ไม่มี scene ถูก connect จึงไม่มี
+`FlutterViewController` ไม่มี engine ไม่มีการ register plugin → **ไม่มี location
+manager และไม่มี delegate ให้ CoreLocation เรียก**
+
+ซ้ำร้าย เส้นทางเขียน log เดิมวิ่งผ่าน Dart ทั้งหมด ซึ่งก็ต้องมี engine เหมือนกัน —
+**เครื่องมือวัดตายพร้อมกับสิ่งที่มันควรวัด** ทำให้ผลออกมาเป็น "ไม่มีอะไรเลย" ที่
+แยกไม่ออกว่าแอปไม่ถูกปลุก หรือถูกปลุกแล้วแต่ event ไปไม่ถึง
+
+**สิ่งที่แก้ (30 ส.ค. 2026):** สร้าง `CLLocationManager` + ตั้ง delegate ตั้งแต่
+`didFinishLaunchingWithOptions` ผ่าน
+`BeaconKitIosPlugin.startBackgroundRegionMonitoring()`, อ่าน region ที่ระบบเก็บไว้
+ข้าม launch กลับมา (**อ่านอย่างเดียว ห้ามหยุด monitor ในเส้นทาง init**), buffer
+event ที่มาก่อน Dart subscribe, และย้ายการเขียน log + ยิง notification ไปเป็น
+**โค้ด native ล้วน** ที่ไม่พึ่ง Flutter engine
+
+**ไม่ได้แตะ logic ของ CoreLocation/region เดิมเลย** — ข้อ 2 พิสูจน์แล้วว่ามันถูก
+ปัญหาอยู่ที่ "ไม่มีใครสร้าง manager ในรอบ launch นั้น" ไม่ใช่ที่ตัว region monitoring
 
 เพื่อพิสูจน์ B5 ต้องแยกให้ออกว่า event ที่ได้มาเกิดตอน **แอปรันอยู่เบื้องหลังอยู่แล้ว**
 (ไม่ได้พิสูจน์อะไรมาก) หรือตอน **process ถูกฆ่าไปแล้วแล้ว iOS ปลุกขึ้นมาใหม่**
@@ -487,9 +521,24 @@ after scene connection.", ios(4.0, 26.0), ...)
 ### รูปแบบแต่ละบรรทัดใน log
 
 ```
-2026-08-29T14:23:07.123+07:00	enter	bigc-fleet-wide	relaunchedFromTerminated	launchKey=true everActive=false state=background uptime=0.8s
+2026-08-30T14:23:06.980+07:00	launch	-	relaunchedFromTerminated	launchKey=true everActive=false state=background uptime=0.0s monitoredRegions=[bigc-fleet-wide]
+2026-08-30T14:23:07.123+07:00	enter	bigc-fleet-wide	relaunchedFromTerminated	launchKey=true everActive=false state=background uptime=0.8s
 ```
 `timestamp(ISO8601+tz)` TAB `event` TAB `regionIdentifier` TAB `ข้อสรุป` TAB `สัญญาณดิบ`
+
+**บรรทัด `launch` (เพิ่ม 30 ส.ค. 2026)** เขียนทุกครั้งที่ process เริ่มทำงาน ไม่ว่า
+รอบนั้นจะมี region event หรือไม่ — มีไว้เพื่อแยกสองอย่างที่รอบทดสอบก่อนหน้าแยกไม่ออก:
+
+| สิ่งที่เห็นใน log | แปลว่า |
+|---|---|
+| ไม่มีบรรทัด `launch` ใหม่เลย | **iOS ไม่ได้ปลุกแอป** — ปัญหาอยู่ที่ region/สิทธิ์/ระยะ beacon |
+| มี `launch` แต่ `monitoredRegions=[]` | ถูกปลุกแล้ว แต่ไม่มี region ค้างในระบบ — ไม่น่าถูกปลุกตั้งแต่แรก ให้สงสัยว่ามีโค้ดไปล้าง region ทิ้ง |
+| มี `launch` + `monitoredRegions=[…]` แต่ไม่มี `enter`/`exit` ตามมา | ถูกปลุกจริงและ region ยังอยู่ แต่ **event ไปไม่ถึง handler** — คนละสาเหตุคนละวิธีแก้ |
+| มี `launch` แล้วตามด้วย `enter`/`exit` ที่เป็น `relaunchedFromTerminated` | **B5 ผ่าน** |
+
+**ผู้เขียนไฟล์นี้คือโค้ด native** (`example/ios/Runner/BackgroundEvidenceLog.swift`)
+ไม่ใช่ Dart — จงใจให้มีผู้เขียนรายเดียว ถ้าปล่อยให้ Dart เขียนด้วยจะได้บรรทัดซ้ำ
+สองชุดต่อหนึ่ง event ตอน foreground แล้วนับผลผิด
 
 ไฟล์อยู่ใน **Application Support** ของแอป (ไม่ใช่ Documents — ไม่ต้องการให้โผล่ใน
 Files app และไม่ใช่ Caches ที่ระบบล้างเองได้) เขียนแบบ append + flush ทันทีทุกบรรทัด
@@ -506,6 +555,11 @@ Files app และไม่ใช่ Caches ที่ระบบล้าง�
 - [ ] ต้องเห็น **notification บนหน้าจอล็อกโดยไม่ต้องเปิดแอป**
 - [ ] เปิดแอป → ดู log → **บรรทัดนั้นต้องเป็น `relaunchedFromTerminated`**
       ถ้าเป็น `background` แปลว่า process ไม่ได้ตายจริง ให้ทำซ้ำ
+- [ ] **ถ้ายังไม่ผ่าน ให้อ่านบรรทัด `launch` ก่อนสรุป** — ตารางในหัวข้อ "รูปแบบแต่ละ
+      บรรทัดใน log" ข้างบนบอกว่าแต่ละแบบแปลว่าอะไร อย่าสรุปว่า "ไม่รองรับ" จากการที่
+      log ว่าง เพราะ log ว่างเป็นได้ทั้งสามสาเหตุที่ต่างกันสิ้นเชิง
+- [ ] **ต้องรันโหมด release หรือ profile เท่านั้น** — debug mode มี debugger ต่ออยู่
+      พฤติกรรมการ terminate/relaunch ไม่ตรงกับของจริง (ดู CONTRIBUTING ข้อ 6)
 - [ ] บันทึกบรรทัดที่ได้ลงตารางสรุปด้านล่างเป็นหลักฐาน
 
 **เกณฑ์ผ่านของ B5: ต้องเห็นบรรทัด `relaunchedFromTerminated` จริงในไฟล์ log**
@@ -601,7 +655,7 @@ protection class ของตัวเองเช่นกัน)
 | 9. region ซ้อนทับ (enter ซ้ำ?) | ยังไม่ทดสอบ | — | — | — | ADR-8 open question — ห้ามเขียน dedupe จนกว่าจะรู้ผล |
 | 10. ไม่มีอินเทอร์เน็ต | ยังไม่ทดสอบ | — | — | — | Apple ระบุว่า region monitoring ต้องการ network connectivity |
 | 11. เทียบ advertising mode | **ยังทำไม่ได้** | — | — | — | ติด GATT config ที่ยังไม่ implement |
-| 12. B5 wake-from-terminate | ยังไม่ทดสอบ | — | — | — | เครื่องมือบันทึกหลักฐานพร้อมแล้ว — เกณฑ์ผ่าน: เห็นบรรทัด `relaunchedFromTerminated` ใน log |
+| 12. B5 wake-from-terminate | **ไม่ผ่าน** (ครั้งที่ 1) → เจอสาเหตุและแก้แล้ว **รอทดสอบซ้ำ** | 30 ส.ค. 2026 | iPhone _(ผู้ทดสอบกรอก)_ | K9P _(ผู้ทดสอบกรอก)_ | ปัดแอปทิ้ง → ถอด/ใส่แบต → รอ 5 นาที: ไม่มี notification ไม่มีบรรทัดใน log เลย · สาเหตุ: ไม่มีใครสร้าง `CLLocationManager` ในรอบ cold launch (ADR-10) · แก้แล้วรอ retest — เกณฑ์ผ่านยังเหมือนเดิม: เห็นบรรทัด `relaunchedFromTerminated` ใน log |
 | 13. เครื่องล็อกตอนถูกปลุก (Data Protection) | ยังไม่ทดสอบ | — | — | — | Track B — simulator ตรวจไม่ได้ (XCTest skip) ถ้าพลาดข้อนี้จะสรุปผิดว่า B5 ไม่ผ่านทั้งที่ผ่าน |
 
 **อัปเดต 29 ส.ค. 2026 — สรุปสถานะล่าสุด**

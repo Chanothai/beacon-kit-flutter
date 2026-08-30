@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import UserNotifications
+import beacon_kit_ios
 
 /// AppDelegate ของ **example app เท่านั้น** — โค้ดในไฟล์นี้จงใจไม่อยู่ใน `beacon_kit`
 /// เพราะ SDK ไม่ควรบังคับให้ผู้ใช้ต้องพึ่ง UserNotifications หรือรูปแบบการเก็บ log
@@ -53,7 +54,123 @@ import UserNotifications
     //  application:didFinishLaunchingWithOptions:"
     UNUserNotificationCenter.current().delegate = self
 
+    // **ADR-10 — จุดที่ทำให้ B5 รอบ 30 ส.ค. 2026 ไม่ผ่าน:**
+    // เดิม `CLLocationManager` ถูกสร้างตอน `BeaconKitIosPlugin.register(with:)`
+    // ซึ่งวิ่งใน `didInitializeImplicitFlutterEngine` — ผูกกับการที่
+    // `FlutterViewController` ถูกสร้างจาก storyboard ตอน scene connect
+    // ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลังเพื่อส่ง region event ไม่มี
+    // scene ถูก connect จึงไม่มีใครสร้าง location manager และไม่มี delegate ให้
+    // CoreLocation เรียก — แอปถูกปลุกจริงแต่ event ตกหายทั้งหมด
+    //
+    // เรียกตรงนี้เพื่อให้ manager + delegate มีตัวตนตั้งแต่รอบ launch เสมอ
+    // ไม่ว่ารอบนั้นจะมี UI หรือไม่ และไม่ต้องรอ Dart เรียกเข้ามา
+    //
+    // ⚠️ ห้ามใส่ `stopMonitoring` ใด ๆ ในเส้นทางนี้ (ดูคอมเมนต์ใน
+    // `IBeaconRangingManager.init()`) — การเรียกเองจะล้าง region ที่เป็นเหตุผล
+    // เดียวที่ทำให้ iOS ปลุกแอปขึ้นมา
+    let restoredRegionIdentifiers = BeaconKitIosPlugin.startBackgroundRegionMonitoring {
+      [weak self] event in
+      self?.recordRegionEvent(event)
+    }
+
+    // เขียนบรรทัด launch **ทุกครั้ง** ไม่ว่ารอบนั้นจะมี event หรือไม่ — นี่คือจุดที่
+    // แยก "iOS ไม่ได้ปลุกแอปเลย" (ไม่มีบรรทัด launch ใหม่) ออกจาก "ปลุกแล้วแต่
+    // event ไม่ถึง handler" (มีบรรทัด launch แต่ไม่มี enter/exit ตามมา) ซึ่งรอบ
+    // ทดสอบก่อนหน้าแยกไม่ออกเลยเพราะไม่มีบรรทัดอะไรทั้งสิ้นให้ดู
+    logLaunch(restoredRegionIdentifiers: restoredRegionIdentifiers)
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // MARK: - หลักฐาน B5 ฝั่ง native (ไม่พึ่ง Flutter engine)
+
+  /// เขียนหนึ่งบรรทัดทุกครั้งที่ process เริ่มทำงาน
+  ///
+  /// `monitoredRegions` ในบรรทัดนี้สำคัญที่สุด — เป็นหลักฐานว่า region **รอดข้าม
+  /// process** มาจริง (header ของ `monitoredRegions` ระบุว่า region ที่ลงทะเบียนไว้
+  /// "during this or previous launches of your application" จะอยู่ในเซ็ตนี้)
+  /// ถ้าบรรทัด launch แสดง `monitoredRegions=[]` แปลว่าไม่มีอะไรให้ iOS ปลุกแอป
+  /// ตั้งแต่แรก ซึ่งเป็นคนละสาเหตุกับ "ปลุกแล้วแต่ event หาย" โดยสิ้นเชิง
+  private func logLaunch(restoredRegionIdentifiers: [String]) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: processStartedAt,
+        event: "launch",
+        regionIdentifier: "-",
+        conclusion: currentRunContext(),
+        rawSignals:
+          "\(rawSignalSummary()) monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))]"
+      )
+    )
+  }
+
+  /// เขียน log + ยิง notification จาก **โค้ด native ล้วน**
+  ///
+  /// ทั้งสองอย่างเคยอยู่ฝั่ง Dart (`_onRegionEvent` ใน `main.dart`) ซึ่งใช้ได้ก็
+  /// ต่อเมื่อ Flutter engine ทำงานอยู่ — เงื่อนไขที่ไม่เป็นจริงในเคสที่ B5 ต้องการ
+  /// พิสูจน์พอดี ย้ายมาทางนี้เพื่อให้ทำงานได้ทุกบริบท และเพื่อให้มี **ผู้เขียน log
+  /// เพียงรายเดียว** ไม่งั้นตอน foreground จะได้บรรทัดซ้ำสองชุดต่อหนึ่ง event
+  private func recordRegionEvent(_ event: BeaconKitRegionStateEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: event.state,
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary()
+      )
+    )
+
+    // ยิง notification **หลัง**เขียน log เสมอ — log คือหลักฐานที่ต้องรอด ส่วน
+    // notification เป็นแค่สัญญาณให้คนเห็น ถ้าเวลาที่ระบบให้หมดก่อน อย่างน้อย
+    // หลักฐานต้องลงดิสก์แล้ว
+    postNotification(
+      title: "Region \(event.state): \(event.regionIdentifier)",
+      body: "สถานะแอป: \(currentRunContext())"
+    )
+  }
+
+  /// ข้อสรุปว่ารอบนี้แอปอยู่ในบริบทไหน — ใช้ตรรกะเดียวกับ `AppRunContext` ฝั่ง Dart
+  ///
+  /// `relaunchedFromTerminated` คือค่าที่ B5 ต้องเห็นในไฟล์ log จึงจะถือว่าผ่าน:
+  /// process อยู่เบื้องหลัง **และ** ไม่เคยขึ้น foreground เลยตั้งแต่เริ่ม แปลว่า
+  /// ไม่ใช่ผู้ใช้เปิดแอปเอง
+  private func currentRunContext() -> String {
+    switch UIApplication.shared.applicationState {
+    case .active:
+      return "foreground"
+    case .background, .inactive:
+      return hasEverBecomeActive ? "background" : "relaunchedFromTerminated"
+    @unknown default:
+      return "unknown"
+    }
+  }
+
+  /// สัญญาณดิบชุดเดียวกับที่ `getLaunchDiagnostics` คืนให้ Dart — เก็บลง log ด้วย
+  /// เพื่อให้ตรวจย้อนกลับได้ว่าข้อสรุปข้างต้นมาจากอะไร ถ้าวันหนึ่งพบว่าวิธีสรุป
+  /// ของเราผิด ข้อมูลดิบยังอยู่
+  private func rawSignalSummary() -> String {
+    let uptime = Date().timeIntervalSince(processStartedAt)
+    return
+      "launchKey=\(launchedByLocationKey) everActive=\(hasEverBecomeActive) "
+      + "state=\(Self.stateString(UIApplication.shared.applicationState)) "
+      + "uptime=\(String(format: "%.1f", uptime))s"
+  }
+
+  private func postNotification(title: String, body: String) {
+    let content = UNMutableNotificationContent()
+    content.title = title
+    content.body = body
+    content.sound = .default
+    // trigger เป็น nil = ยิงทันที สำคัญมากสำหรับเคสที่แอปถูกปลุกเบื้องหลัง
+    // เพราะเวลาที่ระบบให้มาสั้น อาจถูก suspend ก่อนถ้าหน่วงเวลา
+    UNUserNotificationCenter.current().add(
+      UNNotificationRequest(
+        identifier: UUID().uuidString,
+        content: content,
+        trigger: nil
+      )
+    )
   }
 
   /// แสดง notification แม้ตอนแอปอยู่ **foreground**
@@ -141,7 +258,7 @@ import UserNotifications
         return
       }
       do {
-        result(try Self.prepareLogFile(named: fileName))
+        result(try BackgroundEvidenceLog.prepareLogFile(named: fileName))
       } catch {
         result(
           FlutterError(
@@ -166,7 +283,7 @@ import UserNotifications
         )
         return
       }
-      result(Self.protectionOfLogFile(named: fileName))
+      result(BackgroundEvidenceLog.protectionOfLogFile(named: fileName))
 
     case "requestNotificationAuthorization":
       UNUserNotificationCenter.current()
@@ -188,32 +305,16 @@ import UserNotifications
         )
         return
       }
-      let content = UNMutableNotificationContent()
-      content.title = title
-      content.body = body
-      content.sound = .default
-      // trigger เป็น nil = ยิงทันที สำคัญมากสำหรับเคสที่แอปถูกปลุกเบื้องหลัง
-      // เพราะเวลาที่ระบบให้มาสั้น อาจถูก suspend ก่อนถ้าหน่วงเวลา
-      let request = UNNotificationRequest(
-        identifier: UUID().uuidString,
-        content: content,
-        trigger: nil
-      )
-      UNUserNotificationCenter.current().add(request) { error in
-        DispatchQueue.main.async {
-          if let error = error {
-            result(
-              FlutterError(
-                code: "NOTIFICATION_FAILED",
-                message: error.localizedDescription,
-                details: nil
-              )
-            )
-          } else {
-            result(nil)
-          }
-        }
-      }
+      // ใช้ตัวเดียวกับเส้นทาง native (`recordRegionEvent`) เพื่อไม่ให้รูปแบบ
+      // notification ของสองเส้นทางต่างกัน
+      postNotification(title: title, body: body)
+      result(nil)
+
+    case "getLogWriteError":
+      // ให้ฝั่ง Dart ดึง error ของการเขียน log ฝั่ง native มาแสดงได้ — ตอนถูกปลุก
+      // เบื้องหลังไม่มีใครเห็น error ตรงนั้น ถ้าไม่เก็บไว้จะกลายเป็น "ไม่มีบรรทัด
+      // ใน log" แบบไม่มีคำอธิบาย ซึ่งแยกไม่ออกจากการที่แอปไม่ถูกปลุกเลย
+      result(BackgroundEvidenceLog.shared.lastError)
 
     default:
       result(FlutterMethodNotImplemented)
@@ -223,82 +324,16 @@ import UserNotifications
 
   // MARK: - Log file + Data Protection
 
-  /// protection class ที่ไฟล์ log **ต้อง**ได้รับ
-  ///
-  /// **ทำไมต้องตั้งเอง ทั้งที่นี่เป็นค่า default ของ iOS อยู่แล้ว:**
-  /// เอกสาร Apple ("Encrypting your app's files") ระบุว่า "If you do not specify
-  /// a protection level when creating a file, iOS applies the default protection
-  /// level automatically" และอธิบายระดับนี้ว่า "(Default) The file is inaccessible
-  /// until the first time the user unlocks the device. After the first unlocking of
-  /// the device, the file remains accessible until the device shuts down or reboots."
-  ///
-  /// นั่นแปลว่าค่า default **ตรงกับที่เราต้องการอยู่แล้ว** แต่การพึ่ง default คือการ
-  /// พึ่งสิ่งที่เราไม่ได้ควบคุมและอาจเปลี่ยนได้ตาม entitlement/เวอร์ชัน iOS —
-  /// ถ้าวันหนึ่งกลายเป็น `.complete` การเขียน log ตอนเครื่องล็อกจะล้มเหลว
-  /// ซึ่งแปลว่า **แอปตื่นจริงแต่ไม่มีหลักฐาน** แล้วเราจะสรุปผิดว่า B5 ไม่ผ่าน
-  /// การตั้งค่าให้ชัดจึงเป็นการล็อกสมมติฐานที่การทดสอบทั้งหมดตั้งอยู่บนมัน
-  ///
-  /// **ยังมีเคสที่เขียนไม่ได้อยู่ดี:** ถ้าเครื่องรีบูตแล้ว**ยังไม่เคยปลดล็อกเลย**
-  /// สักครั้ง ไฟล์ระดับนี้ยังเข้าถึงไม่ได้ — เป็นข้อจำกัดที่ยอมรับ เพราะระดับที่ต่ำ
-  /// กว่านี้ (`.none`) แปลว่าไม่เข้ารหัสเลย ซึ่งไม่เหมาะกับไฟล์ที่บันทึกว่าผู้ใช้
-  /// อยู่สาขาไหนเวลาใด
-  private static let logFileProtection = FileProtectionType.completeUntilFirstUserAuthentication
-
-  /// สร้าง (ถ้ายังไม่มี) ไฟล์ log พร้อมตั้ง protection class ให้ชัดเจน แล้วคืน path
-  ///
-  /// ตั้ง protection ทั้งที่ **directory** และ **ไฟล์**: directory เพื่อให้ไฟล์ใหม่
-  /// ที่ถูกสร้างในนั้นภายหลังได้ค่าเดียวกัน และไฟล์เพื่อให้ไฟล์ที่มีอยู่แล้วจากการ
-  /// ติดตั้งเวอร์ชันก่อนหน้าถูกอัปเดตด้วย
-  private static func prepareLogFile(named fileName: String) throws -> String {
-    let fm = FileManager.default
-    guard
-      let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-    else {
-      throw NSError(
-        domain: "beacon_kit_example",
-        code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "หา Application Support directory ไม่เจอ"]
-      )
-    }
-
-    // Application Support ไม่ได้ถูกสร้างมาให้อัตโนมัติเหมือน Documents
-    try fm.createDirectory(
-      at: dir,
-      withIntermediateDirectories: true,
-      attributes: [.protectionKey: logFileProtection]
-    )
-    try fm.setAttributes([.protectionKey: logFileProtection], ofItemAtPath: dir.path)
-
-    let fileURL = dir.appendingPathComponent(fileName)
-    if !fm.fileExists(atPath: fileURL.path) {
-      fm.createFile(
-        atPath: fileURL.path,
-        contents: nil,
-        attributes: [.protectionKey: logFileProtection]
-      )
-    } else {
-      try fm.setAttributes([.protectionKey: logFileProtection], ofItemAtPath: fileURL.path)
-    }
-
-    return fileURL.path
-  }
-
-  /// อ่าน protection class จริงของไฟล์ log กลับมา (`nil` ถ้ายังไม่มีไฟล์)
-  static func protectionOfLogFile(named fileName: String) -> String? {
-    let fm = FileManager.default
-    guard
-      let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-    else { return nil }
-    let path = dir.appendingPathComponent(fileName).path
-    guard let attrs = try? fm.attributesOfItem(atPath: path),
-      let protection = attrs[.protectionKey] as? FileProtectionType
-    else { return nil }
-    return protection.rawValue
-  }
-
-  /// เปิดให้ XCTest เรียกได้โดยไม่ต้องผ่าน method channel
+  /// ทั้งสองเมธอดนี้เป็นแค่ทางผ่านไปยัง `BackgroundEvidenceLog` — เจตนาคือให้มี
+  /// **ที่เดียว**ที่รู้ว่าไฟล์ log อยู่ไหนและต้องได้ protection class อะไร
+  /// ถ้าปล่อยให้เส้นทาง native กับเส้นทาง Dart เตรียมไฟล์กันคนละชุด วันหนึ่งค่า
+  /// จะ drift แล้วบรรทัดที่หายไปจะถูกโทษว่าเป็นบั๊กของ CoreLocation แทน
   static func prepareLogFileForTesting(named fileName: String) throws -> String {
-    try prepareLogFile(named: fileName)
+    try BackgroundEvidenceLog.prepareLogFile(named: fileName)
+  }
+
+  static func protectionOfLogFile(named fileName: String) -> String? {
+    BackgroundEvidenceLog.protectionOfLogFile(named: fileName)
   }
 
   private static func stateString(_ state: UIApplication.State) -> String {

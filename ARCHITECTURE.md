@@ -894,3 +894,158 @@ business logic (เช่น นับการเข้าสาขาซ้ำ
 ### `IBeaconRegionStateEvent` ก็ผูกกับ iOS เช่นกัน
 
 `regionStateEvents` และ type ที่เกี่ยวข้อง (`IBeaconRegionState`, `IBeaconAuthorizationLevel`) ถูก export จาก `beacon_kit` โดย**ตั้งชื่อขึ้นต้นด้วย `IBeacon`/ผูกกับ iOS ชัดเจน**อยู่แล้ว (ดูคอมเมนต์ใน `beacon_kit.dart`) — เจตนาคือให้ผู้เรียกเห็นตั้งแต่ชื่อว่านี่ไม่ใช่ contract กลางข้ามแพลตฟอร์ม เมื่อถึงเวลาทำ Android ถ้าพบว่าต้องมี contract กลางจริง ให้ยกขึ้นไปที่ `beacon_kit_platform_interface` พร้อมชื่อที่เป็นกลาง แทนการดัด type ของ iOS ให้ครอบ Android
+
+---
+
+## ADR-10: รับ region event ได้ตั้งแต่รอบ launch — แก้เหตุที่ B5 ไม่ผ่าน (เพิ่ม 30 ส.ค. 2026)
+
+**สถานะ:** ตัดสินใจแล้ว · โค้ดเสร็จแล้ว · **ยังไม่ยืนยันบนอุปกรณ์จริง** (Track B)
+
+### 1. หลักฐานที่ทำให้ต้องมี ADR นี้
+
+การทดสอบ B5 เมื่อ 30 ส.ค. 2026: ปัดแอปทิ้งจาก app switcher → ถอด/ใส่แบต K9P →
+รอ 5 นาที → **ไม่มี notification และไม่มีบรรทัดใน log เลยแม้แต่บรรทัดเดียว**
+ขณะที่ข้อ 2 (background แต่ process ยังมีชีวิต) ผ่านปกติ
+
+### 2. เส้นทางที่ขาด (ตรวจจากโค้ดจริง ไม่ใช่จากการเดา)
+
+`CLLocationManager` ถูกสร้างที่ `IBeaconRangingManager.init()` ที่เดียวเท่านั้น
+และ `IBeaconRangingManager` ถูกสร้างจาก `BeaconKitIosPlugin()` ซึ่งเกิดใน
+`register(with:)` เท่านั้น ส่วน `register(with:)` ถูกเรียกจาก
+`GeneratedPluginRegistrant.register` ที่ example app วางไว้ใน
+`didInitializeImplicitFlutterEngine`
+
+header ของ Flutter ระบุความหมายของ callback นั้นไว้ว่า:
+
+> "Called once the implicit `FlutterEngine` is initialized."
+> "Protocol for receiving a callback when an implicit engine is initialized,
+> **such as when created by a FlutterViewController from a storyboard.**"
+> — `Flutter.framework/Headers/FlutterEngine.h:476-490`
+
+และ `Runner/Info.plist` ของ example app ประกาศ `UIApplicationSceneManifest`
+พร้อม `UISceneStoryboardFile = Main` — `FlutterViewController` จึงเกิดตอน
+**scene connect** ซึ่งคือตอนที่มี UI
+
+**สรุปเส้นทางที่ขาด:** ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลังเพื่อส่ง
+location event ไม่มี scene ถูก connect → ไม่มี `FlutterViewController` →
+implicit engine ไม่ถูกสร้าง → ไม่มีการ register plugin → **ไม่มี
+`CLLocationManager` และไม่มี delegate ให้ CoreLocation เรียก** event ที่แอปถูก
+ปลุกขึ้นมารับจึงตกหายทั้งหมด
+
+### 3. หลักฐานว่า B5 ทำได้จริง (ไม่ใช่ข้อจำกัดของแพลตฟอร์ม)
+
+จาก `CLLocationManager.h:492-496` (iPhoneOS26.5.sdk) ในคำอธิบายของ
+`requestAlwaysAuthorization`:
+
+> "monitoring APIs may launch your app into the background when they detect an
+> event. **Even if killed by the user, launch events triggered by monitoring
+> APIs will cause a relaunch.**"
+
+และ region ที่ลงทะเบียนไว้ไม่หายไปกับ process — `CLLocationManager.h:420-422`:
+
+> "If any location manager has been instructed to monitor a region, **during
+> this or previous launches of your application**, it will be present in this
+> set." (`monitoredRegions`)
+
+ส่วนหน้าที่ของแอปในรอบ launch นั้น Apple เขียนไว้ที่
+*Handling location updates in the background* ว่า:
+
+> "If your app actively receives and processes location updates and terminates,
+> it should **restart those APIs upon launch** in order to continue receiving
+> updates. **When you start those services, the system resumes the delivery of
+> queued location updates.** Don't start these services at launch time if your
+> app's authorization status is undetermined."
+
+**ข้อควรระวังในการตีความ:** ประโยคนี้อยู่ในหน้าที่เขียนสำหรับ API ยุคใหม่
+(`CLServiceSession`/`CLBackgroundActivitySession`) ส่วนหน้า region monitoring
+ยุคใหม่ก็เขียนว่า "When your app relaunches, it's your responsibility to
+recreate the monitor with the same identifier" ซึ่งเป็นสัญญาของ `CLMonitor`
+**เราไม่ได้ใช้ `CLMonitor`** (ADR-6 หัวข้อ 4 ตัดสินแล้วว่ายังไม่ย้าย) และสำหรับ
+API เดิม header ของ `monitoredRegions` ระบุชัดว่า region ยังอยู่ข้าม launch
+เอง จึง **ไม่ต้องลงทะเบียน region ใหม่** สิ่งที่ต้องทำคือมี `CLLocationManager`
++ delegate ให้ทันในรอบ launch เท่านั้น — ส่วนนี้เป็น**การตีความของเรา** จาก
+header ไม่ใช่ประโยคที่ Apple เขียนตรง ๆ และจะถือว่ายืนยันแล้วก็ต่อเมื่อเห็น
+บรรทัด `relaunchedFromTerminated` ในไฟล์ log บนอุปกรณ์จริง
+
+### 4. การตัดสินใจ
+
+**(ก) SDK เปิดทางให้ host app เริ่ม CoreLocation ได้ตั้งแต่รอบ launch**
+
+`BeaconKitIosPlugin.startBackgroundRegionMonitoring(onRegionStateEvent:)` —
+static ไม่ต้องมี `FlutterPluginRegistrar` ไม่ต้องมี engine host app เรียกจาก
+`application(_:didFinishLaunchingWithOptions:)` ได้ตรง ๆ คืนรายการ identifier
+ของ region ที่ระบบยังเก็บไว้ให้ เพื่อใช้เป็นหลักฐาน
+
+**ทำไม SDK ไม่ทำให้เองอัตโนมัติ:** ไม่มีทางที่ plugin จะแทรกตัวเข้าไปใน
+`didFinishLaunchingWithOptions` ของ host app ได้ก่อนที่ตัวมันเองจะถูก register
+— และการ register นั่นแหละคือสิ่งที่ไม่เกิดในเคสนี้ จึงต้องเป็น host app เรียก
+หนึ่งบรรทัด แอปที่ไม่ต้องการพฤติกรรมนี้ไม่ต้องจ่ายอะไรเลย
+
+**(ข) `IBeaconRangingManager` เป็น singleton**
+
+เพราะตอนนี้มีผู้สร้างสองทาง (จาก `didFinishLaunchingWithOptions` และจาก
+`register(with:)` ที่เกิดทีหลัง) ถ้าเป็นคนละ instance จะมี `CLLocationManager`
+สองตัว และตาม Apple docs ของ `didEnterRegion` ("every active location manager
+object delivers this message to its associated delegate") ทั้งคู่จะได้ callback
+เดียวกัน → event ซ้ำสองชุด
+
+**(ค) อ่าน region ที่ระบบเก็บไว้กลับมาตอน init — และ *ห้าม* หยุด monitor**
+
+`init()` เรียก `adoptSystemMonitoredRegions()` ซึ่ง **อ่านอย่างเดียว** —
+เติม `constraintsByIdentifier` จาก `locationManager.monitoredRegions`
+
+ข้อห้ามที่เขียนไว้เป็นคอมเมนต์ทั้งใน `IBeaconRangingManager.init()` และใน
+`AppDelegate`: **ห้ามเรียก `stopMonitoring(for:)` ใด ๆ ในเส้นทาง initialize**
+region ที่ระบบเก็บไว้คือสิ่งเดียวที่ทำให้ iOS ปลุกแอปขึ้นมา ถ้าโค้ด init ไป
+ล้างทิ้ง แอปจะไม่มีวันถูกปลุกอีกและอาการจะออกมาเหมือน "ไม่รองรับ background"
+ทั้งที่เราลบมันเอง
+
+**ตรวจแล้วว่าโค้ดเดิมไม่มีพฤติกรรมนี้:** `stopMonitoring(identifiers: nil)` ตัว
+เดียวที่มีอยู่ถูกเรียกจาก `applyParsedRegions` (เส้นทาง `startIBeaconMonitoring`
+ที่ผู้ใช้สั่ง) ไม่ใช่เส้นทาง init และมันวนจาก `constraintsByIdentifier` ซึ่ง
+เดิม**ว่างเปล่าเสมอใน process ใหม่** จึงไม่เคยลบ region ของระบบได้อยู่แล้ว
+— หลังการเปลี่ยนแปลงข้อนี้ dictionary ไม่ว่างแล้ว การ "แทนที่ ไม่ merge" ของ
+`startIBeaconMonitoring` จึงทำงานถูกต้องเป็นครั้งแรก (เดิมมันสะสม region ทิ้งไว้
+ในระบบ และการนับเพดาน 20 ที่อ่านจาก `locationManager.monitoredRegions` ก็นับ
+ของค้างเหล่านั้นด้วย)
+
+**(ง) ไม่พึ่ง `constraintsByIdentifier` อย่างเดียวตอนยิง event**
+
+`emitRegionStateIfChanged` ถอด constraint จาก `CLBeaconRegion` ที่ CoreLocation
+ส่งมาเองได้เลยถ้าไม่รู้จัก identifier นั้น — กันเคสที่ callback มาถึงก่อน
+`monitoredRegions` จะสะท้อนค่าครบ (header เตือนเองว่าการลงทะเบียน region เป็น
+asynchronous "and may not be immediately reflected in `monitoredRegions`",
+`CLLocationManager.h:720`)
+
+**(จ) buffer event ที่เกิดก่อน Dart subscribe**
+
+`RegionStateEventStreamHandler` เก็บ event ไว้ไม่เกิน 50 รายการเมื่อ
+`eventSink` ยังเป็น `nil` แล้วส่งให้ทีเดียวตอน `onListen` — ตอนถูกปลุก
+เบื้องหลัง CoreLocation เรียก delegate ได้ทันทีที่ manager ถูกสร้าง แต่กว่า
+engine จะ start และ Dart จะ subscribe ได้ต้องผ่านอีกหลายขั้น
+
+**(ฉ) เส้นทางบันทึกหลักฐานต้องเป็น native ล้วน (example app)**
+
+เดิม log และ notification วิ่งผ่าน Dart ทั้งคู่ ซึ่งต้องมี Flutter engine
+ทำงานอยู่ — เงื่อนไขที่ไม่เป็นจริงในเคสที่ B5 ต้องการพิสูจน์พอดี
+**เครื่องมือวัดตายพร้อมกับสิ่งที่มันควรวัด** ย้ายไป
+`example/ios/Runner/BackgroundEvidenceLog.swift` (Swift ล้วน ไม่พึ่ง Flutter)
+และให้เป็น **ผู้เขียน log เพียงรายเดียว** ฝั่ง Dart เลิกเขียน เพื่อไม่ให้
+foreground ได้บรรทัดซ้ำสองชุดต่อหนึ่ง event
+
+ยังคงอยู่ใน example app เท่านั้นตามข้อกำหนดเดิม — SDK ให้แค่ hook เปล่า
+(`onRegionStateEvent`) ไม่ยุ่งว่า host จะเขียน log หรือยิง notification
+
+**(ช) เขียนบรรทัด `launch` ทุกครั้งที่ process เริ่ม**
+
+รอบทดสอบที่ผ่านมา "ไม่มีบรรทัดใน log เลย" แยกไม่ออกระหว่าง **"iOS ไม่ได้ปลุก
+แอปเลย"** กับ **"ปลุกแล้วแต่ event ไปไม่ถึง handler"** ซึ่งเป็นคนละสาเหตุและ
+คนละวิธีแก้โดยสิ้นเชิง บรรทัด `launch` (พร้อม `launchKey=`, `state=`,
+`monitoredRegions=[…]`) ทำให้รอบหน้าแยกออกทันที
+
+### 5. เกณฑ์ผ่านของ B5 ไม่เปลี่ยน
+
+ยังต้องเห็นบรรทัดที่คอลัมน์ที่ 4 เป็น `relaunchedFromTerminated` ในไฟล์ log
+บนอุปกรณ์จริงหลังปัดแอปทิ้ง — **การมีเครื่องมือวัดที่ทำงานได้ กับการเห็นแอป
+ฟื้นเองจริง เป็นคนละเรื่องกัน** จนกว่าจะเห็นบรรทัดนั้น B5 ยังเป็น
+`code-complete, unverified`

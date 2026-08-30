@@ -1,7 +1,5 @@
 import 'dart:io';
 
-import 'package:beacon_kit/beacon_kit.dart';
-
 import 'launch_context.dart';
 
 /// บันทึก region enter/exit ลงไฟล์ถาวรใน Application Support
@@ -10,6 +8,10 @@ import 'launch_context.dart';
 /// event ที่เกิดขึ้น**ตอนแอปถูกฆ่าไปแล้ว** ซึ่งไม่มีใครเห็นหน้าจอ ไม่มี debugger
 /// ต่ออยู่ และ state ใน memory หายไปพร้อม process เดิม log ที่รอดข้าม process
 /// เท่านั้นที่เป็นหลักฐานได้
+///
+/// **ตั้งแต่ ADR-10 คลาสนี้เป็นฝ่าย "อ่าน" อย่างเดียว** — ผู้เขียนไฟล์คือโค้ด native
+/// (`BackgroundEvidenceLog.swift`) เพราะเส้นทาง Dart ใช้ไม่ได้ตอน process ถูกปลุก
+/// ขึ้นมาเบื้องหลังโดยไม่มี UI ซึ่งเป็นเคสเดียวที่ B5 ต้องการพิสูจน์
 ///
 /// อยู่ใน example app เท่านั้น — `beacon_kit` ไม่ควรบังคับรูปแบบการเก็บ log
 class RegionEventLog {
@@ -33,30 +35,6 @@ class RegionEventLog {
   Future<String?> protectionClass() =>
       _diagnostics.getLogFileProtection(_fileName);
 
-  /// ต่อท้ายหนึ่งบรรทัดต่อหนึ่ง event
-  ///
-  /// ใช้ `FileMode.append` + `flush: true` เพื่อให้ข้อมูลลงดิสก์ก่อนฟังก์ชันคืนค่า
-  /// สำคัญมากในเคสถูกปลุกเบื้องหลัง เพราะ iOS อาจ suspend process ทันทีหลังจบงาน
-  /// ถ้ายังค้างอยู่ใน buffer จะหายไปทั้งบรรทัด = เสียหลักฐานที่รอมาทั้งรอบทดสอบ
-  Future<void> append(
-    IBeaconRegionStateEvent event,
-    LaunchDiagnostics diagnostics,
-  ) async {
-    // ISO8601 พร้อม timezone offset — ห้ามใช้ UTC ล้วนหรือเวลาไร้ offset
-    // เพราะผู้ทดสอบต้องเทียบกับเวลาบนนาฬิกาข้อมือตอนเดินเข้า/ออกจริง
-    final timestamp = event.timestamp.toLocal().toIso8601String();
-    final offset = _timezoneOffset(event.timestamp.toLocal());
-    final line =
-        '$timestamp$offset\t'
-        '${event.state.name}\t'
-        '${event.regionIdentifier}\t'
-        '${diagnostics.context.name}\t'
-        '${diagnostics.rawSignalSummary}';
-
-    final file = await _file();
-    await file.writeAsString('$line\n', mode: FileMode.append, flush: true);
-  }
-
   /// อ่าน log ทั้งหมด บรรทัดใหม่สุดอยู่บนสุด
   Future<List<String>> read() async {
     final file = await _file();
@@ -76,13 +54,4 @@ class RegionEventLog {
   }
 
   Future<String> path() async => (await _file()).path;
-
-  static String _timezoneOffset(DateTime local) {
-    final offset = local.timeZoneOffset;
-    final sign = offset.isNegative ? '-' : '+';
-    final abs = offset.abs();
-    final hh = abs.inHours.toString().padLeft(2, '0');
-    final mm = (abs.inMinutes % 60).toString().padLeft(2, '0');
-    return '$sign$hh:$mm';
-  }
 }

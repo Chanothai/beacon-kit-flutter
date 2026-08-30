@@ -9,13 +9,14 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 
 ---
 
-## ตารางสถานะฟีเจอร์ (ณ 29 ส.ค. 2026)
+## ตารางสถานะฟีเจอร์ (ณ 30 ส.ค. 2026)
 
 | ฟีเจอร์ | สถานะ | อ่านว่ายังไง |
 |---|---|---|
 | **Broadcast scan: iBeacon ranging** บน **iOS** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | เจอ K9P จริง 2 ตัวพร้อมกัน แยกอุปกรณ์ด้วย major/minor ได้ถูก proximity/RSSI เปลี่ยนตามระยะจริง |
 | **Broadcast scan: Eddystone (URL frame)** บน **iOS** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | decode จากอุปกรณ์บุคคลที่สามที่ไม่รู้จักมาก่อนได้ถูก — ยืนยัน vendor-agnostic จริง (UID/TLM frame ยังไม่เจอของจริง) |
-| **Background region monitoring** (enter/exit, ปลุกแอปตอนถูก kill) | ⚠️ code-complete — **ยังไม่ verified** | โค้ดเขียนครบและคอมไพล์ผ่าน แต่**ยังไม่เคยรันบนอุปกรณ์จริงสักครั้ง** ห้ามพึ่งพาในงานจริงจนกว่าจะทดสอบ |
+| **Region enter/exit ตอนแอปอยู่เบื้องหลัง (process ยังไม่ถูก kill)** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | enter มาใน 5-8 วินาที exit มาใน 30-50 วินาที — **วัดครั้งเดียว ยังไม่ทำซ้ำหาค่าเฉลี่ย** อย่าเอาไปตั้ง timeout โดยตรง |
+| **ปลุกแอปตอนถูก kill ไปแล้ว (B5)** | ⚠️ code-complete — **ทดสอบแล้วไม่ผ่าน 1 รอบ แก้แล้ว รอทดสอบซ้ำ** | รอบแรก (30 ส.ค. 2026) ไม่มีอะไรเกิดขึ้นเลย เพราะไม่มีใครสร้าง `CLLocationManager` ในรอบ cold launch ที่ไม่มี UI (ARCHITECTURE.md ADR-10) แก้แล้วแต่**ยังไม่มีใครเห็นมันฟื้นเองจริง** ห้ามพึ่งพาในงานจริง |
 | **GATT connect / auth / config / OTA** | ❌ **ยังไม่ implement** | ไม่มีโค้ดส่วนนี้อยู่เลย `connect()` throw `UnsupportedError` ทันที |
 | **อ่านประวัติ sensor ย้อนหลัง** | ❌ **ยังไม่ implement** | มีแต่ interface ว่าง ๆ ไม่มี implementation |
 | **Android** (ทุกฟีเจอร์) | ❌ **ยังไม่มี** | เรียกจาก Android จะได้ `MissingPluginException` — ยังไม่มีแพ็กเกจ `beacon_kit_android` |
@@ -94,6 +95,28 @@ dependencies:
 | `NSLocationAlwaysAndWhenInUseUsageDescription` | ต้องการ background region monitoring |
 | `NSBluetoothAlwaysUsageDescription` | สแกน non-iBeacon (Eddystone) ผ่าน CoreBluetooth |
 | `UIBackgroundModes` = `location`, `bluetooth-central` | ทำงานต่อเนื่องตอน background |
+
+**ถ้าต้องการให้แอปถูกปลุกตอนถูก kill (B5)** ต้องเรียกเพิ่มหนึ่งบรรทัดใน
+`AppDelegate` ด้วย:
+
+```swift
+import beacon_kit_ios
+
+override func application(
+  _ application: UIApplication,
+  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+) -> Bool {
+  BeaconKitIosPlugin.startBackgroundRegionMonitoring { event in
+    // ทำอะไรกับ event ก็ได้ — SDK ไม่บังคับ (เขียน log / ยิง notification / ส่งขึ้น server)
+  }
+  return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+}
+```
+
+**ทำไม SDK ทำให้เองไม่ได้:** ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลัง จะไม่มี
+UI ถูกสร้าง จึงไม่มีการ register plugin ของ Flutter เลย — SDK ยังไม่มีตัวตนในรอบนั้น
+จึงแทรกตัวเข้าไปเองไม่ได้ ต้องเป็น host app เรียก แอปที่ไม่ต้องการพฤติกรรมนี้ข้ามได้
+เหตุผลเต็มอยู่ใน ARCHITECTURE.md ADR-10
 
 ---
 
