@@ -256,4 +256,95 @@ class RunnerTests: XCTestCase {
       "เรียกซ้ำต้องไม่ล้างเนื้อหาเดิม ไม่งั้นหลักฐานจะเหลือบรรทัดเดียว"
     )
   }
+
+  // MARK: - ADR-10: กู้ region ที่ระบบเก็บไว้ข้าม launch กลับมา
+
+  /// จุดที่ทำให้ B5 รอบ 30 ส.ค. 2026 ไม่ผ่าน: process ใหม่ที่ถูกปลุกขึ้นมามี
+  /// `constraintsByIdentifier` ว่างเปล่าเสมอ ทำให้ `emitRegionStateIfChanged`
+  /// ทิ้ง event ทิ้งเงียบ ๆ — เทสต์นี้ล็อกไว้ว่า region ที่ระบบเก็บไว้ให้ต้องถูก
+  /// อ่านกลับมาได้ครบพร้อม uuid/major/minor
+  func testConstraintsAreRestoredFromSystemMonitoredRegions() {
+    let uuid = UUID(uuidString: "7777772E-6B6B-6D63-6E2E-636F6D000001")!
+    let fleetWide = CLBeaconRegion(
+      beaconIdentityConstraint: CLBeaconIdentityConstraint(uuid: uuid),
+      identifier: "bigc-fleet-wide"
+    )
+    let branch = CLBeaconRegion(
+      beaconIdentityConstraint: CLBeaconIdentityConstraint(uuid: uuid, major: 1234),
+      identifier: "branch-1234"
+    )
+
+    let restored = IBeaconRangingManager.constraints(
+      fromMonitoredRegions: [fleetWide, branch]
+    )
+
+    XCTAssertEqual(Set(restored.keys), ["bigc-fleet-wide", "branch-1234"])
+    XCTAssertEqual(restored["bigc-fleet-wide"]?.uuid, uuid)
+    XCTAssertNil(restored["bigc-fleet-wide"]?.major)
+    XCTAssertEqual(restored["branch-1234"]?.major, 1234)
+    XCTAssertNil(restored["branch-1234"]?.minor)
+  }
+
+  /// region ที่ไม่ใช่ beacon (เช่นของ SDK อื่นในแอปเดียวกัน) ต้องถูกข้าม ไม่ใช่
+  /// ทำให้ทั้งชุดพัง — และที่สำคัญกว่าคือเราต้องไม่ไปยุ่งกับมัน
+  func testNonBeaconRegionsAreIgnoredNotAdopted() {
+    let circular = CLCircularRegion(
+      center: CLLocationCoordinate2D(latitude: 13.7563, longitude: 100.5018),
+      radius: 100,
+      identifier: "someone-elses-geofence"
+    )
+    let beacon = CLBeaconRegion(
+      beaconIdentityConstraint: CLBeaconIdentityConstraint(
+        uuid: UUID(uuidString: "7777772E-6B6B-6D63-6E2E-636F6D000001")!
+      ),
+      identifier: "bigc-fleet-wide"
+    )
+
+    let restored = IBeaconRangingManager.constraints(
+      fromMonitoredRegions: [circular, beacon]
+    )
+
+    XCTAssertEqual(Array(restored.keys), ["bigc-fleet-wide"])
+  }
+
+  // MARK: - ADR-10: รูปแบบบรรทัด log ฝั่ง native
+
+  /// หน้า "ดู log" ฝั่ง Dart แยกคอลัมน์ด้วย TAB — ถ้ารูปแบบเพี้ยน หลักฐานที่เก็บมา
+  /// ทั้งรอบทดสอบจะอ่านไม่ออก เทสต์นี้จึงล็อกจำนวนคอลัมน์และลำดับไว้
+  func testLogLineHasFiveTabSeparatedColumnsInOrder() {
+    let line = BackgroundEvidenceLog.line(
+      timestamp: Date(timeIntervalSince1970: 0),
+      event: "enter",
+      regionIdentifier: "bigc-fleet-wide",
+      conclusion: "relaunchedFromTerminated",
+      rawSignals: "launchKey=true everActive=false state=background uptime=0.4s"
+    )
+
+    let columns = line.components(separatedBy: "\t")
+    XCTAssertEqual(columns.count, 5)
+    XCTAssertEqual(columns[1], "enter")
+    XCTAssertEqual(columns[2], "bigc-fleet-wide")
+    XCTAssertEqual(columns[3], "relaunchedFromTerminated")
+    XCTAssertEqual(columns[4], "launchKey=true everActive=false state=background uptime=0.4s")
+  }
+
+  /// timestamp ต้องเป็นเวลา **local พร้อม offset** ไม่ใช่ UTC ล้วน และต้องเป็น
+  /// ปฏิทินเกรกอเรียนเสมอ — เครื่องที่ตั้งปฏิทินพุทธ (พบทั่วไปในไทย) ต้องไม่ได้
+  /// ปี 2569 ใน log ไม่งั้นเทียบเวลากับ log ฝั่งอื่นไม่ได้เลย
+  func testLogTimestampIsGregorianLocalTimeWithOffset() {
+    let stamp = BackgroundEvidenceLog.iso8601WithOffset(Date(timeIntervalSince1970: 0))
+
+    // ตรวจ**รูปแบบ** ไม่ใช่ค่าเวลา เพราะค่าขึ้นกับ timezone ของเครื่องที่รันเทสต์
+    // (epoch 0 เป็น 1970-01-01 ที่กรุงเทพ แต่เป็น 1969-12-31 ที่ฝั่งอเมริกา)
+    let pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}([+-][0-9]{2}:[0-9]{2}|Z)$"
+    XCTAssertNotNil(
+      stamp.range(of: pattern, options: .regularExpression),
+      "รูปแบบ timestamp ไม่ตรง ได้ \(stamp)"
+    )
+    // ปีต้องเป็นเกรกอเรียน ไม่ใช่ปฏิทินพุทธ (2512/2513) ไม่ว่าเครื่องจะตั้ง locale ไหน
+    XCTAssertTrue(
+      stamp.hasPrefix("1969-") || stamp.hasPrefix("1970-"),
+      "ปีไม่ใช่เกรกอเรียน ได้ \(stamp)"
+    )
+  }
 }

@@ -94,14 +94,19 @@ class _ScanPageState extends State<ScanPage> {
     );
   }
 
-  /// บันทึกหลักฐาน + ยิง notification ทุกครั้งที่เข้า/ออก region
+  /// อัปเดตหน้าจอเมื่อเข้า/ออก region
   ///
-  /// ลำดับสำคัญ: **เขียน log ก่อน** แล้วค่อยยิง notification เพราะ log คือหลักฐาน
-  /// ที่ต้องรอด ส่วน notification เป็นแค่สัญญาณให้คนเห็น ถ้าเวลาที่ระบบให้หมดก่อน
-  /// อย่างน้อยหลักฐานต้องลงดิสก์แล้ว
+  /// **ไม่เขียน log และไม่ยิง notification ตรงนี้แล้ว** — ทั้งสองอย่างย้ายไปอยู่ฝั่ง
+  /// native (`AppDelegate.recordRegionEvent`) ตั้งแต่ ADR-10 เพราะเส้นทางนี้ทำงานได้
+  /// ก็ต่อเมื่อ Flutter engine มีชีวิตอยู่ ซึ่งไม่จริงในเคสที่ B5 ต้องการพิสูจน์พอดี
+  /// (iOS ปลุก process ที่ถูกฆ่าขึ้นมาส่ง event โดยไม่สร้าง UI)
+  ///
+  /// เหลือไว้เฉพาะสิ่งที่**ต้อง**อยู่ฝั่ง Dart คือการอัปเดต widget — และจงใจไม่เขียน
+  /// log ซ้ำจากทางนี้ เพื่อให้มีผู้เขียนรายเดียว ไม่งั้นตอน foreground จะได้สอง
+  /// บรรทัดต่อหนึ่ง event แล้วนับผลผิด
   Future<void> _onRegionEvent(IBeaconRegionStateEvent event) async {
     // อัปเดตตัวนับ**ก่อน** await ใด ๆ เพื่อให้หน้าจอขยับทันทีที่ event มาถึง
-    // ไม่ต้องรอ native ตอบเรื่อง diagnostics หรือรอเขียนไฟล์เสร็จ
+    // ไม่ต้องรอ native ตอบเรื่อง diagnostics
     if (mounted) {
       setState(() {
         switch (event.state) {
@@ -117,30 +122,18 @@ class _ScanPageState extends State<ScanPage> {
     }
 
     final diagnostics = await _diagnostics.getLaunchDiagnostics();
-
-    try {
-      await _log.append(event, diagnostics);
-    } on Object catch (error) {
-      if (mounted) {
-        setState(() => _errorMessage = 'เขียน log ไม่สำเร็จ: $error');
-      }
-    }
-
-    final context = diagnostics.context.name;
-    try {
-      await _diagnostics.postNotification(
-        title: 'Region ${event.state.name}: ${event.regionIdentifier}',
-        body: 'สถานะแอป: $context',
-      );
-    } on Object {
-      // notification ล้มเหลวไม่ควรทำให้ทั้ง flow พัง — log ที่เขียนไปแล้วยังเป็น
-      // หลักฐานที่ใช้ได้ (เช่นผู้ใช้ไม่ได้อนุญาต notification)
-    }
+    // ดึง error ของการเขียน log ฝั่ง native ขึ้นมาแสดง — ถ้าไม่ดึง ความล้มเหลวจะ
+    // เงียบสนิทและกลายเป็น "ไม่มีบรรทัดใน log" ซึ่งแยกไม่ออกจาก "แอปไม่ถูกปลุก"
+    final logError = await _diagnostics.getLogWriteError();
 
     if (!mounted) return;
     setState(() {
       _lastRegionEvent =
-          '${event.state.name} ${event.regionIdentifier} ($context)';
+          '${event.state.name} ${event.regionIdentifier} '
+          '(${diagnostics.context.name})';
+      if (logError != null) {
+        _errorMessage = 'native เขียน log ไม่สำเร็จ: $logError';
+      }
     });
   }
 

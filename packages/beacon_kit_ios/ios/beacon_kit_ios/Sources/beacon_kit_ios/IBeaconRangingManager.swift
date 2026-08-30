@@ -59,9 +59,87 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   }
   private var pendingStart: PendingStart?
 
+  /// hook ให้ **โค้ด native ของ host app** รับ region event ได้ตรง ๆ โดยไม่ผ่าน
+  /// Flutter engine เลย
+  ///
+  /// **ทำไมต้องมี:** เส้นทางปกติของ event คือ `FlutterEventSink` -> Dart ซึ่ง
+  /// ใช้ได้ก็ต่อเมื่อ Flutter engine ถูกสร้างและ Dart subscribe แล้ว แต่ตอน iOS
+  /// ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลังเพื่อส่ง region event (B5) engine อาจ
+  /// ยังไม่ถูกสร้างเลย (ดูเหตุผลเต็มใน ARCHITECTURE.md ADR-10) — ถ้าไม่มีทาง
+  /// ออกที่เป็นอิสระจาก Dart แอปจะตื่นจริงแต่ไม่มีใครเห็นและไม่มีหลักฐานเหลือไว้
+  ///
+  /// SDK **ไม่** ตัดสินใจแทนว่า host จะทำอะไรกับ event (เขียน log/ยิง
+  /// notification/ส่งขึ้น server) — เป็นแค่ hook เปล่า ๆ ตามหลักที่ว่า SDK ไม่ควร
+  /// บังคับให้ผู้ใช้พึ่ง framework ใด framework หนึ่ง
+  var onRegionStateEvent: ((BeaconKitRegionStateEvent) -> Void)?
+
+  /// instance เดียวที่ทั้งแอปใช้ร่วมกัน
+  ///
+  /// **จำเป็นต้องเป็น singleton** เพราะตั้งแต่ ADR-10 มีผู้สร้างสองทางที่ต้องได้
+  /// ตัวเดียวกัน: (1) `BeaconKitIosPlugin.startBackgroundRegionMonitoring()` ที่
+  /// host app เรียกจาก `didFinishLaunchingWithOptions` และ (2)
+  /// `BeaconKitIosPlugin.register(with:)` ที่เกิดทีหลังตอน Flutter engine พร้อม
+  /// ถ้าเป็นคนละ instance จะมี `CLLocationManager` สองตัวที่ `constraintsByIdentifier`
+  /// และ `lastKnownRegionState` แยกกัน — และตาม Apple docs ของ `didEnterRegion`
+  /// ("every active location manager object delivers this message to its
+  /// associated delegate") ทั้งคู่จะได้ callback เดียวกัน กลายเป็น event ซ้ำสองชุด
+  static let shared = IBeaconRangingManager()
+
+  /// identifier ของ region ที่ระบบกำลัง monitor อยู่จริง ณ ตอนนี้
+  ///
+  /// อ่านจาก `locationManager.monitoredRegions` โดยตรง ไม่ใช่จาก state ในหน่วย
+  /// ความจำของเรา เพื่อให้ใช้เป็นหลักฐานได้ว่า "region รอดข้าม process มาจริง"
+  var monitoredRegionIdentifiers: [String] {
+    locationManager.monitoredRegions.map(\.identifier).sorted()
+  }
+
   override init() {
     super.init()
     locationManager.delegate = self
+
+    // **ห้ามเรียก stopMonitoring/stopMonitoringForRegion: ใด ๆ ในเส้นทางนี้เด็ดขาด**
+    // (ADR-10) — region ที่ระบบเก็บไว้ให้คือสิ่งเดียวที่ทำให้ iOS ปลุกแอปขึ้นมา
+    // ตอนถูกฆ่า ถ้าโค้ด init ของเราไปล้างทิ้ง แอปจะไม่มีวันถูกปลุกอีกเลยและ
+    // อาการจะออกมาเหมือน "ไม่รองรับ background" ทั้งที่จริงเราลบมันเอง
+    // ตรงนี้ทำแค่ **อ่าน** ชุด region ที่ระบบเก็บไว้กลับเข้ามาเป็น state ของเรา
+    adoptSystemMonitoredRegions()
+  }
+
+  /// อ่าน region ที่ระบบเก็บไว้ข้าม launch กลับเข้ามาใส่ `constraintsByIdentifier`
+  ///
+  /// **ทำไมต้องทำ:** header ของ `monitoredRegions` ระบุว่า "If any location manager
+  /// has been instructed to monitor a region, **during this or previous launches
+  /// of your application**, it will be present in this set."
+  /// (CLLocationManager.h:420-422, iPhoneOS26.5.sdk) — แปลว่าตอน process ใหม่ถูก
+  /// ปลุกขึ้นมา region ยังลงทะเบียนอยู่กับระบบครบ แต่ `constraintsByIdentifier`
+  /// ของเราเป็น dictionary ในหน่วยความจำที่ **ว่างเปล่า** เสมอใน process ใหม่
+  /// เพราะมีแต่ `applyParsedRegions` (ซึ่งวิ่งได้ต่อเมื่อ Dart เรียกเข้ามา)
+  /// เท่านั้นที่เติมค่าให้ ผลคือ `emitRegionStateIfChanged` มองไม่เห็น constraint
+  /// แล้วทิ้ง event เงียบ ๆ — event มาถึงจริงแต่ไม่มีใครรู้
+  private func adoptSystemMonitoredRegions() {
+    for (identifier, constraint) in Self.constraints(
+      fromMonitoredRegions: locationManager.monitoredRegions
+    ) where constraintsByIdentifier[identifier] == nil {
+      constraintsByIdentifier[identifier] = constraint
+    }
+  }
+
+  /// ส่วนที่เป็น pure function ของ [adoptSystemMonitoredRegions] — แยกออกมาเพื่อให้
+  /// XCTest ตรวจได้โดยไม่ต้องมี `CLLocationManager` จริง
+  ///
+  /// ข้าม region ที่ไม่ใช่ `CLBeaconRegion` ทิ้ง (เช่น `CLCircularRegion` ที่ SDK
+  /// อื่นในแอปเดียวกันลงทะเบียนไว้) เพราะ payload ของ ADR-6 ต้องการ
+  /// uuid/major/minor ซึ่ง region ประเภทอื่นไม่มี — และ**ไม่**หยุด monitor
+  /// region เหล่านั้นด้วย มันไม่ใช่ของเรา
+  static func constraints(
+    fromMonitoredRegions regions: Set<CLRegion>
+  ) -> [String: CLBeaconIdentityConstraint] {
+    var result: [String: CLBeaconIdentityConstraint] = [:]
+    for region in regions {
+      guard let beaconRegion = region as? CLBeaconRegion else { continue }
+      result[beaconRegion.identifier] = beaconRegion.beaconIdentityConstraint
+    }
+    return result
   }
 
   // MARK: - FlutterStreamHandler
@@ -505,11 +583,24 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// ไม่ต้อง dedupe เองอีกชั้น
   private func emitRegionStateIfChanged(_ state: RegionMonitoringState, for region: CLRegion) {
     let identifier = region.identifier
-    guard let constraint = constraintsByIdentifier[identifier] else {
-      // stale callback ของ region ที่ stopMonitoring ไปแล้ว (เช่น callback ค้างมา
-      // ระหว่างที่ applyParsedRegions กำลังแทนที่ชุด region เดิม) — ไม่มี
-      // uuid/major/minor ให้ประกอบ payload แล้ว ทิ้งไปเงียบ ๆ ปลอดภัยกว่ายิง
-      // event ที่ข้อมูลไม่ครบ
+    let constraint: CLBeaconIdentityConstraint
+    if let cached = constraintsByIdentifier[identifier] {
+      constraint = cached
+    } else if let beaconRegion = region as? CLBeaconRegion {
+      // **ADR-10:** ไม่รู้จัก identifier นี้ แต่ตัว `CLRegion` ที่ CoreLocation ส่ง
+      // มาเองเป็น `CLBeaconRegion` อยู่แล้ว จึงถอด constraint จากมันได้ตรง ๆ ไม่
+      // ต้องพึ่ง dictionary ในหน่วยความจำเลย
+      //
+      // เคสที่ทางนี้ช่วยชีวิต: process ถูกปลุกขึ้นมาใหม่แล้ว `didEnterRegion` มา
+      // ถึง**ก่อน**ที่ `monitoredRegions` จะสะท้อนค่าครบ (header เตือนไว้เองว่า
+      // การลงทะเบียน region เป็น asynchronous "and may not be immediately
+      // reflected in monitoredRegions" — CLLocationManager.h:720) ถ้ายัง guard
+      // แบบเดิม event ที่รอมาทั้งรอบทดสอบจะหายไปเพราะเรื่องจังหวะล้วน ๆ
+      constraint = beaconRegion.beaconIdentityConstraint
+      constraintsByIdentifier[identifier] = constraint
+    } else {
+      // ไม่ใช่ beacon region (เช่น `CLCircularRegion` ของโค้ดส่วนอื่นในแอปเดียวกัน)
+      // — ไม่มี uuid/major/minor ให้ประกอบ payload ตาม ADR-6 ทิ้งไปเงียบ ๆ
       return
     }
     guard lastKnownRegionState[identifier] != state else {
@@ -531,7 +622,21 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       "state": state.rawValue,
       "timestamp": timestamp,
     ]
-    regionStateStreamHandler.regionStateEventSink?(payload)
+    // ยิงออกสองทางที่**เป็นอิสระจากกัน** ทางไหนพร้อมก็ได้ผลของทางนั้น:
+    //   1. native hook  — ใช้ได้แม้ Flutter engine ยังไม่ถูกสร้าง (B5 cold launch)
+    //   2. event channel — ต้องมี engine + Dart subscribe แล้ว (buffer ให้ถ้ายัง)
+    // ห้ามให้ทางหนึ่งล้มแล้วอีกทางไม่ได้ทำงาน จึงเรียก hook ก่อนเสมอ
+    onRegionStateEvent?(
+      BeaconKitRegionStateEvent(
+        regionIdentifier: identifier,
+        uuid: constraint.uuid,
+        major: constraint.major,
+        minor: constraint.minor,
+        state: state.rawValue,
+        timestamp: Date(timeIntervalSince1970: Double(timestamp) / 1000)
+      )
+    )
+    regionStateStreamHandler.send(payload)
   }
 
   private static func proximityString(_ proximity: CLProximity) -> String {
@@ -564,12 +669,46 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
 /// `BeaconKitIosPlugin.swift` เป็นคน register instance นี้เป็น stream handler
 /// ของ channel `beacon_kit_ios/region_state_events` ตอน `register(with:)`
 final class RegionStateEventStreamHandler: NSObject, FlutterStreamHandler {
-  fileprivate var regionStateEventSink: FlutterEventSink?
+  private var regionStateEventSink: FlutterEventSink?
+
+  /// event ที่เกิดขึ้น**ก่อน**ฝั่ง Dart จะ subscribe — เก็บไว้ก่อนแล้วส่งให้ทีเดียว
+  /// ตอน `onListen`
+  ///
+  /// **ทำไมต้องมี (ADR-10):** ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาส่ง region event
+  /// ลำดับเวลาคือ CoreLocation เรียก delegate ได้ทันทีที่ `CLLocationManager` ถูก
+  /// สร้าง แต่กว่า Flutter engine จะ start และ Dart จะ subscribe ได้ต้องผ่านอีกหลาย
+  /// ขั้น ถ้า sink ยังเป็น nil ตอนนั้นแล้วเราทิ้ง event ไปเลย ฝั่ง Dart จะไม่มีวัน
+  /// ได้เห็น event ที่เป็นเหตุผลเดียวที่แอปถูกปลุกขึ้นมาตั้งแต่แรก
+  private var bufferedEvents: [[String: Any]] = []
+
+  /// เพดาน buffer — ตัดจากตัวเก่าสุดเมื่อเต็ม
+  ///
+  /// จำกัดไว้เพราะถ้า Dart ไม่มีวัน subscribe (เช่นแอปถูกปลุกเบื้องหลังซ้ำ ๆ โดย
+  /// ผู้ใช้ไม่เคยเปิดหน้าจอเลย) buffer จะโตไม่มีที่สิ้นสุด ทิ้งตัวเก่าสุดเพราะ
+  /// state ล่าสุดของ region มีค่ากับผู้ใช้มากกว่าประวัติเก่า — และหลักฐานฉบับที่
+  /// ครบถ้วนอยู่ในไฟล์ log ที่ native เขียนไว้แล้ว ไม่ได้พึ่ง buffer นี้
+  private static let maxBufferedEvents = 50
+
+  fileprivate func send(_ payload: [String: Any]) {
+    guard let sink = regionStateEventSink else {
+      bufferedEvents.append(payload)
+      if bufferedEvents.count > Self.maxBufferedEvents {
+        bufferedEvents.removeFirst(bufferedEvents.count - Self.maxBufferedEvents)
+      }
+      return
+    }
+    sink(payload)
+  }
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
     -> FlutterError?
   {
     regionStateEventSink = events
+    let pending = bufferedEvents
+    bufferedEvents = []
+    for payload in pending {
+      events(payload)
+    }
     return nil
   }
 

@@ -1,6 +1,25 @@
 import Flutter
 import UIKit
 
+/// region event หนึ่งครั้งในรูปแบบที่ **โค้ด native ของ host app** ใช้ได้ตรง ๆ
+///
+/// เป็นชนิดข้อมูลของ `startBackgroundRegionMonitoring(onRegionStateEvent:)` —
+/// จงใจไม่ใช้ `[String: Any]` แบบเดียวกับ payload ที่ส่งข้าม method channel
+/// เพราะฝั่งนั้นถูกบังคับด้วย `StandardMethodCodec` ส่วนฝั่งนี้เป็น Swift ล้วน
+/// ไม่มีเหตุผลให้ผู้เรียกต้องมา cast เอง
+public struct BeaconKitRegionStateEvent {
+  /// identifier ที่แอปตั้งไว้ตอนลงทะเบียน region (ADR-8 ใช้เป็นรหัสสาขา)
+  public let regionIdentifier: String
+  public let uuid: UUID
+  /// `nil` = wildcard ตาม ADR-5
+  public let major: UInt16?
+  /// `nil` = wildcard ตาม ADR-5
+  public let minor: UInt16?
+  /// `"enter"` | `"exit"` | `"unknown"` — ค่าเดียวกับ payload ของ ADR-6 หัวข้อ 2
+  public let state: String
+  public let timestamp: Date
+}
+
 /// Entry point ของ `beacon_kit_ios` — register 1 method channel (`beacon_kit_ios/methods`)
 /// + 3 event channel แล้ว route คำเรียกไปยัง manager ที่รับผิดชอบตาม path:
 ///
@@ -19,8 +38,48 @@ import UIKit
 /// handler กับ ranging channel แม้จะเป็น manager ตัวเดียวกัน ดูเหตุผลที่
 /// `RegionStateEventStreamHandler` ใน `IBeaconRangingManager.swift`)
 public class BeaconKitIosPlugin: NSObject, FlutterPlugin {
-  private let iBeaconRangingManager = IBeaconRangingManager()
+  /// ใช้ instance ที่ share กันทั้งแอป ไม่ใช่ตัวใหม่ต่อการ register หนึ่งครั้ง —
+  /// เหตุผลเต็มอยู่ที่ `IBeaconRangingManager.shared` (ADR-10)
+  private let iBeaconRangingManager = IBeaconRangingManager.shared
   private let rawAdvertisementScanner = RawAdvertisementScanner()
+
+  /// เตรียม CoreLocation ให้พร้อมรับ region event **ตั้งแต่รอบ launch** โดยไม่ต้อง
+  /// รอ Flutter engine หรือ Dart — เรียกจาก
+  /// `application(_:didFinishLaunchingWithOptions:)` ของ host app
+  ///
+  /// **ทำไม SDK ถึงบังคับเองไม่ได้ และทำไมจำเป็น (ADR-10):**
+  /// plugin ของ Flutter ถูก register ผ่าน `GeneratedPluginRegistrant` ซึ่งในแอปที่
+  /// ใช้ scene lifecycle จะเกิดใน `didInitializeImplicitFlutterEngine` — header ของ
+  /// Flutter ระบุว่า callback นั้น "Called once the implicit `FlutterEngine` is
+  /// initialized, such as when created by a FlutterViewController from a
+  /// storyboard" (FlutterEngine.h:476-490) นั่นคือมันผูกกับการที่ **UI ถูกสร้าง**
+  /// ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลังเพื่อส่ง location event ไม่มี
+  /// scene ไหนถูก connect ไม่มี `FlutterViewController` จึงไม่มีการ register
+  /// plugin เลย = ไม่มี `CLLocationManager` และไม่มี delegate ให้ CoreLocation
+  /// เรียก event ที่แอปถูกปลุกขึ้นมารับจึงตกหายไปทั้งหมด
+  ///
+  /// ที่ต้องมี `CLLocationManager` + delegate ให้ทันในรอบ launch นั้นตรงกับที่
+  /// Apple เขียนไว้ว่า "If your app actively receives and processes location
+  /// updates and terminates, it should restart those APIs upon launch in order to
+  /// continue receiving updates. When you start those services, the system resumes
+  /// the delivery of queued location updates."
+  /// (developer.apple.com/documentation/corelocation/handling-location-updates-in-the-background)
+  ///
+  /// - Parameter onRegionStateEvent: hook ที่จะถูกเรียกทุกครั้งที่ region เปลี่ยน
+  ///   state — ทำงานแม้ Flutter engine ยังไม่มีอยู่ SDK ไม่ยุ่งว่า host จะเอาไปทำ
+  ///   อะไร (เขียน log / ยิง notification / ส่งขึ้น server)
+  /// - Returns: identifier ของ region ที่ระบบยังเก็บไว้ให้ข้าม launch — ใช้เป็น
+  ///   หลักฐานได้ว่า region รอดข้าม process จริงหรือหายไปแล้ว
+  @discardableResult
+  public static func startBackgroundRegionMonitoring(
+    onRegionStateEvent: ((BeaconKitRegionStateEvent) -> Void)? = nil
+  ) -> [String] {
+    let manager = IBeaconRangingManager.shared
+    if let onRegionStateEvent = onRegionStateEvent {
+      manager.onRegionStateEvent = onRegionStateEvent
+    }
+    return manager.monitoredRegionIdentifiers
+  }
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = BeaconKitIosPlugin()

@@ -100,7 +100,7 @@ class ExampleDiagnostics {
   }
 
   /// สร้างไฟล์ log (ถ้ายังไม่มี) พร้อมตั้ง Data Protection class ให้ชัดเจน
-  /// แล้วคืน path — ดูเหตุผลที่ต้องตั้งเองใน `AppDelegate.logFileProtection`
+  /// แล้วคืน path — ดูเหตุผลที่ต้องตั้งเองใน `BackgroundEvidenceLog.fileProtection`
   Future<String> prepareLogFile(String fileName) async {
     final path = await _channel.invokeMethod<String>('prepareLogFile', {
       'fileName': fileName,
@@ -110,6 +110,14 @@ class ExampleDiagnostics {
     }
     return path;
   }
+
+  /// error ล่าสุดของการเขียน log **ฝั่ง native** (`null` = ครั้งล่าสุดสำเร็จ)
+  ///
+  /// ตอน iOS ปลุกแอปขึ้นมาเบื้องหลังไม่มีใครเห็น error ที่เกิดตรงนั้น ถ้าไม่เก็บไว้
+  /// ให้ดึงย้อนหลัง อาการจะออกมาเป็น "ไม่มีบรรทัดใน log" เฉย ๆ ซึ่งแยกไม่ออกจาก
+  /// "แอปไม่เคยถูกปลุกเลย" — คนละสาเหตุกันคนละเรื่อง
+  Future<String?> getLogWriteError() =>
+      _channel.invokeMethod<String>('getLogWriteError');
 
   /// อ่าน protection class จริงของไฟล์ log กลับมาเพื่อตรวจสอบ (`null` = ยังไม่มีไฟล์)
   Future<String?> getLogFileProtection(String fileName) => _channel
