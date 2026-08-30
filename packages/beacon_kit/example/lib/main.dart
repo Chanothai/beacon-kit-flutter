@@ -57,6 +57,14 @@ class _ScanPageState extends State<ScanPage> {
   bool _isMonitoringRegions = false;
   String? _lastRegionEvent;
 
+  // ---- ตัวนับ region event แบบ realtime (สำหรับทดสอบ foreground) ----
+  // มีไว้เพื่อให้เห็นผลทันทีบนหน้าจอ **โดยไม่ต้องพึ่ง notification** เลย
+  // การทดสอบรอบก่อนสับสนเพราะ foreground ไม่มี notification ขึ้น (iOS ไม่แสดงให้
+  // ถ้าแอปไม่ implement willPresent) ทำให้ดูเหมือนไม่มี event เกิดขึ้นทั้งที่มี
+  int _enterCount = 0;
+  int _exitCount = 0;
+  DateTime? _lastEventAt;
+
   /// รายการ beacon ล่าสุด key ด้วย `'${deviceId.kind}:${deviceId.value}'`
   /// (dedup ตามคู่ kind+value ตาม ADR-1 — ห้ามเทียบข้าม kind)
   final Map<String, BeaconAdvertisement> _beacons = {};
@@ -92,6 +100,22 @@ class _ScanPageState extends State<ScanPage> {
   /// ที่ต้องรอด ส่วน notification เป็นแค่สัญญาณให้คนเห็น ถ้าเวลาที่ระบบให้หมดก่อน
   /// อย่างน้อยหลักฐานต้องลงดิสก์แล้ว
   Future<void> _onRegionEvent(IBeaconRegionStateEvent event) async {
+    // อัปเดตตัวนับ**ก่อน** await ใด ๆ เพื่อให้หน้าจอขยับทันทีที่ event มาถึง
+    // ไม่ต้องรอ native ตอบเรื่อง diagnostics หรือรอเขียนไฟล์เสร็จ
+    if (mounted) {
+      setState(() {
+        switch (event.state) {
+          case IBeaconRegionState.enter:
+            _enterCount++;
+          case IBeaconRegionState.exit:
+            _exitCount++;
+          case IBeaconRegionState.unknown:
+            break;
+        }
+        _lastEventAt = DateTime.now();
+      });
+    }
+
     final diagnostics = await _diagnostics.getLaunchDiagnostics();
 
     try {
@@ -240,9 +264,17 @@ class _ScanPageState extends State<ScanPage> {
             lastRegionEvent: _lastRegionEvent,
             onStartRegionMonitoring: _startRegionMonitoring,
             onRefreshAuthorization: _refreshAuthorizationLevel,
-            onOpenLog: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute<void>(builder: (_) => LogPage(log: _log))),
+            enterCount: _enterCount,
+            exitCount: _exitCount,
+            lastEventAt: _lastEventAt,
+            onOpenLog: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => LogPage(
+                  log: _log,
+                  regionEvents: _adapter.regionStateEvents,
+                ),
+              ),
+            ),
           ),
           Expanded(
             child: beacons.isEmpty
@@ -312,6 +344,9 @@ class _BackgroundTestPanel extends StatelessWidget {
     required this.authorizationLevel,
     required this.isMonitoringRegions,
     required this.lastRegionEvent,
+    required this.enterCount,
+    required this.exitCount,
+    required this.lastEventAt,
     required this.onStartRegionMonitoring,
     required this.onRefreshAuthorization,
     required this.onOpenLog,
@@ -320,6 +355,9 @@ class _BackgroundTestPanel extends StatelessWidget {
   final IBeaconAuthorizationLevel? authorizationLevel;
   final bool isMonitoringRegions;
   final String? lastRegionEvent;
+  final int enterCount;
+  final int exitCount;
+  final DateTime? lastEventAt;
   final Future<void> Function() onStartRegionMonitoring;
   final Future<void> Function() onRefreshAuthorization;
   final VoidCallback onOpenLog;
@@ -399,17 +437,74 @@ class _BackgroundTestPanel extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            // ตัวนับ realtime — เห็นผลได้ทันทีแม้ notification ไม่ขึ้น
+            Row(
+              children: [
+                _EventCounter(
+                  icon: Icons.login,
+                  label: 'enter',
+                  count: enterCount,
+                ),
+                const SizedBox(width: 16),
+                _EventCounter(
+                  icon: Icons.logout,
+                  label: 'exit',
+                  count: exitCount,
+                ),
+                const Spacer(),
+                Text(
+                  lastEventAt == null
+                      ? 'ยังไม่มี event'
+                      : 'ล่าสุด ${lastEventAt!.toIso8601String().substring(11, 19)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
             if (lastRegionEvent != null)
               Padding(
-                padding: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'event ล่าสุด: $lastRegionEvent',
+                  lastRegionEvent!,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// ตัวนับ event หนึ่งชนิด แสดงตัวเลขใหญ่พอให้เห็นจากระยะแขนตอนถือเครื่องเดินทดสอบ
+class _EventCounter extends StatelessWidget {
+  const _EventCounter({
+    required this.icon,
+    required this.label,
+    required this.count,
+  });
+
+  final IconData icon;
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18),
+        const SizedBox(width: 4),
+        Text(
+          '$count',
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
     );
   }
 }
