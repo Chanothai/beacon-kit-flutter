@@ -110,16 +110,47 @@ edge case) เป็น `code-complete, unverified` — **ไม่มีใค�
 |---|---|
 | region enter/exit ตอน foreground | ✅ ยืนยันบนอุปกรณ์จริงแล้ว |
 | region enter/exit ตอน background (process ยังมีชีวิต) | ✅ ยืนยันบนอุปกรณ์จริงแล้ว — enter 5-8 วิ / exit 30-50 วิ (วัดครั้งเดียว) |
-| **ปลุกจากสถานะถูกฆ่า (B5 ตัวจริง)** | ❌ ทดสอบแล้วไม่ผ่าน 1 รอบ → เจอสาเหตุ → แก้แล้ว → **รอทดสอบซ้ำ** |
+| **ปลุกจากสถานะถูกฆ่า (B5 ตัวจริง)** | ✅ **ผ่านแล้ว** — ทดสอบ 2 รอบ 30 ส.ค. 2026 (release/profile, force-quit โดยผู้ใช้) exit 55/30 วิ · enter 5/3 วิ |
 
-สาเหตุที่รอบแรกไม่ผ่านไม่ได้อยู่ที่ region monitoring (ข้อ background พิสูจน์แล้วว่ามันถูก)
-แต่อยู่ที่ **ไม่มีใครสร้าง `CLLocationManager` เลยในรอบ cold launch ที่ไม่มี UI** — และ
-เส้นทางเขียน log ก็พึ่ง Flutter engine เหมือนกัน ทำให้ไม่มีหลักฐานเหลือไว้ให้วินิจฉัย
-รายละเอียดเต็มใน ARCHITECTURE.md ADR-10 และเช็คลิสต์ข้อ 12
+**ขอบเขตที่ผ่าน:** เฉพาะเคส **ผู้ใช้ปัดแอปทิ้งเอง** — ยังไม่ได้ทดสอบกรณี**ระบบฆ่าแอปเอง
+จากหน่วยความจำ** ซึ่งเกิดบ่อยกว่าในการใช้งานจริงและเป็นคนละเส้นทางของ OS
+รวมถึงเครื่องล็อก / ไม่มีเน็ต / region ซ้อนทับ ที่ยังไม่ทดสอบ (เช็คลิสต์ข้อ 9, 10, 13)
 
-**สิ่งที่เพิ่มเพื่อไม่ให้ตาบอดซ้ำ:** log เขียนบรรทัด `launch` ทุกครั้งที่ process เริ่ม
-พร้อม `monitoredRegions=[…]` — รอบหน้าจะแยกออกทันทีว่า "iOS ไม่ได้ปลุกแอปเลย" ต่างจาก
-"ถูกปลุกแล้วแต่ event ไปไม่ถึง handler" ซึ่งรอบที่ผ่านมาแยกไม่ออกเลย
+### บทเรียนจากรอบนี้ — ทำไมรอบแรกไม่ผ่านและอะไรทำให้ผ่าน
+
+**1. สร้าง `CLLocationManager` ใน `didFinishLaunchingWithOptions` ไม่รอ Dart**
+
+รอบแรกไม่มีอะไรเกิดขึ้นเลย เพราะ `CLLocationManager` ถูกสร้างตอน plugin ถูก register
+ซึ่งผูกกับการที่ `FlutterViewController` ถูกสร้าง — ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมา
+เบื้องหลังไม่มี UI ถูกสร้างเลย จึงไม่มีใครสร้าง manager และไม่มี delegate ให้เรียก
+**บทเรียน:** อะไรก็ตามที่ต้องพร้อมในรอบ launch ต้องไม่ผูกกับ lifecycle ของ UI
+
+**2. เส้นทางบันทึกหลักฐานต้องไม่พึ่งสิ่งเดียวกับที่กำลังทดสอบ**
+
+log เดิมวิ่งผ่าน Dart ซึ่งต้องมี Flutter engine เหมือนกัน — **เครื่องมือวัดตายพร้อมกับ
+สิ่งที่มันควรวัด** ผลจึงออกมาเป็น "ไม่มีอะไรเลย" ที่แยกไม่ออกว่าแอปไม่ถูกปลุก หรือถูก
+ปลุกแล้วแต่ event ไปไม่ถึง เสียเวลาไปทั้งรอบทดสอบโดยไม่ได้ข้อมูลอะไรกลับมาเลย
+**บทเรียน:** เครื่องมือวัดต้องเป็นอิสระจากระบบที่ถูกวัด — ย้าย log ไปเป็น Swift ล้วน
+
+**3. การออกแบบสัญญาณสองชั้นพิสูจน์คุณค่าตัวเองในการใช้งานจริงครั้งแรก**
+
+ตอนออกแบบ เราตัดสินใจ**ไม่**ใช้ `UIApplication.LaunchOptionsKey.location` เป็นตัวตัดสิน
+หลัก เพราะมันถูก deprecated ใน iOS 26 แล้ว และเพิ่มสัญญาณที่สองที่ไม่พึ่ง API ใด ๆ
+(`everActive` — process เคยผ่าน `applicationDidBecomeActive` หรือยัง) ตอนนั้นเป็นเพียง
+การป้องกันความเสี่ยงตามทฤษฎี
+
+ผลทดสอบจริง: **`launchKey=false` ทั้งสองรอบ ทั้งที่แอปถูกปลุกจากสถานะ terminated จริง**
+ถ้าใช้ key นั้นเป็นสัญญาณเดียวตามแนวทางคลาสสิก B5 จะถูกรายงานว่า "ไม่ผ่าน" ทั้งที่ผ่าน
+และเราจะไล่แก้โค้ดที่ไม่ได้พังไปอีกหลายรอบ
+**บทเรียน:** เมื่อสัญญาณเดียวที่มีอยู่บน API ที่ deprecated แล้ว การลงทุนหาสัญญาณที่สอง
+ที่เป็นอิสระคุ้มเสมอ — และให้บันทึก**สัญญาณดิบ**ไว้ใน log ด้วย ไม่ใช่แค่ข้อสรุป ไม่งั้น
+เราจะไม่มีทางรู้เลยว่า `launchKey` ไม่ทำงาน
+
+**4. บรรทัด `launch` ที่เขียนทุกครั้ง**
+
+เพิ่มพร้อม `monitoredRegions=[…]` เพื่อแยก "iOS ไม่ได้ปลุกแอปเลย" ออกจาก "ถูกปลุกแล้ว
+แต่ event ไปไม่ถึง handler" — สองอย่างนี้มีวิธีแก้คนละทางโดยสิ้นเชิง และรอบแรกเราแยก
+ไม่ออกเลยเพราะ log ว่างเปล่า
 
 ### B6. Implement flow ขอสิทธิ์ Always
 
@@ -147,8 +178,8 @@ edge case) เป็น `code-complete, unverified` — **ไม่มีใค�
 1. A1 + A2 (BigC ID scheme + UUID จริง) — เป็นสิ่งที่บล็อกการจัดซื้อและ provisioning ล็อตแรก ห้ามตัด
 2. A4 (ADR region monitoring) — ตัดสินใจก่อน implement
 3. A3 (domain mapping + fixture test)
-4. B5 (region monitoring, code-complete)
-5. B6 (Always permission flow, code-complete)
+4. B5 (region monitoring) — ✅ **verified บนอุปกรณ์จริงแล้ว 30 ส.ค. 2026** เฉพาะเคส force-quit
+5. B6 (Always permission flow) — ยัง `code-complete, unverified`
 
 ---
 
@@ -161,9 +192,9 @@ edge case) เป็น `code-complete, unverified` — **ไม่มีใค�
 - แก้บั๊กจากทดสอบเครื่องจริง 2 รอบ (authorization delegate + broadcast controller ค้าง) พร้อม regression test
 - BigC ID Scheme (ADR-5) + proximity UUID v4 จริงใน `docs/sources/bigc_provisioning.md`
 - domain mapping usecase `ResolveBigcBeaconMetadata` + fixture
-- region monitoring delegate + `region_state_events` channel + Always permission flow (B5/B6 — **code-complete, unverified**)
+- region monitoring delegate + `region_state_events` channel + Always permission flow (B5/B6)
 - repo เตรียมเป็น SDK กลาง: LICENSE/NOTICE/README/CONTRIBUTING, แยก `DEVELOPMENT_TEAM`, tag `v0.1.0` push ขึ้น private remote แล้ว
 
-**ยืนยันบนเครื่องจริงแล้ว (29 ส.ค. 2026):** เช็คลิสต์ข้อ 2 (iBeacon ranging — แยก K9P 2 ตัวด้วย major/minor ได้), ข้อ 6 (Eddystone URL frame จากอุปกรณ์บุคคลที่สาม), ข้อ 1 บางส่วน (Allow ครั้งเดียว + กด Start ซ้ำ)
+**ยืนยันบนเครื่องจริงแล้ว (29-30 ส.ค. 2026):** เช็คลิสต์ข้อ 2 (iBeacon ranging — แยก K9P 2 ตัวด้วย major/minor ได้ · background ไม่ kill: enter 5-8 วิ exit 30-50 วิ), ข้อ 6 (Eddystone URL frame จากอุปกรณ์บุคคลที่สาม), ข้อ 1 บางส่วน (Allow ครั้งเดียว + กด Start ซ้ำ), **ข้อ 12 = B5 (ปลุกหลัง force-quit — 2 รอบ)**
 
-**ยังไม่เคยยืนยันบนเครื่องจริงเลย:** เช็คลิสต์ข้อ 3, 4, 5, 7, 9, 10 / ข้อ 1 ลำดับ Don't Allow → Settings / **B5 + B6 ทั้งหมด** ← นี่คือเป้าหมายเดียวของสปรินต์นี้
+**ยังไม่เคยยืนยันบนเครื่องจริงเลย:** เช็คลิสต์ข้อ 3, 4, 5, 7, 9, 10, 13 / ข้อ 1 ลำดับ Don't Allow → Settings / **B6 ทั้งหมด** / **B5 กรณีระบบฆ่าแอปเองจากหน่วยความจำ** (คนละเส้นทางกับ force-quit และเกิดบ่อยกว่าในการใช้งานจริง)

@@ -610,6 +610,31 @@ flutter:
 
 **หมายเหตุประกอบจากหน้าเอกสาร `requestAlwaysAuthorization()` (คนละหน้ากับที่อ้างด้านบน ไม่กระทบข้อสรุปแต่ควรรู้):** "To obtain Always authorization, your app must first request When In Use permission followed by requesting Always authorization" ([`requestAlwaysAuthorization()`](https://developer.apple.com/documentation/corelocation/cllocationmanager/requestalwaysauthorization())) — โค้ดปัจจุบันเรียก `requestAlwaysAuthorization()` ตรง ๆ ครั้งเดียวตอน `.notDetermined` ซึ่งตาม flow ที่เอกสารอธิบาย (2-prompt flow: prompt แรกถามด้วยข้อความจาก `NSLocationWhenInUseUsageDescription`, prompt สองถามด้วยข้อความจาก `NSLocationAlwaysAndWhenInUseUsageDescription` ตอนระบบเตรียมส่ง event ที่ต้อง Always) เป็นพฤติกรรมที่ CoreLocation จัดการ 2-prompt นี้ให้เองโดยอัตโนมัติเมื่อแอปเรียก `requestAlwaysAuthorization()` — ไม่ใช่สิ่งที่โค้ดต้องเขียนแยกสองขั้นตอนเอง จึงไม่ขัดกับโค้ดปัจจุบัน
 
+#### ✅ ปิดจบแล้ว: "ผู้ใช้ปัดแอปทิ้งเองแล้วยังถูกปลุกไหม" (อัปเดต 30 ส.ค. 2026)
+
+ตอนเขียน ADR นี้ยังเหลือข้อสงสัยว่า เอกสารที่อ้างข้างบนพูดถึง "terminated app"
+ซึ่ง**อาจหมายถึงเฉพาะกรณีที่ระบบ terminate เอง** ไม่รวมกรณีที่ผู้ใช้ปัดแอปทิ้งจาก
+app switcher (บางฟีเจอร์ของ iOS ถือว่า force-quit คือเจตนาของผู้ใช้ที่จะให้แอปหยุด
+ทำงานถาวร และจะไม่ปลุกให้อีก) — ตอนนี้ปิดจบแล้วด้วยหลักฐานสองชั้น
+
+**(1) จาก SDK header โดยตรง** — `CLLocationManager.h:492-496` (iPhoneOS26.5.sdk)
+ในคำอธิบายของ `requestAlwaysAuthorization`:
+
+> "monitoring APIs may launch your app into the background when they detect an
+> event. **Even if killed by the user, launch events triggered by monitoring APIs
+> will cause a relaunch.**"
+
+ประโยค "Even if killed by the user" ตอบคำถามนี้ตรงตัว ไม่ต้องตีความ
+
+**(2) จากการทดสอบบนอุปกรณ์จริง 30 ส.ค. 2026** — ทดสอบ 2 รอบด้วย release/profile
+build หลังลบแอปติดตั้งใหม่ **ปัดแอปทิ้งจาก app switcher** แล้วกระตุ้น event: iOS
+ปลุก process ขึ้นมาส่ง region event จริงทั้งสองรอบ (exit 55/30 วินาที, enter 5/3
+วินาที) log ยืนยัน `everActive=false` + `state=background` ทั้งสองรอบ
+รายละเอียดเต็มใน `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 12
+
+**ยังไม่ปิด:** กรณี**ระบบฆ่าแอปเองเพราะหน่วยความจำ** — เป็นคนละเส้นทางของ OS และ
+เกิดบ่อยกว่า force-quit ในการใช้งานจริง ยังไม่มีใครทดสอบ ห้ามเหมารวมว่าผ่านด้วย
+
 ### 4. Info.plist ของ example พอสำหรับ background region monitoring หรือยัง — **พอแล้ว ไม่ต้องเพิ่ม**
 
 ตรวจ `packages/beacon_kit/example/ios/Runner/Info.plist` เทียบกับ [Requesting Authorization to Use Location Services](https://developer.apple.com/documentation/corelocation/requesting-authorization-to-use-location-services) ซึ่งระบุตารางคีย์ที่ต้องมีตามระดับสิทธิ์:
@@ -899,7 +924,9 @@ business logic (เช่น นับการเข้าสาขาซ้ำ
 
 ## ADR-10: รับ region event ได้ตั้งแต่รอบ launch — แก้เหตุที่ B5 ไม่ผ่าน (เพิ่ม 30 ส.ค. 2026)
 
-**สถานะ:** ตัดสินใจแล้ว · โค้ดเสร็จแล้ว · **ยังไม่ยืนยันบนอุปกรณ์จริง** (Track B)
+**สถานะ:** ตัดสินใจแล้ว · โค้ดเสร็จแล้ว · ✅ **ยืนยันบนอุปกรณ์จริงแล้ว 30 ส.ค. 2026**
+(ทดสอบ 2 รอบ release/profile, force-quit โดยผู้ใช้ — ดูเช็คลิสต์ข้อ 12)
+**ขอบเขต:** ยังไม่ครอบคลุมกรณีระบบฆ่าแอปเองจากหน่วยความจำ
 
 ### 1. หลักฐานที่ทำให้ต้องมี ADR นี้
 
@@ -1047,5 +1074,30 @@ foreground ได้บรรทัดซ้ำสองชุดต่อหน
 
 ยังต้องเห็นบรรทัดที่คอลัมน์ที่ 4 เป็น `relaunchedFromTerminated` ในไฟล์ log
 บนอุปกรณ์จริงหลังปัดแอปทิ้ง — **การมีเครื่องมือวัดที่ทำงานได้ กับการเห็นแอป
-ฟื้นเองจริง เป็นคนละเรื่องกัน** จนกว่าจะเห็นบรรทัดนั้น B5 ยังเป็น
-`code-complete, unverified`
+ฟื้นเองจริง เป็นคนละเรื่องกัน**
+
+**อัปเดต 30 ส.ค. 2026: เห็นแล้ว** ทดสอบ 2 รอบ log ยืนยัน `everActive=false` +
+`state=background` ทั้ง exit และ enter ทั้งสองรอบ → B5 เปลี่ยนจาก
+`code-complete, unverified` เป็น **verified เฉพาะเคส force-quit**
+
+### 6. ผลข้างเคียงที่ไม่ได้คาดไว้: `launchKey` ไม่ทำงานในสภาพแวดล้อมนี้
+
+ทั้งสองรอบที่ผ่าน log บันทึก `launchKey=false` — `UIApplication.LaunchOptionsKey.location`
+**ไม่ถูกเซ็ต** แม้แอปจะถูกปลุกจากสถานะ terminated จริง
+
+นี่ทำให้การตัดสินใจใน ADR นี้ที่ให้ `everActive` เป็นตัวตัดสินหลัก (และให้ launch key
+เป็นแค่หลักฐานสนับสนุน) กลายเป็นสิ่งที่**จำเป็น ไม่ใช่แค่การป้องกันเผื่อไว้** — ถ้าใช้
+launch key เป็นสัญญาณเดียวตามแนวทางคลาสสิก B5 จะถูกรายงานว่าไม่ผ่านทั้งที่ผ่าน
+
+**สาเหตุยังเป็น open question ห้ามสรุป** — สองสมมติฐานที่ยังไม่ได้พิสูจน์ว่าเป็นข้อไหน:
+
+- **(ก)** key ถูก deprecated ใน iOS 26 (`UIApplication.h:586`) แล้วระบบเลิกเซ็ตให้
+  — แต่ deprecated ตามปกติแปลว่า "ยังทำงานแต่เลิกแนะนำ" ไม่ใช่ "หยุดทำงาน" ยังไม่พบ
+  เอกสารที่ระบุว่าหยุดเซ็ตค่า
+- **(ข)** แอปใช้ scene lifecycle ซึ่ง launch options เดินคนละเส้นทาง — ข้อความ
+  deprecation เองพูดถึง "...to handle expected location events **after scene
+  connection**" ซึ่งบอกเป็นนัยไปทางนี้ แต่ยังไม่ได้ทดสอบแอปที่ไม่ใช้ scene เพื่อเทียบ
+
+จะพิสูจน์ได้ต้องทดสอบเทียบ (แอปที่ไม่ใช้ scene lifecycle / iOS ที่เก่ากว่า 26) ซึ่ง
+**ไม่จำเป็นต่อการใช้งาน** เพราะเราไม่ได้พึ่ง key นี้อยู่แล้ว — บันทึกไว้เพราะใครก็ตาม
+ที่เขียนโค้ดใหม่บนสมมติฐานคลาสสิกจะเจอปัญหานี้
