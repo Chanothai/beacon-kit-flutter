@@ -13,4 +13,9 @@ build/
 # IDE
 .idea/
 *.iml
-.vscode/
+
+# .vscode: ignore ทุกอย่างยกเว้น launch.json ที่ตั้งใจให้ทีมใช้ร่วมกัน
+# ต้องเขียนเป็น `.vscode/*` ไม่ใช่ `.vscode/` — ถ้า ignore ทั้งไดเรกทอรี git จะ
+# ไม่เดินเข้าไปข้างในเลย ทำให้ `!` ข้างล่างไม่มีผล (ไฟล์จะยัง commit ไม่ได้)
+.vscode/*
+!.vscode/launch.json

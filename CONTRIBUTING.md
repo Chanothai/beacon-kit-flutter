@@ -157,7 +157,54 @@ ADR-6 จะถูกเขียนบนข้อเท็จจริงท�
 เป็น placeholder ไม่ใช่เลขเวอร์ชัน การสรุปว่า "deprecated ใน iOS 26" เป็นการอนุมาน
 ต้องเขียนกำกับว่าอนุมานจากอะไร ไม่ใช่เขียนเป็นถ้อยแถลงของ Apple
 
-## 6. ห้าม commit ของพวกนี้
+## 6. เลือก build mode ไหนตอนไหน (debug / profile / release)
+
+`.vscode/launch.json` ที่ root มี 3 configuration ให้เลือกจาก dropdown ของ VS Code
+ได้เลย — ไฟล์นี้ **commit เข้า repo** ตั้งใจให้ทีมใช้ร่วมกัน (ไฟล์อื่นใน `.vscode/`
+ยังถูก gitignore อยู่ เพราะเป็นค่าเฉพาะเครื่องแต่ละคน)
+
+### โหมดไหนรันที่ไหนได้ — ยืนยันด้วยการรันจริง ไม่ใช่จากความจำ
+
+ทดสอบบน Flutter 3.47.0 / Xcode 26.6 / simulator iPhone 17 (iOS 26.5) เมื่อ 30 ส.ค. 2026
+
+| โหมด | simulator | อุปกรณ์จริง | ใช้ตอนไหน |
+|---|---|---|---|
+| **debug** | ✅ ได้ | ✅ ได้ | พัฒนาปกติ hot reload, debugger, assertion เปิดหมด |
+| **profile** | ❌ **ไม่ได้** | ✅ ได้ | วัด performance ด้วย DevTools/Instruments |
+| **release** | ❌ **ไม่ได้** | ✅ ได้ | ทดสอบพฤติกรรมจริงที่ผู้ใช้จะเจอ |
+
+ถ้าเลือก profile/release แล้วชี้ไป simulator จะได้ error ตรง ๆ ว่า
+`Profile mode is not supported by iPhone 17.` / `Release mode is not supported by
+iPhone 17.` — **ไม่ใช่บั๊กของ config** แต่เป็นข้อจำกัดของ Flutter บน iOS simulator
+
+**signing:** profile/release บนอุปกรณ์จริงต้องมี `DEVELOPMENT_TEAM` ซึ่งอ่านจาก
+`packages/beacon_kit/example/ios/Flutter/Local.xcconfig` (ไฟล์เฉพาะเครื่อง ไม่ commit)
+ถ้ายังไม่มี ให้ copy จาก `Local.xcconfig.example` แล้วใส่ Team ID ของตัวเอง
+— ต่างจาก `flutter build ios --no-codesign` ที่ข้าม signing ได้ **`flutter run` บน
+อุปกรณ์จริงข้ามไม่ได้ ต้อง sign เสมอ**
+
+### ⚠️ ทดสอบ B5 (background wake-from-terminate) — อย่าใช้ debug
+
+**สิ่งที่ B5 ต้องพิสูจน์คือ iOS ปลุก process ที่ถูกฆ่าไปแล้วขึ้นมาใหม่** ซึ่งขึ้นกับ
+พฤติกรรมการ terminate/relaunch ของระบบโดยตรง — และ **debug mode มี debugger
+เกาะอยู่กับ process** ซึ่งเปลี่ยนเงื่อนไขตรงนั้น
+
+ปัญหาที่ตามมาถ้าใช้ debug ทดสอบ B5:
+- ผลที่ได้อาจไม่ตรงกับสิ่งที่ผู้ใช้จริงเจอ ทั้งสองทาง — อาจ**ผ่านทั้งที่ของจริงพัง**
+  หรือ**พังทั้งที่ของจริงผ่าน** และเราจะแยกไม่ออกว่าอันไหน
+- การกด stop ใน VS Code เป็นการฆ่า process ด้วยวิธีที่ต่างจากการที่ iOS ตัดสินใจ
+  terminate เอง หรือการที่ผู้ใช้ swipe ปิดแอป — ซึ่งเป็นสถานการณ์ที่ B5 สนใจจริง ๆ
+
+**ให้ใช้ `Flutter (release)` บนอุปกรณ์จริง** แล้ว kill แอปด้วยการ swipe ปิดจากตัวสลับแอป
+(ไม่ใช่กด stop ใน IDE) ตามขั้นตอนใน
+`docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 12
+
+profile ใช้ได้เหมือนกันถ้าต้องการดู performance ไปด้วย — ทั้งคู่ไม่มี debugger เกาะ
+
+**เกณฑ์ผ่านยังเหมือนเดิม:** ต้องเห็นบรรทัด `relaunchedFromTerminated` จริงในไฟล์ log
+notification อย่างเดียวไม่พอ
+
+## 7. ห้าม commit ของพวกนี้
 
 - ค่าเฉพาะเครื่อง — `Local.xcconfig` (ดู `Local.xcconfig.example`), `DEVELOPMENT_TEAM`
   ห้ามกลับไป hardcode ใน `project.pbxproj` อีก
@@ -167,7 +214,7 @@ ADR-6 จะถูกเขียนบนข้อเท็จจริงท�
 **หมายเหตุ:** `flutter build ios` จะแก้ `example/ios/Runner/Base.lproj/Main.storyboard`
 เอง (Xcode auto-format) ถ้าเห็นไฟล์นี้โผล่ใน `git status` โดยที่คุณไม่ได้แตะ ให้ revert ทิ้ง
 
-## 7. เอกสารที่ต้องอัปเดตคู่กับโค้ด
+## 8. เอกสารที่ต้องอัปเดตคู่กับโค้ด
 
 | แก้อะไร | ต้องอัปเดต |
 |---|---|
