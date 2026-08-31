@@ -105,7 +105,7 @@ class _FakeBeaconKitIosPlatform extends ios.BeaconKitIosPlatform {
 BeaconAdvertisement _fakeCoreLocationEvent(String value) => BeaconAdvertisement(
   deviceId: BeaconDeviceId(value: value, kind: DeviceIdKind.iBeaconLogicalId),
   rssi: -55,
-  source: AdvertisementSource.coreLocation,
+  source: AdvertisementSource.osDecoded,
   timestamp: DateTime.utc(2026, 8, 27),
 );
 
@@ -116,7 +116,7 @@ BeaconAdvertisement _fakeCoreBluetoothEvent(String value) =>
         kind: DeviceIdKind.coreBluetoothPeripheralId,
       ),
       rssi: -60,
-      source: AdvertisementSource.coreBluetooth,
+      source: AdvertisementSource.rawParsed,
       timestamp: DateTime.utc(2026, 8, 27),
     );
 

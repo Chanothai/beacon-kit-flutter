@@ -13,7 +13,7 @@ import 'parse_result.dart';
 ///   (เห็นแค่ peripheral identifier + RSSI ไม่มี byte ให้ parse เลย)
 /// - iBeacon บน iOS มาทาง CoreLocation ซึ่งถอด uuid/major/minor ให้เป็น typed field
 ///   อยู่แล้วโดย OS โดยตรง ไม่ผ่านการ parse byte ใด ๆ ในฝั่ง Dart (ดู ADR-2,
-///   AdvertisementSource.coreLocation)
+///   AdvertisementSource.osDecoded)
 /// เรียก parser ตัวนี้บน iOS จะไม่มี manufacturerData ที่ valid ให้ป้อนเข้ามาตั้งแต่ต้น
 ///
 /// สปรินต์หน้า (Android) — ถ้าใช้ Android `ScanRecord.getManufacturerSpecificData(0x004C)`

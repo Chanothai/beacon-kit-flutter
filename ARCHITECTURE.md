@@ -215,27 +215,21 @@ class BeaconDeviceId {
 /// แหล่งข้อมูลดิบที่ BeaconAdvertisement นี้เดินทางมา — บอกว่า field กลุ่มไหน
 /// การันตีว่ามีค่า และกลุ่มไหนการันตีว่าไม่มี (null / ว่าง)
 enum AdvertisementSource {
-  /// iOS, ผ่าน CLLocationManager ranging (CLBeaconRegion) — เฉพาะ iBeacon เท่านั้น
-  /// ibeaconUuid/Major/Minor/proximity การันตีว่ามีค่าเสมอ, ibeaconTxPower เป็น null
-  /// เสมอ (CLBeacon ไม่มี field นี้ตรง ๆ), raw และ rawBytes ว่างเสมอ
-  coreLocation,
+  /// OS ถอดรหัสมาให้แล้ว (iOS CoreLocation ranging) — ibeacon*/proximity การันตี
+  /// ว่ามีค่า, raw/rawBytes ว่างเสมอ
+  osDecoded,
 
-  /// iOS, ผ่าน CBCentralManager scan — ทุกฟอร์แมต "ยกเว้น" iBeacon (OS mask
-  /// iBeacon manufacturer data ทิ้งที่ระดับ CoreBluetooth ทั้งหมด — ดูหัวข้อ
-  /// "ข้อจำกัดของ iOS ที่บังคับให้สถาปัตยกรรมต่างจาก Android")
-  /// ibeacon* ทุกฟิลด์เป็น null เสมอ, raw/rawBytes มีค่าจาก Dart parser (Eddystone ฯลฯ)
-  coreBluetooth,
-
-  /// Android, ผ่าน BluetoothLeScanner — ทุกฟอร์แมตรวม iBeacon (Android ไม่ mask)
-  /// ibeacon* มีค่าได้ก็ต่อเมื่อ IBeaconParser.parse() บน manufacturerData สำเร็จ
-  /// (ไม่การันตีเหมือน coreLocation เพราะเป็นผล parse ไม่ใช่ native ถอดให้)
-  /// raw/rawBytes มีค่าเสมอ (raw ADV bytes จาก OS)
-  android,
+  /// ได้ byte ดิบมาแล้ว Dart parser ถอดเอง (iOS CoreBluetooth + Android
+  /// BluetoothLeScanner) — rawBytes การันตีว่ามี, ibeacon* มีก็ต่อเมื่อ parse สำเร็จ
+  rawParsed,
 }
+// ⚠️ ชื่อค่าเปลี่ยนแล้วใน ADR-13 (31 ส.ค. 2026) — เดิมคือ coreLocation /
+// coreBluetooth / android ซึ่งตั้งชื่อตาม API ของ iOS ปนกับชื่อแพลตฟอร์ม
+// ดูเหตุผลการเปลี่ยนและการยุบ 3 ค่าเหลือ 2 ที่ ADR-13 หัวข้อ 5
 
 /// ค่า proximity ที่ CoreLocation คำนวณให้ (ระยะห่างโดยประมาณจาก RSSI/txPower ภายใน
 /// ของ OS เอง) ไม่มีทางเทียบเท่าฝั่ง Android/Dart parser เพราะไม่ใช่ field ที่ decode
-/// ได้จาก byte ของ ADV — มีค่าเฉพาะ source == coreLocation เท่านั้น
+/// ได้จาก byte ของ ADV — มีค่าเฉพาะ source == osDecoded เท่านั้น
 enum BeaconProximity { unknown, immediate, near, far }
 
 class BeaconAdvertisement {
@@ -246,18 +240,18 @@ class BeaconAdvertisement {
   final DateTime timestamp; // UTC, เวลาที่ Dart layer ได้รับ event (ไม่ใช่เวลา broadcast จริง)
 
   // ---- iBeacon-typed fields ----
-  // มีค่าการันตีเมื่อ source == coreLocation เสมอ
+  // มีค่าการันตีเมื่อ source == osDecoded เสมอ
   // มีค่าแบบไม่การันตีเมื่อ source == android และ IBeaconParser.parse() สำเร็จ (ADR-3)
-  // เป็น null เสมอเมื่อ source == coreBluetooth (iOS มองไม่เห็น iBeacon ทาง CoreBluetooth)
+  // เป็น null เสมอเมื่อ source == rawParsed (iOS มองไม่เห็น iBeacon ทาง CoreBluetooth)
   final String? ibeaconUuid; // lowercase, hyphenated (8-4-4-4-12)
   final int? ibeaconMajor; // 0-65535
   final int? ibeaconMinor; // 0-65535
-  final int? ibeaconTxPower; // measured power @ 1m, signed 8-bit dBm — null เสมอเมื่อ source == coreLocation
-  final BeaconProximity? proximity; // มีค่าเฉพาะ source == coreLocation
+  final int? ibeaconTxPower; // measured power @ 1m, signed 8-bit dBm — null เสมอเมื่อ source == osDecoded
+  final BeaconProximity? proximity; // มีค่าเฉพาะ source == osDecoded
 
   // ---- raw decoded payload: มาจาก Dart parser (EddystoneParser ฯลฯ) ----
-  final Map<String, dynamic> raw; // เช่น {'eddystone': EddystoneUidFrame(...)} — ว่างเสมอเมื่อ source == coreLocation
-  final Uint8List? rawBytes; // raw service/manufacturer bytes ก่อน parse, null เมื่อ source == coreLocation — เก็บไว้ debug/forward-compat
+  final Map<String, dynamic> raw; // เช่น {'eddystone': EddystoneUidFrame(...)} — ว่างเสมอเมื่อ source == osDecoded
+  final Uint8List? rawBytes; // raw service/manufacturer bytes ก่อน parse, null เมื่อ source == osDecoded — เก็บไว้ debug/forward-compat
 
   const BeaconAdvertisement({
     required this.deviceId,
@@ -336,7 +330,7 @@ enum ParseFailureReason {
 ///   (เห็นแค่ peripheral identifier + RSSI ไม่มี byte ให้ parse เลย)
 /// - iBeacon บน iOS มาทาง CoreLocation ซึ่งถอด uuid/major/minor ให้เป็น typed field
 ///   อยู่แล้วโดย OS โดยตรง ไม่ผ่านการ parse byte ใด ๆ ในฝั่ง Dart (ดู ADR-2,
-///   AdvertisementSource.coreLocation)
+///   AdvertisementSource.osDecoded)
 /// เรียก parser ตัวนี้บน iOS จะไม่มี manufacturerData ที่ valid ให้ป้อนเข้ามาตั้งแต่ต้น
 final class IBeaconParser {
   const IBeaconParser._();
@@ -462,7 +456,7 @@ flutter:
 **Event channel #1 — iBeacon ranging:** `beacon_kit_ios/ibeacon_ranging_events`
 - ยิง 1 event ต่อการเรียก `locationManager(_:didRange:satisfying:)` ของ CoreLocation 1 ครั้ง (เป็น batch ตามที่ OS ให้มา — **ไม่ flatten ฝั่ง native**)
 - Payload: `List<Map>` แต่ละ map = `{regionIdentifier, uuid, major, minor, rssi, proximity: String (immediate|near|far|unknown), timestamp: int (epoch ms)}`
-- `beacon_kit_ios` (Dart) เป็นคน flatten `List` → `BeaconAdvertisement` ทีละตัว (`AdvertisementSource.coreLocation`) ก่อนส่งต่อ — ไม่ flatten ที่ Swift เพื่อให้ native code เรียบง่าย ตรงกับ native callback 1:1 (ลด surface ของบั๊กฝั่ง Swift ซึ่งแก้ยากกว่าฝั่ง Dart)
+- `beacon_kit_ios` (Dart) เป็นคน flatten `List` → `BeaconAdvertisement` ทีละตัว (`AdvertisementSource.osDecoded`) ก่อนส่งต่อ — ไม่ flatten ที่ Swift เพื่อให้ native code เรียบง่าย ตรงกับ native callback 1:1 (ลด surface ของบั๊กฝั่ง Swift ซึ่งแก้ยากกว่าฝั่ง Dart)
 
 **Event channel #2 — raw CoreBluetooth advertisement:** `beacon_kit_ios/raw_advertisement_events`
 - ยิง 1 event ต่อการเรียก `centralManager(_:didDiscover:advertisementData:rssi:)` 1 ครั้ง
@@ -483,7 +477,7 @@ flutter:
 
 **ผลที่ตามมาที่ต้องรู้ก่อนใช้งาน:**
 
-- `packages/beacon_kit/pubspec.yaml` **ไม่มี** `flutter.plugin.platforms.android` เลย (มีแค่ `ios.default_package: beacon_kit_ios`) — ตั้งใจเว้นไว้ ไม่ใช่ลืม
+- ~~`packages/beacon_kit/pubspec.yaml` **ไม่มี** `flutter.plugin.platforms.android` เลย~~ **แก้แล้วใน ADR-13 (31 ส.ค. 2026)** — ตอนนี้ endorse `android.default_package: beacon_kit_android` แล้ว ขอบเขตคือสแกนตอนแอปเปิดอยู่เท่านั้น
 - ถ้าเอา `packages/beacon_kit/example` ไปรันบน Android (`flutter run -d <android-device>`) แอปจะ build ผ่าน แต่พอเรียก `BeaconManager.scanAll()`/`GenericIBeaconEddystoneAdapter.scan()` จะได้ `MissingPluginException` ทันที เพราะไม่มี native Android plugin ลงทะเบียนรับ method channel `beacon_kit_ios/methods` เลย (ชื่อ channel นี้ก็ยังผูกกับ iOS โดยเฉพาะด้วย ยังไม่ได้ออกแบบเป็นชื่อกลางข้าม-platform)
 - งาน sprint หน้า: ต้องเริ่มด้วย `beacon-architect` ตัดสินใจ platform-channel contract ของ Android แยก (คนละ method/event channel name จาก iOS เพราะ Android ได้ raw ADV bytes ของ iBeacon ด้วย ไม่ผ่าน CoreLocation) แล้วค่อย implement `beacon_kit_android` (Kotlin) + เพิ่ม `android.default_package` ใน `beacon_kit/pubspec.yaml` + ทำให้ `IBeaconParser` (ที่ implement ไว้แล้วใน `beacon_kit_platform_interface` รอบนี้) ถูกเรียกใช้จริงฝั่ง Android เป็นครั้งแรก
 - `.github/workflows/ci.yml` มี job `build-android` เตรียมไว้แล้วแต่ comment ปิดอยู่ — เปิดพร้อมกับตอนที่ `beacon_kit_android` เริ่มมีโค้ดจริง
@@ -1280,3 +1274,402 @@ event ไว้แล้วส่งมาติด ๆ กัน โดยเ�
 **ต้องเก็บข้อมูลในสาขาจริงอย่างน้อย 3 จุดที่มีสภาพต่างกันก่อนล็อกค่าเหล่านี้ลง
 production** — ค่าในหัวข้อ 5 ใช้เป็น**ค่าเริ่มต้นสำหรับทดสอบ**เท่านั้น
 วิธีเก็บอยู่ในเช็คลิสต์ข้อ 16
+
+---
+
+## ADR-12: Android ก้อนที่ 1 — สแกนตอนแอปเปิดอยู่ (เพิ่ม 31 ส.ค. 2026)
+
+**สถานะ:** ✅ ค้นคว้าเสร็จ (หัวข้อ 1-4) · 🛑 **หยุดก่อนเขียนโค้ด** เพราะพบว่าไม่มี
+"สัญญากลาง" ให้ implement (หัวข้อ 5) — ต้องให้ผู้ถือโปรเจกต์ตัดสินก่อน
+
+**ขอบเขต:** เฉพาะการสแกนตอนแอปเปิดอยู่ (foreground) — ส่วนทำงานเบื้องหลังเป็นก้อน
+แยกที่จะทำหลังก้อนนี้เสร็จ ADR นี้จึงตอบเฉพาะสิ่งที่ก้อนที่ 1 ต้องรู้ บวกกับ
+บันทึกเรื่อง `PendingIntent` ไว้ล่วงหน้า
+
+**เครื่องทดสอบเป้าหมาย:** Redmi Note 9 · Android 12 (MIUI)
+
+### 1. สิทธิ์ที่ต้องประกาศและขอตอนรันบน Android 12
+
+**ยืนยันจากซอร์สจริงในเครื่อง** (`~/Library/Android/sdk/sources/android-37.0/`)
+และเอกสารทางการ ตาม CONTRIBUTING ข้อ 5
+
+**(ก) `BLUETOOTH_SCAN` — บังคับ และเป็น runtime permission**
+
+จาก `android/bluetooth/le/BluetoothLeScanner.java:113-115`:
+
+> "This method requires the calling app to have the
+> `android.Manifest.permission#BLUETOOTH_SCAN` permission."
+
+annotation จริงบนเมธอด (บรรทัด 122-127):
+
+```java
+@RequiresLegacyBluetoothAdminPermission
+@RequiresBluetoothScanPermission
+@RequiresBluetoothLocationPermission
+@RequiresPermission(allOf = {BLUETOOTH_PRIVILEGED, BLUETOOTH_SCAN}, ...)
+```
+
+เอกสารทางการยืนยันว่าเป็น runtime permission:
+
+> "The `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`, and `BLUETOOTH_SCAN` permissions
+> are **runtime permissions**. Therefore, you must explicitly request user approval
+> in your app before you can look for Bluetooth devices..."
+> — [Bluetooth permissions](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions)
+
+**(ข) `ACCESS_FINE_LOCATION` — ยังต้องมี เพราะ use case ของเราคือการอนุมานตำแหน่ง**
+
+จาก `BluetoothLeScanner.java:109-112`:
+
+> "An app must have `ACCESS_COARSE_LOCATION` permission in order to get results.
+> An App targeting Android Q or later must have `ACCESS_FINE_LOCATION` permission
+> in order to get results."
+
+**⚠️ กับดักที่สำคัญที่สุดของหัวข้อนี้ — `neverForLocation`**
+
+เอกสารทางการเสนอทางลัดว่าถ้าแอปไม่ได้ใช้ผลสแกนอนุมานตำแหน่ง ให้ประกาศ:
+
+```xml
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+                 android:usesPermissionFlags="neverForLocation" />
+```
+
+แล้วจะไม่ต้องขอ `ACCESS_FINE_LOCATION` เลย — **แต่เอกสารหน้าเดียวกันเตือนไว้ว่า:**
+
+> "If you include `neverForLocation` in your `android:usesPermissionFlags`,
+> **some BLE beacons are filtered from the scan results.**"
+
+**สรุปสำหรับโปรเจกต์นี้: ห้ามใช้ `neverForLocation` เด็ดขาด** — จุดประสงค์ทั้งหมด
+ของ `beacon_kit` คือการอนุมานว่าผู้ใช้อยู่สาขาไหน ซึ่งคือการอนุมานตำแหน่งตรงตัว
+การใส่ flag นี้จะทั้ง**ผิดความจริง**ที่ประกาศต่อระบบ และ**ทำให้ beacon บางตัวถูก
+กรองทิ้ง**จนอาการออกมาเป็น "สแกนไม่เจอบางตัว" ที่ดีบักยากมาก
+
+**(ค) `BLUETOOTH_CONNECT` — ก้อนที่ 1 ยังไม่ต้องใช้**
+
+`BLUETOOTH_CONNECT` ใช้สำหรับสื่อสารกับอุปกรณ์ที่จับคู่แล้ว ไม่ใช่การสแกน —
+ก้อนที่ 1 ไม่ต้องประกาศ ส่วน GATT connect/config ยังไม่ implement ทั้งสองแพลตฟอร์ม
+(README) เมื่อถึงตอนนั้นค่อยเพิ่ม
+
+**(ง) ความสัมพันธ์ระหว่างกัน — สรุปเป็นตาราง**
+
+| สิทธิ์ | ก้อนที่ 1 ต้องมีไหม | ประเภท | หมายเหตุ |
+|---|---|---|---|
+| `BLUETOOTH_SCAN` | ✅ ต้องมี | runtime (ต้องขอตอนรัน) | **ห้ามใส่ `neverForLocation`** |
+| `ACCESS_FINE_LOCATION` | ✅ ต้องมี | runtime | เพราะเราอนุมานตำแหน่งจริง |
+| `BLUETOOTH_CONNECT` | ❌ ยังไม่ต้อง | runtime | ไว้ตอนทำ GATT |
+| `BLUETOOTH` / `BLUETOOTH_ADMIN` (เก่า) | เฉพาะ `maxSdkVersion="30"` | install-time | สำหรับเครื่องที่ต่ำกว่า Android 12 |
+
+**🔶 ยังไม่ยืนยัน — ต้องทดสอบบนเครื่องจริง:** ผู้ใช้ต้องเปิดสวิตช์ Location
+ของระบบด้วยหรือไม่ (คนละเรื่องกับการ grant `ACCESS_FINE_LOCATION`) — ไม่พบประโยค
+ที่ระบุตรง ๆ ในเอกสารที่ตรวจ ให้ทดสอบบน Redmi Note 9 แล้วบันทึกผล
+
+### 2. การ throttle การสแกนในเบื้องหลัง
+
+**✅ ยืนยันแล้ว 2 ข้อ จากซอร์สจริง**
+
+**(ก) แอปที่ไม่ได้อยู่ foreground ถูกบังคับเป็นโหมดประหยัดพลังงาน**
+
+`android/bluetooth/le/ScanSettings.java:48-52`:
+
+> "Perform Bluetooth LE scan in low power mode. This is the default scan mode as it
+> consumes the least power. **This mode is enforced if the scanning application is
+> not in foreground.**"
+
+แปลว่าต่อให้แอปขอ `SCAN_MODE_LOW_LATENCY` ระบบจะบังคับลดเป็น `SCAN_MODE_LOW_POWER`
+ทันทีที่แอปไม่ได้อยู่ foreground — **ผลคือความถี่ที่ได้ผลสแกนลดลงอย่างมีนัยสำคัญ**
+นี่เป็นเหตุผลตรง ๆ ที่ก้อนที่ 2 (เบื้องหลัง) ต้องออกแบบต่างจากก้อนที่ 1 ไม่ใช่แค่
+"เอาโค้ดเดิมไปรันตอน background"
+
+**(ข) สแกนแบบไม่มี filter จะถูกหยุดเมื่อจอดับ**
+
+`BluetoothLeScanner.java:104-107`:
+
+> "For unfiltered scans, **scanning is stopped on screen off** to save power.
+> Scanning is resumed when screen is turned on again. To avoid this, use
+> `startScan(List, ScanSettings, ScanCallback)` with desired `ScanFilter`."
+
+**ผลต่อการออกแบบ: ต้องส่ง `ScanFilter` เสมอ ห้ามสแกนแบบไม่มี filter** — ตรงกับ
+แนวทางที่ฝั่ง iOS ทำอยู่แล้ว (`startBluetoothScan` ไม่มี wildcard scan ตาม ADR-4)
+
+**(ค) มี error code สำหรับ "สแกนถี่เกินไป"**
+
+`android/bluetooth/le/ScanCallback.java:62-63`:
+
+> "Fails to start scan as application tries to scan too frequently."
+> `public static final int SCAN_FAILED_SCANNING_TOO_FREQUENTLY = 6;`
+
+**🔶 แต่ตัวเลขจริงยังไม่ยืนยัน** — ตัวเลขที่พูดถึงกันทั่วไป ("เริ่ม/หยุดสแกนได้ไม่
+เกิน 5 ครั้งใน 30 วินาที") **ไม่พบในเอกสารทางการหรือในซอร์สที่ตรวจได้ในเครื่อง**
+ค่าจริงอยู่ในโค้ดของ Bluetooth apex (`ScanManager`/`AppScanStats`) ซึ่งไม่ได้มาพร้อม
+Android SDK — **ห้ามเขียนตัวเลขนี้ลงเอกสารหรือ hard-code ในโค้ดโดยอ้างว่าเป็นสเปก**
+สิ่งที่ทำได้แน่นอนคือ **ดัก `SCAN_FAILED_SCANNING_TOO_FREQUENTLY` แล้วรายงานเป็น
+error code ที่มีความหมาย** แทนการเงียบ
+
+**(ง) ข้อจำกัดที่กระทบก้อนที่ 2 โดยตรง (บันทึกไว้ก่อน)**
+
+> "Apps that target Android 12 or higher can't start foreground services while
+> running in the background, except for a few special cases. If an app attempts to
+> start a foreground service while running in the background, an exception occurs."
+> — [Behavior changes: Android 12](https://developer.android.com/about/versions/12/behavior-changes-12)
+
+### 3. `PendingIntent` mutability บน Android 12 (บันทึกไว้ก่อน ก้อนที่ 1 ยังไม่ใช้)
+
+> "If your app targets Android 12, you must **specify the mutability of each
+> `PendingIntent` object that your app creates.** This additional requirement
+> improves your app's security."
+> — [Behavior changes: Android 12](https://developer.android.com/about/versions/12/behavior-changes-12)
+
+วิธีตรวจว่าพลาดหรือไม่ (เอกสารหน้าเดียวกัน):
+
+> "Warning: Missing PendingIntent mutability flag [UnspecifiedImmutableFlag]"
+
+**เกี่ยวกับเราตรงไหน:** ก้อนที่ 2 ถ้าเลือกใช้
+`BluetoothLeScanner.startScan(List, ScanSettings, PendingIntent)` (API ที่ ADR-9
+ยกมาเป็นตัวเลือกสำหรับ background) จะต้องสร้าง `PendingIntent` ซึ่งบังคับระบุ
+mutability ทันที
+
+**🔶 ต้องตรวจก่อนใช้จริง:** ยังไม่ได้ยืนยันว่าเคสนี้ต้องใช้ `FLAG_MUTABLE` หรือ
+`FLAG_IMMUTABLE` — โดยหลักการ `PendingIntent` ที่ระบบต้องเติมข้อมูลผลสแกนเข้ามา
+มักต้องเป็น mutable แต่**ยังไม่พบเอกสารที่ระบุตรง ๆ สำหรับ `startScan` เคสนี้**
+ต้องยืนยันก่อนเขียนโค้ดก้อนที่ 2
+
+หมายเหตุอีกข้อจาก `BluetoothLeScanner.java:384-387`: ตอน `stopScan(PendingIntent)`
+> "When creating the PendingIntent parameter, please do not use the
+> `FLAG_CANCEL_CURRENT` flag. Otherwise, the stop scan may have no effect."
+
+### 4. ตอบ open question ของ ADR-9 ได้บางส่วนแล้ว
+
+| คำถามจาก ADR-9 | ตอบได้หรือยัง |
+|---|---|
+| ข้อจำกัด background scan throttling มีผลแค่ไหน | **ตอบแล้วบางส่วน** — บังคับ `SCAN_MODE_LOW_POWER` เมื่อไม่ได้อยู่ foreground + สแกนไม่มี filter หยุดเมื่อจอดับ (หัวข้อ 2) ส่วนตัวเลขการ throttle ยังไม่ยืนยัน |
+| Android เก็บชุด region ข้าม process แบบ `monitoredRegions` หรือไม่ | **ยังไม่ตอบ** — เป็นเรื่องของก้อนที่ 2 |
+| มี enter/exit semantics หรือต้องคำนวณเอง | **ยังไม่ตอบ** — ก้อนที่ 2 |
+| พฤติกรรมหลังผู้ใช้ force-stop แอป | **ยังไม่ตอบ** — ก้อนที่ 2 |
+
+### 5. 🛑 สิ่งที่พบแล้วต้องหยุด: **ไม่มี "สัญญากลาง" ให้ implement**
+
+โจทย์ระบุว่า `beacon_kit_android` ต้อง "implement ตามสัญญาที่
+`beacon_kit_platform_interface` กำหนดไว้ ห้ามแก้สัญญากลาง" — **ตรวจแล้วพบว่า
+`beacon_kit_platform_interface` ไม่ได้กำหนดสัญญาของ platform ไว้เลย**
+
+**หลักฐาน**
+
+`beacon_kit_platform_interface/lib/` มีแค่ 3 กลุ่ม ไม่มี abstract class ของ platform
+สักตัว:
+
+| กลุ่ม | ไฟล์ | เป็นสัญญาของ platform ไหม |
+|---|---|---|
+| entities | `beacon_advertisement.dart`, `ibeacon_frame.dart`, `eddystone_frame.dart`, … | ❌ เป็น data type |
+| parsers | `ibeacon_parser.dart`, `eddystone_parser.dart` | ❌ เป็น pure logic |
+| usecases | `plan_region_registration.dart`, `resolve_bigc_beacon_metadata.dart` | ❌ เป็น pure logic |
+
+สัญญาจริงชื่อ **`BeaconKitIosPlatform`** และอยู่ใน **`beacon_kit_ios`**
+(`packages/beacon_kit_ios/lib/src/beacon_kit_ios_platform.dart`)
+
+และ facade ผูกกับ iOS ตรง ๆ — `generic_ibeacon_eddystone_adapter.dart:3`:
+
+```dart
+import 'package:beacon_kit_ios/beacon_kit_ios.dart';
+```
+
+`beacon_kit/pubspec.yaml` ก็ endorse เฉพาะ iOS:
+
+```yaml
+plugin:
+  platforms:
+    ios:
+      default_package: beacon_kit_ios
+```
+
+**ทำไมถึงหยุดแทนที่จะเดินต่อ**
+
+ทางเลือกที่เดินต่อได้โดยไม่ถามมีแค่สองแบบ และทั้งคู่แย่:
+
+1. ให้ `beacon_kit_android` implement `BeaconKitIosPlatform` — แปลว่า package ของ
+   Android ต้อง `dependency` บน package ของ iOS และสืบทอด method ที่ชื่อ
+   `getIBeaconAuthorizationLevel` กับ `regionStateEvents` ที่นิยามด้วย semantic ของ
+   CoreLocation ล้วน **ผิดชัดเจน**
+2. สร้าง `BeaconKitAndroidPlatform` ขึ้นมาคู่ขนาน แล้วให้ adapter แตกเป็นสองทางตาม
+   แพลตฟอร์ม — ได้ผลลัพธ์ที่ **demo ผ่าน** แต่ทำให้มีสัญญาสองชุดที่ drift จากกันได้
+   และเป็นการฝัง `if (Platform.isAndroid)` ไว้ใน facade ซึ่งเป็นสิ่งที่ federated
+   plugin pattern มีไว้เพื่อกำจัดตั้งแต่แรก
+
+ADR-9 เขียนดักไว้แล้วว่าจุดนี้จะมาถึง:
+
+> "เมื่อถึงเวลาทำ Android ถ้าพบว่าต้องมี contract กลางจริง **ให้ยกขึ้นไปที่
+> `beacon_kit_platform_interface` พร้อมชื่อที่เป็นกลาง** แทนการดัด type ของ iOS
+> ให้ครอบ Android"
+
+นั่นคือทางที่ถูก แต่มันคือการ**แก้สัญญากลาง** ซึ่งโจทย์สั่งให้หยุดรายงานก่อน
+
+**ทางเลือกที่เสนอ (รอการตัดสิน)**
+
+| ทางเลือก | ทำอะไร | ผลต่อ iOS | ความเสี่ยง |
+|---|---|---|---|
+| **A. ยกสัญญาขึ้น platform interface** (ADR-9 แนะนำ) | สร้าง `BeaconKitPlatform` ใน `beacon_kit_platform_interface` ที่มีเฉพาะ **สิ่งที่ทั้งสองแพลตฟอร์มทำได้จริง** = `startBluetoothScan`/`stopBluetoothScan`/`rawAdvertisementEvents` · ส่วน iBeacon monitoring/region state/authorization level **คงไว้ที่ `beacon_kit_ios` ตามเดิม** เพราะเป็นความสามารถเฉพาะ iOS | ต้องแก้ `beacon_kit_ios` ให้ implement สัญญาใหม่เพิ่ม (ไม่ลบของเดิม) + แก้ adapter | ปานกลาง — มี test 80 ตัวคุมอยู่ |
+| **B. คู่ขนาน ไม่แตะของกลาง** | `BeaconKitAndroidPlatform` แยก + adapter แตกสองทาง | ไม่แตะ | ต่ำตอนนี้ **แต่หนี้จะโตเร็ว** — สัญญาสองชุด drift ได้ |
+| **C. เลื่อนก้อนที่ 1 ไปก่อน** | ทำ refactor สัญญาให้จบก่อนแล้วค่อยเริ่ม Android | — | เสียเวลา demo |
+
+**คำแนะนำของผม: ทางเลือก A** — และขอบเขตของมันเล็กกว่าที่ฟังดู เพราะก้อนที่ 1 ต้องการ
+แค่ 3 อย่าง (`startBluetoothScan` / `stopBluetoothScan` / `rawAdvertisementEvents`)
+ซึ่งเป็น**เส้นทาง CoreBluetooth ฝั่ง iOS ที่ไม่ผูกกับ CoreLocation เลย** และมี
+semantic ตรงกับ `BluetoothLeScanner` ของ Android แทบ 1:1 (ส่ง raw bytes กลับมาให้
+Dart parser ถอด) — ส่วนที่ผูกกับ iOS จริง ๆ (region monitoring, authorization level)
+**ไม่ต้องยกขึ้นมา** ปล่อยไว้ที่ `beacon_kit_ios` ตามที่ ADR-9 ตั้งใจ
+
+### 6. ข้อจำกัดระดับผลิตภัณฑ์ของ MIUI (บันทึกไว้ตั้งแต่ตอนนี้)
+
+**🔶 ยังไม่ยืนยันด้วยตัวเอง** — ยังไม่ได้รันบนเครื่องจริง และไม่พบเอกสารทางการของ
+Xiaomi ที่อ้างอิงได้ บันทึกเป็นสิ่งที่**ต้องทดสอบ** ไม่ใช่ข้อเท็จจริงที่ยืนยันแล้ว
+
+MIUI มีการจัดการพลังงานของตัวเองเพิ่มจาก Android มาตรฐาน ซึ่งอาจต้องให้ผู้ใช้
+เปิด Autostart และตั้ง battery saver เป็นไม่จำกัดด้วยมือ ไม่งั้นแอปถูกฆ่า
+
+**ถ้ายืนยันแล้วว่าจริง นี่คือข้อจำกัดระดับผลิตภัณฑ์ ไม่ใช่สิ่งที่แก้ได้ด้วยโค้ด** —
+ไม่มี API ให้แอปเปิด Autostart ให้ตัวเอง ทางแก้เดียวคือ **UX ที่พาผู้ใช้ไปตั้งค่า**
+(หน้าจออธิบาย + ปุ่มลัดไปหน้า setting ถ้าเปิดได้) ซึ่งต้องวางแผนร่วมกับทีมออกแบบ
+ตั้งแต่ต้น ไม่ใช่ปะทีหลัง
+
+⚠️ **ต้องไม่ให้เรื่องนี้ไปปนกับก้อนที่ 1** — ก้อนที่ 1 คือสแกนตอนแอปเปิดอยู่ ซึ่ง
+ไม่ได้รับผลจาก Autostart/battery saver ถ้าเอาไปเขียนใน README ตอนนี้ในบริบทของก้อน
+ที่ 1 จะทำให้คนเข้าใจผิดว่าต้องตั้งค่าพวกนี้ก่อนถึงจะ demo ได้
+
+---
+
+## ADR-13: ยกสัญญากลางขึ้น platform interface — จาก federated pattern ที่ไม่สมบูรณ์ (เพิ่ม 31 ส.ค. 2026)
+
+**สถานะ:** ตัดสินใจแล้วและ implement แล้ว · ทางเลือก A ตาม ADR-12 หัวข้อ 5
+
+### 1. สิ่งที่ตรวจพบตอนเพิ่มแพลตฟอร์มที่สอง
+
+**federated plugin pattern ของโปรเจกต์นี้ไม่สมบูรณ์มาตั้งแต่ต้น และไม่มีใครรู้
+เพราะมีแพลตฟอร์มเดียว**
+
+| ควรเป็น | เป็นจริง (ก่อน ADR นี้) |
+|---|---|
+| `beacon_kit_platform_interface` ถือสัญญาของ platform | มีแต่ entity / parser / usecase — **ไม่มี abstract class ของ platform เลย** |
+| facade `beacon_kit` คุยผ่านสัญญากลาง ไม่รู้จักแพลตฟอร์ม | `generic_ibeacon_eddystone_adapter.dart:3` → `import 'package:beacon_kit_ios/beacon_kit_ios.dart';` |
+| สัญญามีชื่อเป็นกลาง | สัญญาจริงชื่อ `BeaconKitIosPlatform` อยู่ใน `beacon_kit_ios` |
+
+โครงสร้างโฟลเดอร์**ดูเหมือน** federated ครบทุกอย่าง แต่เส้นทางการพึ่งพาจริงคือ
+`beacon_kit` → `beacon_kit_ios` โดยตรง ซึ่งเป็นสิ่งที่ pattern นี้มีไว้เพื่อกำจัด
+
+**ตรวจพบได้ก็ต่อเมื่อมีแพลตฟอร์มที่สองมาจริง** — ไม่มีเทสต์ไหนจับได้ ไม่มี lint
+ไหนเตือน และเอกสารก็เขียนไว้ว่าเป็น federated plugin อย่างถูกต้องตามที่ตั้งใจ
+
+### 2. ยกอะไรขึ้นไป และตั้งใจไม่ยกอะไร
+
+สร้าง **`BeaconKitPlatform`** ใน `beacon_kit_platform_interface` ที่มี **3 อย่าง
+เท่านั้น**:
+
+| ยกขึ้น | เหตุผล |
+|---|---|
+| `startBluetoothScan(List<String> serviceUuids)` | iOS `CBCentralManager` กับ Android `BluetoothLeScanner` รับ service UUID แล้วเริ่มสแกนเหมือนกัน |
+| `stopBluetoothScan()` | เหมือนกันทั้งสองฝั่ง |
+| `rawAdvertisementEvents` | ทั้งคู่คืน **byte ดิบ** ให้ Dart parser ถอด — semantic ตรงกัน 1:1 |
+
+**ตั้งใจไม่ยก** (คงไว้ที่ `beacon_kit_ios` ตามที่ ADR-9 กำหนดไว้ล่วงหน้า):
+
+| ไม่ยก | เหตุผล |
+|---|---|
+| `startIBeaconMonitoring` / `stopIBeaconMonitoring` | สัญญาปัจจุบันคือ "ลงทะเบียน region กับ OS แล้วมันอยู่ข้าม process" ซึ่งเป็นความสามารถของ CoreLocation — **ADR-9 ตารางคำถามยังไม่มีคำตอบว่า Android มีเทียบเท่าหรือไม่** |
+| `regionStateEvents` | enter/exit ที่ OS คำนวณให้ ยังไม่รู้ว่า Android ต้องคำนวณเองจากการไม่เจอ scan result หรือไม่ |
+| `getIBeaconAuthorizationLevel` | `always` / `whenInUse` ของ CoreLocation ไม่มีอะไรเทียบตรงตัวบนโมเดล runtime permission ของ Android |
+| flow ขอสิทธิ์ของ Android | กลับกัน — `requestScanPermissions` / `permanentlyDenied` ไม่มีอะไรเทียบบน iOS จึงอยู่ที่ `beacon_kit_android` |
+
+**ทำไมไม่ยกทั้งหมดแล้วให้ฝั่งที่ทำไม่ได้ throw `UnsupportedError`:** สัญญาจะบอกว่า
+"มีเมธอดนี้" ทั้งที่ใช้ไม่ได้ ผู้เรียกจะรู้ตอน runtime แทนที่จะรู้ตอน compile —
+และ ADR-9 เตือนไว้ตรง ๆ แล้วว่า **ห้าม implement ให้ "ดูเหมือนทำได้"**
+
+### 3. ใครเป็นคน register — และทำไมไม่มี `Platform.isAndroid` ในไลบรารีเลย
+
+ใช้ `dartPluginClass` ของ Flutter: `BeaconKitIos.registerWith()` และ
+`BeaconKitAndroid.registerWith()` ตั้ง `BeaconKitPlatform.instance` ให้ตัวเอง
+Flutter สร้าง registrant ที่เรียก**เฉพาะของแพลตฟอร์มที่กำลังรันอยู่**
+
+ยืนยันจาก `dart_plugin_registrant.dart` ที่ถูกสร้างจริงหลัง build:
+
+```dart
+if (Platform.isAndroid) {
+  beacon_kit_android.BeaconKitAndroid.registerWith();
+} else if (Platform.isIOS) {
+  beacon_kit_ios.BeaconKitIos.registerWith();
+}
+```
+
+`Platform.is*` ตัวเดียวที่มีอยู่ในระบบจึงเป็นโค้ดที่ **Flutter สร้างให้** ไม่ใช่
+โค้ดที่เราเขียน
+
+### 4. หนี้ที่ยังเหลือ และแผนกำจัด
+
+**เส้นทาง iBeacon ยังไม่ผ่านสัญญากลาง** → example app จึงยังต้องรู้ว่ากำลังรันบน
+แพลตฟอร์มไหน (ตัวแปร `_splitByPlatformUntilAdr13Step4` ใน `main.dart`)
+
+**ข้อบังคับ: การแยกตามแพลตฟอร์มอยู่ใน example app เท่านั้น** ตรวจได้ด้วย:
+
+```bash
+grep -rn "Platform\.is" packages/*/lib | grep -v "///"
+# ต้องไม่เจออะไรเลย
+```
+
+⚠️ ต้องกรอง `///` ออก ไม่งั้นจะเจอคอมเมนต์ที่**อธิบายว่าทำไมถึงไม่มี** `Platform.is`
+แล้วสรุปผิดว่ามี — เป็นกับดักแบบเดียวกับที่เจอตอนตรวจ `neverForLocation` ใน merged
+manifest (manifest merger เก็บคอมเมนต์ไว้ด้วย ทำให้ `grep` ธรรมดาได้ false positive)
+
+**แผนกำจัด (ทำหลังก้อนที่ 2 ของ Android):**
+
+1. ก้อนที่ 2 ตอบตารางคำถามใน ADR-9 ให้ครบ — Android เก็บ region ข้าม process ได้
+   ไหม / มี enter-exit semantics หรือต้องคำนวณเอง / force-stop แล้วเป็นอย่างไร
+2. ถ้าตอบแล้วพบว่า **ทำได้เทียบเท่า** → ยกขึ้นสัญญากลางด้วย**ชื่อที่เป็นกลาง**
+   (ไม่ใช่ `IBeacon*` ที่ผูกกับ iOS) แล้วลบตัวแปรแยกแพลตฟอร์มใน example ทิ้ง
+3. ถ้าพบว่า **ทำไม่ได้เทียบเท่า** → ห้ามยกขึ้น ให้แยกเป็นความสามารถคนละชื่อตาม
+   ที่แต่ละแพลตฟอร์มทำได้จริง แล้วให้แอปเลือกเองอย่างรู้ตัว
+4. ทั้งสองทาง `AdvertisementSource` (ที่เปลี่ยนชื่อใน ADR นี้แล้ว) ไม่ต้องแก้อีก
+
+### 5. เปลี่ยนชื่อค่าใน `AdvertisementSource`
+
+| เดิม | ใหม่ |
+|---|---|
+| `coreLocation` | `osDecoded` |
+| `coreBluetooth` | `rawParsed` |
+| `android` | **ยุบรวมเข้ากับ `rawParsed`** |
+
+**เหตุผล:** ค่าเดิมตั้งชื่อตาม API ของ iOS สองตัวปนกับชื่อแพลตฟอร์มหนึ่งตัว —
+ไม่ใช่แค่ตั้งชื่อไม่สวย แต่**ผิดระดับของ abstraction** สิ่งที่ผู้เรียกต้องตัดสินใจ
+จากค่านี้มีอย่างเดียวคือ **"ฟิลด์ `ibeacon*` เชื่อได้แค่ไหน"** ซึ่งขึ้นกับว่า OS
+ถอดให้หรือเราถอดเอง ไม่ได้ขึ้นกับว่าเป็น iOS หรือ Android
+
+`coreBluetooth` กับ `android` มีคุณสมบัติเหมือนกันทุกประการในแง่นี้ การแยกสองค่า
+จึงล่อให้ผู้เรียกเขียน `if (แพลตฟอร์ม)` ทั้งที่ไม่ควรต้องรู้ — **ยุบเหลือค่าเดียว**
+
+**ข้อมูลไม่หายจากการยุบ:** ถ้าต้องรู้จริง ๆ ว่าอุปกรณ์มาจากวิทยุฝั่งไหน
+`BeaconDeviceId.kind` แยก `macAddress` (Android) ออกจาก
+`coreBluetoothPeripheralId` (iOS) อยู่แล้วตั้งแต่ ADR-1 — แค่ย้ายไปอยู่ที่ที่
+ถูกต้องกว่า
+
+### 6. ⚠️ ข้อสังเกตเชิงระบบ — abstraction ที่มี implementation เดียวยังไม่เคยถูกทดสอบ
+
+`BeaconKitIosPlatform` ถูกออกแบบมาเป็น "สัญญากลาง" ตั้งแต่ต้น มี test 21 ตัวคุม
+มีเอกสาร ADR กำกับครบ — **และมันก็ยังไม่ใช่สัญญากลางจริงอยู่ดี** เพราะไม่เคยมี
+implementation ที่สองมาพิสูจน์ว่ามันครอบได้จริง
+
+> **abstraction ที่มี implementation เดียว ยังไม่เคยถูกทดสอบในฐานะ abstraction**
+> มันถูกทดสอบแค่ในฐานะ "โค้ดที่ทำงานได้" เท่านั้น
+
+**ในโปรเจกต์นี้ยังเหลืออีกตัวที่จะพังแบบเดียวกัน: vendor adapter**
+
+`BeaconAdapter` / `GenericIBeaconEddystoneAdapter` ออกแบบไว้ให้รองรับหลายยี่ห้อ
+แต่ปัจจุบันมี**ยี่ห้อเดียวคือ KKM K9P** และทุกการตัดสินใจที่ผ่านมา (รูปแบบ
+`deviceId`, การมี `supportsConnect`, สมมติฐานเรื่อง GATT auth) ตั้งอยู่บนข้อมูลของ
+ยี่ห้อเดียว
+
+**คาดได้ว่าตอนยี่ห้อที่สองมา จะเจอปัญหาชนิดเดียวกับที่เจอใน ADR นี้** — สัญญาที่
+ดูเป็นกลางจะกลายเป็นสัญญาที่ผูกกับ KKM โดยไม่มีใครตั้งใจ
+
+**บันทึกเป็นความเสี่ยงที่รู้แล้ว ไม่ใช่ปัญหาที่ต้องแก้ตอนนี้** — การพยายามทำให้
+abstraction เป็นกลางโดยไม่มีตัวอย่างที่สองคือการเดา ซึ่งแพงกว่าและมักเดาผิด
+สิ่งที่ทำได้ตอนนี้คือ **รู้ล่วงหน้าว่าจะต้องมีรอบ refactor** และอย่าสัญญากับใครว่า
+"เพิ่มยี่ห้อใหม่ = เขียน adapter ใหม่ตัวเดียวจบ" จนกว่าจะผ่านยี่ห้อที่สองมาแล้วจริง
+
+**สิ่งที่ควรทำเมื่อยี่ห้อที่สองมา:** ทำแบบเดียวกับรอบนี้ — implement ให้ทำงานได้
+ก่อนโดยยอมรับหนี้ชั่วคราวที่จำกัดขอบเขตไว้ที่จุดเดียว แล้วค่อย refactor สัญญาจาก
+ข้อมูลจริงสองชุด ไม่ใช่จากการเดาล่วงหน้า

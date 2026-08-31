@@ -1,0 +1,40 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      ADR-12: สิทธิ์ที่จำเป็นสำหรับสแกน BLE — ประกาศไว้ที่ plugin เพื่อให้แอปที่ใช้
+      SDK นี้ได้ไปโดยอัตโนมัติผ่าน manifest merger ไม่ต้องจำเอง
+
+      ⚠️ **ห้ามเพิ่ม android:usesPermissionFlags="neverForLocation" เด็ดขาด**
+      เอกสารทางการของ Android ระบุเองว่า "If you include neverForLocation in your
+      android:usesPermissionFlags, some BLE beacons are filtered from the scan
+      results." — และ use case ของ beacon_kit คือการอนุมานว่าผู้ใช้อยู่สาขาไหน
+      ซึ่งคือการอนุมานตำแหน่งตรงตัว การประกาศ flag นั้นจึงทั้งผิดความจริงและ
+      ทำให้ beacon บางตัวหายจากผลสแกนแบบที่ดีบักยากมาก
+
+      ⚠️ หมายเหตุสำหรับคนที่มาตรวจภายหลัง: manifest merger **เก็บคอมเมนต์นี้ไว้ใน
+      merged manifest ด้วย** การ `grep neverForLocation` ใน build output จึงเจอ
+      คำนี้เสมอทั้งที่ไม่มีการประกาศจริง — ตรวจให้ถูกด้วยการดู attribute แทน:
+        grep -o '<uses-permission[^>]*>' <merged AndroidManifest.xml>
+      ต้องไม่มี `usesPermissionFlags` อยู่ในบรรทัดของ BLUETOOTH_SCAN
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+
+    <!--
+      ยังจำเป็นบน Android 12 เพราะเราอนุมานตำแหน่งจริง
+      (BluetoothLeScanner.java:109-112: "An App targeting Android Q or later must
+      have ACCESS_FINE_LOCATION permission in order to get results.")
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- สำหรับเครื่องที่ต่ำกว่า Android 12 ซึ่งยังใช้ชุดสิทธิ์เดิม -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+</manifest>
