@@ -30,12 +30,24 @@ import io.flutter.plugin.common.PluginRegistry
 import java.util.UUID
 
 /**
- * Entry point ของ `beacon_kit_android` — ขอบเขตตอนนี้คือ **สแกนตอนแอปเปิดอยู่
- * เท่านั้น** ยังไม่มีส่วนทำงานเบื้องหลัง (จะทำเป็นก้อนแยก)
+ * Entry point ของ `beacon_kit_android`
+ *
+ * ## ขอบเขตตอนนี้: สองเส้นทางที่ **แยกกันโดยสิ้นเชิง**
+ *
+ * | เส้นทาง | ใช้อะไร | ทำงานเมื่อ |
+ * |---|---|---|
+ * | สแกนตอนแอปเปิดอยู่ (ก้อนที่ 1, ADR-12) | `startScan(..., ScanCallback)` | เฉพาะตอน process มีชีวิตและมีคนฟัง stream |
+ * | เฝ้า region เบื้องหลัง (ก้อนที่ 2, ADR-14) | `startScan(..., PendingIntent)` + นาฬิกาปลุก | แม้ process ตายไปแล้ว — ระบบสร้าง process ใหม่มาส่งให้ |
+ *
+ * **สองเส้นทางนี้ไม่ใช่ "โหมด" ของกันและกัน** ใช้พร้อมกันได้และไม่รบกวนกัน แต่ก็
+ * ไม่ทดแทนกัน: เส้นทางแรกให้ advertisement ดิบทุกใบ เส้นทางที่สองให้แค่ enter/exit
  *
  * ส่ง **byte ดิบ** กลับไปให้ Dart parser ถอด ไม่มี parser ฝั่ง Kotlin เลย —
  * ตั้งใจให้ทั้ง iOS และ Android ใช้โค้ดถอดรหัสชุดเดียวกันใน
- * `beacon_kit_platform_interface`
+ * `beacon_kit_platform_interface` เส้นทางเบื้องหลังรักษากติกานี้ไว้ได้ด้วยการ
+ * ลงทะเบียนสแกน **หนึ่งครั้งต่อหนึ่ง region** พร้อม `ScanFilter` ที่เจาะจงถึงระดับ
+ * UUID/major/minor จึงรู้ว่าเป็น region ไหนโดยไม่ต้องถอด byte เลย
+ * (ดู `BeaconRegionSpec.toScanFilter`)
  */
 class BeaconKitAndroidPlugin :
     FlutterPlugin,
@@ -46,6 +58,20 @@ class BeaconKitAndroidPlugin :
     private companion object {
         const val METHOD_CHANNEL = "beacon_kit_android/methods"
         const val EVENT_CHANNEL = "beacon_kit_android/raw_advertisement_events"
+
+        /**
+         * ช่องของ event เข้า/ออก region ที่คำนวณเบื้องหลัง (ADR-14)
+         *
+         * **แยกจาก `EVENT_CHANNEL` ด้วยเหตุผลเดียวกับที่ ADR-6 แยกฝั่ง iOS:**
+         * ผลสแกนดิบมาถี่มาก ส่วน enter/exit นาน ๆ ครั้ง ถ้ารวมช่องเดียวกัน
+         * ผู้ฟังที่สนใจแค่ enter/exit ต้อง deserialize แล้วกรองทิ้งตลอดเวลา
+         *
+         * **ชื่อไม่มีคำว่า `ibeacon` โดยตั้งใจ** — ฝั่ง iOS ใช้
+         * `region_state_events` ที่มาจาก CoreLocation ส่วนฝั่งนี้เราคำนวณเอง
+         * ชื่อ `background_region_events` บอกที่มาตรงตัวว่าเป็นเส้นทางเบื้องหลัง
+         */
+        const val BACKGROUND_REGION_EVENT_CHANNEL =
+            "beacon_kit_android/background_region_events"
 
         /** request code ของเราเอง — เลือกค่าที่ไม่ชนกับ plugin อื่นทั่วไป */
         const val PERMISSION_REQUEST_CODE = 0xBEAC
@@ -64,6 +90,8 @@ class BeaconKitAndroidPlugin :
 
     private var methodChannel: MethodChannel? = null
     private var eventChannel: EventChannel? = null
+    private var backgroundRegionChannel: EventChannel? = null
+    private var backgroundRegionSink: EventChannel.EventSink? = null
     private var applicationContext: Context? = null
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
@@ -101,14 +129,61 @@ class BeaconKitAndroidPlugin :
                 }
             })
         }
+        backgroundRegionChannel =
+            EventChannel(binding.binaryMessenger, BACKGROUND_REGION_EVENT_CHANNEL).apply {
+                setStreamHandler(object : EventChannel.StreamHandler {
+                    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                        backgroundRegionSink = events
+                        BackgroundRegionMonitor.setFlutterSink { event ->
+                            mainHandler.post { backgroundRegionSink?.success(event.toMap()) }
+                        }
+                        // ส่ง event ที่คิวไว้ตอนไม่มี engine ให้ครบก่อน แล้วค่อยรับ
+                        // ของใหม่ — ต้องทำ **หลัง** ตั้ง sink เพื่อไม่ให้ event ที่มา
+                        // ระหว่างนั้นตกหล่นระหว่างสองขั้นตอน
+                        drainQueuedBackgroundEvents()
+                    }
+
+                    override fun onCancel(arguments: Any?) {
+                        // ถอด sink ก่อนล้างตัวแปร เพื่อให้ event ที่เกิดหลังจากนี้
+                        // ถูกคิวลงดิสก์แทนการหายไปเงียบ ๆ
+                        BackgroundRegionMonitor.setFlutterSink(null)
+                        backgroundRegionSink = null
+                    }
+                })
+            }
+    }
+
+    /**
+     * ส่ง event ที่เกิดตอนไม่มี Flutter engine ออกไปให้ Dart
+     *
+     * เส้นทางนี้คือสิ่งที่ทำให้ "แอปถูกปลุกตอนปิดอยู่แล้วเจอ beacon" ไปถึงผู้ใช้ SDK
+     * ได้จริง — ถ้าไม่มี event เหล่านั้นจะหายทั้งหมดและไม่มีใครรู้ว่าเคยมี
+     */
+    private fun drainQueuedBackgroundEvents() {
+        val context = applicationContext ?: return
+        val queued = BackgroundRegionStore(context).drainPendingEvents()
+        if (queued.isEmpty()) return
+        mainHandler.post {
+            for (event in queued) {
+                backgroundRegionSink?.success(event.toMap())
+            }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         stopScanInternal()
         methodChannel?.setMethodCallHandler(null)
         eventChannel?.setStreamHandler(null)
+        backgroundRegionChannel?.setStreamHandler(null)
+        // **ห้ามเรียก BackgroundRegionMonitor.stop() ตรงนี้** — engine ถูก detach
+        // ทุกครั้งที่ผู้ใช้ปิดแอป ซึ่งเป็นเวลาที่การเฝ้าเบื้องหลัง *ต้อง* ยังอยู่
+        // เป็นกับดักแบบเดียวกับที่ฝั่ง iOS ห้ามเรียก stopMonitoring ในเส้นทาง launch
+        // (ดูคอมเมนต์ใน IBeaconRangingManager.init())
+        BackgroundRegionMonitor.setFlutterSink(null)
+        backgroundRegionSink = null
         methodChannel = null
         eventChannel = null
+        backgroundRegionChannel = null
         applicationContext = null
         // คำขอที่ค้างต้องถูกปลดเสมอ ไม่งั้นฝั่ง Dart ค้างตลอดไป
         failPendingPermissionResult("engine ถูก detach ก่อนผู้ใช้ตอบ prompt")
@@ -120,6 +195,10 @@ class BeaconKitAndroidPlugin :
         activityBinding = binding
         activity = binding.activity
         binding.addRequestPermissionsResultListener(this)
+        // มี Activity = process นี้มี UI แล้ว จึงไม่ใช่ process ที่ระบบสร้างขึ้นมา
+        // เองล้วน ๆ — ค่านี้ถูกติดไปกับทุก event เบื้องหลังเพื่อให้แยกได้ภายหลังว่า
+        // event เกิดตอนแอปเปิดอยู่หรือตอนแอปถูกปิดไปแล้ว
+        HostProcessInfo.markForeground()
     }
 
     override fun onDetachedFromActivityForConfigChanges() = onDetachedFromActivity()
@@ -144,6 +223,17 @@ class BeaconKitAndroidPlugin :
                 stopScanInternal()
                 result.success(null)
             }
+            "startBackgroundRegionMonitoring" -> handleStartBackgroundMonitoring(call, result)
+            "stopBackgroundRegionMonitoring" -> {
+                val context = applicationContext
+                if (context == null) {
+                    result.error("BLUETOOTH_UNAVAILABLE", "ยังไม่ได้ attach กับ engine", null)
+                } else {
+                    BackgroundRegionMonitor.stop(context)
+                    result.success(null)
+                }
+            }
+            "getBackgroundRegionMonitoringStatus" -> handleBackgroundStatus(result)
             "getScanPermissionStatus" -> result.success(currentPermissionStatus())
             "requestScanPermissions" -> handleRequestPermissions(result)
             "openAppSettings" -> handleOpenAppSettings(result)
@@ -423,6 +513,106 @@ class BeaconKitAndroidPlugin :
         val pending = pendingPermissionResult ?: return
         pendingPermissionResult = null
         pending.error("PERMISSION_REQUEST_ABORTED", reason, null)
+    }
+
+    // ---- เฝ้า region เบื้องหลัง (ADR-14) ----
+
+    /**
+     * ลงทะเบียนเฝ้า region เบื้องหลัง
+     *
+     * **ตอบกลับด้วยผลรายอันเสมอ ไม่ตอบแค่ success/fail รวม** — `startScan` ที่รับ
+     * `PendingIntent` คืน `int` แทนการ throw ถ้าเราสรุปเป็นค่าเดียว ผู้เรียกจะไม่มี
+     * ทางรู้ว่า region ไหนลงทะเบียนไม่ติด และอาการจะออกมาเป็น "บางสาขาใช้ได้ บาง
+     * สาขาไม่ได้" ที่ไล่หาสาเหตุยากมาก
+     */
+    private fun handleStartBackgroundMonitoring(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val context = applicationContext
+        if (context == null) {
+            result.error("BLUETOOTH_UNAVAILABLE", "ยังไม่ได้ attach กับ engine", null)
+            return
+        }
+
+        val rawRegions = call.argument<List<Map<*, *>>>("regions")
+        if (rawRegions == null || rawRegions.isEmpty()) {
+            result.error(
+                "INVALID_ARGUMENT",
+                "'regions' ต้องเป็น List ที่มีอย่างน้อย 1 region",
+                null,
+            )
+            return
+        }
+
+        val regions = rawRegions.mapNotNull(BeaconRegionSpec::fromMap)
+        if (regions.size != rawRegions.size) {
+            result.error(
+                "INVALID_REGION_UUID",
+                "มี region ที่ไม่มี identifier หรือ uuid ที่ถูกต้อง",
+                null,
+            )
+            return
+        }
+        val duplicateIdentifiers = regions.groupBy { it.identifier }
+            .filterValues { it.size > 1 }
+            .keys
+        if (duplicateIdentifiers.isNotEmpty()) {
+            // identifier คือกุญแจของทุกอย่างที่เก็บลงดิสก์ ถ้าซ้ำ สถานะของสอง region
+            // จะทับกันเงียบ ๆ แล้วรายงาน enter/exit ผิดโดยไม่มีอะไรฟ้อง
+            result.error(
+                "INVALID_ARGUMENT",
+                "identifier ของ region ต้องไม่ซ้ำกัน: $duplicateIdentifiers",
+                null,
+            )
+            return
+        }
+
+        val exitTimeoutSeconds = (call.argument<Number>("exitTimeoutSeconds"))?.toInt()
+            ?: BackgroundRegionStore.DEFAULT_EXIT_TIMEOUT_SECONDS
+        if (exitTimeoutSeconds <= 0) {
+            result.error(
+                "INVALID_ARGUMENT",
+                "'exitTimeoutSeconds' ต้องมากกว่า 0",
+                null,
+            )
+            return
+        }
+
+        val started = BackgroundRegionMonitor.start(context, regions, exitTimeoutSeconds)
+        result.success(
+            mapOf(
+                "registered" to started.registered,
+                "failed" to started.failed,
+            ),
+        )
+    }
+
+    /**
+     * สถานะปัจจุบันของการเฝ้าเบื้องหลัง — คู่ขนานกับสิ่งที่ฝั่ง iOS ได้จาก
+     * `CLLocationManager.monitoredRegions`
+     *
+     * ⚠️ **แต่ที่มาต่างกันโดยสิ้นเชิง และห้ามอธิบายให้ฟังดูเหมือนกัน** ฝั่ง iOS
+     * ค่านั้นมาจาก **ระบบ** เป็นคำตอบว่า "ระบบกำลังเฝ้าอะไรอยู่จริง" ส่วนค่านี้
+     * มาจาก **ไฟล์ของเราเอง** เป็นคำตอบว่า "เราเคยสั่งให้เฝ้าอะไรไว้"
+     * ถ้าระบบล้างการลงทะเบียนทิ้ง (เช่นหลัง force-stop) ค่านี้จะยัง**บอกว่ามี**
+     * ทั้งที่ไม่มีอะไรทำงานอยู่แล้ว — Android ไม่มี API ให้ถามความจริงข้อนั้น
+     */
+    private fun handleBackgroundStatus(result: MethodChannel.Result) {
+        val context = applicationContext
+        if (context == null) {
+            result.error("BLUETOOTH_UNAVAILABLE", "ยังไม่ได้ attach กับ engine", null)
+            return
+        }
+        val store = BackgroundRegionStore(context)
+        result.success(
+            mapOf(
+                "isActive" to store.isActive,
+                "regionIdentifiers" to store.regions.map { it.identifier },
+                "exitTimeoutSeconds" to store.exitTimeoutSeconds,
+                "queuedEventCount" to store.pendingEventCount(),
+            ),
+        )
     }
 
     private fun handleOpenAppSettings(result: MethodChannel.Result) {

@@ -39,11 +39,18 @@ class LaunchDiagnostics {
   /// process นี้เปิดมานานกี่วินาทีแล้ว
   final double processUptimeSeconds;
 
+  /// ตัวระบุ process ที่ native สุ่มไว้ตอนเริ่ม — ค่าเดียวกับคอลัมน์ที่ 2 ของ log
+  ///
+  /// มีไว้ให้หน้าจอแสดงได้ว่า "บรรทัดที่คุณเห็นใน log ตอนนี้มาจาก process เดียวกับ
+  /// ที่กำลังรันอยู่หรือไม่" — คำถามที่ก่อนหน้านี้ตอบได้ด้วยการเดาจาก uptime เท่านั้น
+  final String processId;
+
   const LaunchDiagnostics({
     required this.launchedByLocationKey,
     required this.hasEverBecomeActive,
     required this.applicationState,
     required this.processUptimeSeconds,
+    required this.processId,
   });
 
   /// สรุปเป็น [AppRunContext] จากสัญญาณดิบ
@@ -70,8 +77,12 @@ class LaunchDiagnostics {
     return AppRunContext.unknown;
   }
 
-  /// สรุปสัญญาณดิบเป็นข้อความสั้นสำหรับต่อท้ายบรรทัด log
+  /// สรุปสัญญาณดิบเป็นข้อความสั้นสำหรับแสดงบนหน้าจอ
+  ///
+  /// **ไม่ใช่ตัวที่เขียนลง log** — ผู้เขียน log คือโค้ด native ฝั่งเดียว (ADR-10)
+  /// ตัวนี้มีไว้ให้หน้าจอแสดงสถานะปัจจุบันเท่านั้น
   String get rawSignalSummary =>
+      'pid=$processId '
       'launchKey=$launchedByLocationKey '
       'everActive=$hasEverBecomeActive '
       'state=$applicationState '
@@ -96,6 +107,9 @@ class ExampleDiagnostics {
       applicationState: (raw?['applicationState'] as String?) ?? 'unknown',
       processUptimeSeconds:
           (raw?['processUptimeSeconds'] as num?)?.toDouble() ?? 0,
+      // `?` แทนการเดา — ถ้า native ไม่ส่งมา ต้องเห็นบนหน้าจอว่าไม่รู้ ไม่ใช่เห็น
+      // ค่าที่ดูเหมือนของจริง
+      processId: (raw?['processId'] as String?) ?? '?',
     );
   }
 

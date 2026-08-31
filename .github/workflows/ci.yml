@@ -41,6 +41,10 @@ jobs:
         package:
           - packages/beacon_kit_platform_interface
           - packages/beacon_kit_ios
+          # เพิ่มตอน ADR-14 — แพ็กเกจนี้มีเทสต์ Dart ของตัวเองแล้ว (สัญญาที่ข้าม
+          # method/event channel ของเส้นทางเบื้องหลัง) ถ้าไม่ใส่ใน matrix เทสต์
+          # เหล่านั้นจะไม่เคยรันใน CI เลยแม้แต่ครั้งเดียว
+          - packages/beacon_kit_android
           - packages/beacon_kit
           - packages/beacon_kit/example
     steps:
@@ -74,23 +78,44 @@ jobs:
 
   # Job build ตรวจสอบว่าคอมไพล์ผ่านจริง (ไม่ sign/publish)
   #
-  # build-android ยัง comment ไว้ — Android (beacon_kit_android) ถูกเลื่อนไป
-  # sprint หน้าตามที่ผู้ใช้สั่ง ยังไม่มี Kotlin implementation ให้ build
-  # (ดู ARCHITECTURE.md หัวข้อ "Android — deferred")
-  #
-  # build-android:
-  #   name: Build Android (debug, no signing)
-  #   runs-on: ubuntu-latest
-  #   needs: analyze-test
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: subosito/flutter-action@v2
-  #       with:
-  #         channel: stable
-  #     - working-directory: packages/beacon_kit/example
-  #       run: flutter pub get
-  #     - working-directory: packages/beacon_kit/example
-  #       run: flutter build apk --debug
+  # เปิดใช้งานตอน ADR-14 — เดิม comment ไว้ด้วยเหตุผลว่า "ยังไม่มี Kotlin
+  # implementation ให้ build" ซึ่งไม่จริงแล้วตั้งแต่ ADR-12
+  build-android:
+    name: Build Android (debug) · Kotlin unit tests
+    runs-on: ubuntu-latest
+    needs: analyze-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/beacon_kit/example
+        run: flutter pub get
+
+      - name: flutter build apk --debug
+        working-directory: packages/beacon_kit/example
+        run: flutter build apk --debug
+
+      # `flutter test` ไม่รัน unit test ของ Kotlin เลย (คนละ test runner) —
+      # เหตุผลเดียวกับที่มันไม่รัน XCTest ถ้าไม่มี step นี้ เทสต์ที่ล็อกลำดับไบต์ของ
+      # ScanFilter และรูปแบบบรรทัด log จะไม่เคยรันใน CI
+      #
+      # ต้อง build APK ก่อน เพราะ Gradle project ของ plugin ถูกสร้างจากขั้นตอนนั้น
+      - name: Kotlin unit tests
+        working-directory: packages/beacon_kit/example/android
+        run: ./gradlew :app:testDebugUnitTest :beacon_kit_android:testDebugUnitTest
 
   build-ios:
     name: Build iOS (${{ matrix.mode }}, no signing)

@@ -1,8 +1,8 @@
 import 'dart:async';
 
-import 'package:beacon_kit/beacon_kit.dart';
 import 'package:flutter/material.dart';
 
+import 'diagnostics/evidence_log_line.dart';
 import 'diagnostics/region_event_log.dart';
 
 /// หน้าดู log ของ region enter/exit ที่บันทึกไว้ พร้อมปุ่มล้างเพื่อเริ่มรอบทดสอบใหม่
@@ -19,7 +19,13 @@ class LogPage extends StatefulWidget {
   /// หน้าจอจะดูเหมือนมีบรรทัดครบทั้งที่การเขียนไฟล์อาจล้มเหลว (เช่นเครื่องล็อก
   /// แล้ว Data Protection บล็อก — ดูเช็คลิสต์หัวข้อ 13) ซึ่งจะกลบปัญหาที่เรา
   /// ต้องการจับพอดี
-  final Stream<IBeaconRegionStateEvent> regionEvents;
+  ///
+  /// ชนิดเป็น `Object?` เพราะสองแพลตฟอร์มส่ง event คนละชนิด
+  /// (`IBeaconRegionStateEvent` จาก CoreLocation ฝั่ง iOS ·
+  /// `AndroidBackgroundRegionEvent` ที่เราคำนวณเองฝั่ง Android — ADR-14 อธิบายว่า
+  /// ทำไมสองอย่างนี้ไม่ใช่ชนิดเดียวกัน) หน้านี้ไม่ต้องรู้ว่าเป็นอันไหน เพราะใช้มัน
+  /// เป็นแค่สัญญาณให้ไปอ่านไฟล์ใหม่ — **เนื้อหาที่แสดงมาจากไฟล์เสมอ**
+  final Stream<Object?> regionEvents;
 
   @override
   State<LogPage> createState() => _LogPageState();
@@ -29,7 +35,7 @@ class _LogPageState extends State<LogPage> {
   List<String>? _lines;
   String? _path;
   String? _error;
-  StreamSubscription<IBeaconRegionStateEvent>? _subscription;
+  StreamSubscription<Object?>? _subscription;
   DateTime? _lastReloadedAt;
 
   @override
@@ -152,8 +158,8 @@ class _LogPageState extends State<LogPage> {
                   child: Text(
                     'ยังไม่มี event ที่บันทึกไว้\n\n'
                     'รูปแบบแต่ละบรรทัด:\n'
-                    'เวลา ISO8601 พร้อม timezone / ชนิด event / region / '
-                    'สถานะแอป / สัญญาณดิบ',
+                    'เวลา ISO8601 พร้อม timezone / ตัวระบุ process / '
+                    'ชนิด event / region / สถานะแอป / สัญญาณดิบ',
                     textAlign: TextAlign.center,
                   ),
                 ),
@@ -178,23 +184,36 @@ class _LogTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parts = line.split('\t');
-    // บรรทัดที่ฟอร์แมตไม่ตรง (เช่นไฟล์เก่าคนละเวอร์ชัน) ให้แสดงดิบ ๆ
-    // ดีกว่าซ่อนทิ้ง เพราะมันคือหลักฐานที่อาจสำคัญ
-    if (parts.length < 5) {
+    final entry = EvidenceLogLine.tryParse(line);
+    // บรรทัดที่ฟอร์แมตไม่ตรงจนแยกคอลัมน์ไม่ได้ ให้แสดงดิบ ๆ ดีกว่าซ่อนทิ้ง
+    // เพราะมันคือหลักฐานที่อาจสำคัญ
+    if (entry == null) {
       return ListTile(title: Text(line, style: _mono(context)));
     }
 
-    final isRelaunch = parts[3] == 'relaunchedFromTerminated';
+    final isRelaunch = entry.isFromRelaunchedProcess;
+    // `processId` ที่แสดงชัดคือสิ่งที่ทำให้ผู้ทดสอบตอบได้ทันทีบนหน้าจอเครื่องว่า
+    // บรรทัดกลุ่มนี้มาจาก process เดียวกันหรือคนละ process โดยไม่ต้อง export
+    // ไฟล์ออกมาเทียบทีหลัง — คำถามที่รอบทดสอบก่อนหน้าตอบไม่ได้เลย
+    final processLabel = entry.processId ?? 'ไม่มี pid (ไฟล์รูปแบบเก่า)';
     return ListTile(
-      leading: Icon(
-        parts[1] == 'enter' ? Icons.login : Icons.logout,
-        color: isRelaunch ? Theme.of(context).colorScheme.primary : null,
+      leading: Icon(switch (entry.event) {
+        'enter' => Icons.login,
+        'exit' => Icons.logout,
+        'launch' => Icons.play_circle_outline,
+        _ => Icons.circle_outlined,
+      }, color: isRelaunch ? Theme.of(context).colorScheme.primary : null),
+      title: Text(
+        '${entry.event} — ${entry.regionIdentifier}',
+        style: _mono(context),
       ),
-      title: Text('${parts[1]} — ${parts[2]}', style: _mono(context)),
-      subtitle: Text('${parts[0]}\n${parts[4]}', style: _mono(context)),
+      subtitle: Text(
+        '${entry.timestamp}\npid=$processLabel · ${entry.conclusion}\n'
+        '${entry.rawSignals}',
+        style: _mono(context),
+      ),
       isThreeLine: true,
-      // ไฮไลต์เคสที่ B5 ต้องพิสูจน์ ให้เห็นได้ทันทีตอนเลื่อนดู log ยาว ๆ
+      // ไฮไลต์เคสที่การทดสอบเบื้องหลังต้องพิสูจน์ ให้เห็นได้ทันทีตอนเลื่อนดู log ยาว ๆ
       trailing: isRelaunch
           ? Chip(
               label: const Text('relaunched'),

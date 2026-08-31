@@ -20,7 +20,7 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 | **GATT connect / auth / config / OTA** | ❌ **ยังไม่ implement** | ไม่มีโค้ดส่วนนี้อยู่เลย `connect()` throw `UnsupportedError` ทันที |
 | **อ่านประวัติ sensor ย้อนหลัง** | ❌ **ยังไม่ implement** | มีแต่ interface ว่าง ๆ ไม่มี implementation |
 | **Android — สแกนตอนแอปเปิดอยู่** | ⚠️ code-complete — **ยังไม่ได้ทดสอบบนเครื่องจริง** | มีแพ็กเกจ `beacon_kit_android` แล้ว ใช้ `BluetoothLeScanner` + `ScanFilter` ส่ง byte ดิบให้ **parser ตัวเดียวกับ iOS** ถอด · คอมไพล์ผ่าน (`flutter build apk --debug`) และมี unit test คุมการต่อสาย แต่**ยังไม่มีใครเห็นมันเจอ beacon จริง** |
-| **Android — ทำงานเบื้องหลัง** | ❌ **ยังไม่มี** | เป็นก้อนงานแยกที่ยังไม่เริ่ม · ยังไม่มีอะไรเทียบเท่า region monitoring ของ iOS (ADR-9 ยังเป็น open question) |
+| **Android — ทำงานเบื้องหลัง** | ⚠️ code-complete — **ยังไม่ได้ทดสอบบนเครื่องจริง** | ใช้ `startScan(..., PendingIntent)` + นาฬิกาปลุก · **กลไกคนละอย่างกับ iOS และไม่เท่ากัน** (ADR-14) · ติดตั้งลงเครื่องทดสอบยังไม่ได้เพราะ MIUI บล็อกการติดตั้งผ่าน adb — วิธีปลดล็อกอยู่ใน `docs/test-checklists/android_background_runbook.md` §0 |
 | **Android — iBeacon region monitoring / สิทธิ์แบบ Always** | ❌ **ยังไม่มี** | เมธอดกลุ่มนี้อยู่ที่ `beacon_kit_ios` เท่านั้นโดยตั้งใจ (ADR-13) |
 
 **คำที่ใช้ในตารางนี้แปลว่า:**
@@ -44,7 +44,7 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 | **ไม่มีอินเทอร์เน็ต** | Apple ระบุว่า region monitoring ต้องการ network connectivity เพื่อรายงานได้ทันเวลา |
 | **region ซ้อนทับกัน** | ยังไม่รู้ว่าได้ `didEnterRegion` ซ้ำหรือไม่ — ห้ามเขียน dedupe logic จนกว่าจะรู้ผล (ADR-8 open question) |
 | **Eddystone: UID/TLM frame** | ที่ผ่านคือ **URL frame เท่านั้น** ยังไม่เคยเจอ UID/TLM ของจริง |
-| **Android ทั้งหมด** | ยังไม่มีแพ็กเกจ — ไม่มีอะไรให้ทดสอบ |
+| **Android ทั้งหมด** | มีโค้ดครบทั้งสองก้อนแล้ว แต่**ยังไม่เคยรันบนเครื่องจริงเลย** — เช็คลิสต์อยู่ที่ `docs/test-checklists/android_background_scanning.md` |
 
 ทั้งหมดนี้อยู่ใน `docs/test-checklists/ios_broadcast_scanning.md` พร้อมวิธีทดสอบ
 
@@ -84,8 +84,33 @@ scan results"* (ADR-12)
 ตั้งแต่ต้น ไม่ใช่ปะทีหลัง
 
 🔶 **ยังไม่ยืนยันด้วยตัวเอง** — ยังไม่ได้รันบนเครื่องจริงและไม่พบเอกสารทางการของ
-Xiaomi ที่อ้างอิงได้ · และ**ไม่กระทบการสแกนตอนแอปเปิดอยู่** ซึ่งเป็นขอบเขตเดียวที่
-มีตอนนี้ — เรื่องนี้จะสำคัญตอนทำก้อนงานเบื้องหลัง
+Xiaomi ที่อ้างอิงได้ · และ**ไม่กระทบการสแกนตอนแอปเปิดอยู่** — เรื่องนี้สำคัญกับ
+เส้นทางเบื้องหลัง และเป็นเคสที่ runbook §7 ออกแบบไว้ให้วัดโดยเปลี่ยนทีละตัวแปร
+
+**การขอยกเว้น battery optimization ให้แอปเอง: ทำไม่ได้ในทางนโยบาย** แม้ API มีจริง
+(`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) แต่เอกสารทางการระบุว่า *"Google Play
+policies prohibit apps from requesting direct exemption from Power Management
+features—Doze and App Standby—in Android 6.0 and above unless the core function of
+the app is adversely affected"* และตารางเคสที่ยอมรับได้ในหน้าเดียวกันจัดแอปที่
+*"only needs to connect to a peripheral device periodically to sync"* ไว้ที่
+**Not Acceptable** ซึ่งตรงกับเคสของเรา — ทางที่เหลือคือ UX พาผู้ใช้ไปตั้งค่าเอง
+เหมือนเรื่อง Autostart (ADR-14 หัวข้อ 2.3)
+
+### ⚠️ Android ทำงานเบื้องหลัง **ไม่เท่ากับ** iOS — สามข้อที่ต้องรู้ก่อนสัญญากับใคร
+
+ผลการค้นคว้าใน ADR-14 หัวข้อ 1 ตอบตารางคำถามที่ค้างใน ADR-9 ครบแล้ว และคำตอบคือ
+ทำไม่ได้เทียบเท่า:
+
+| | iOS | Android |
+|---|---|---|
+| ใครคำนวณ enter/exit | **ระบบ** (CoreLocation ยิง `didEnterRegion`/`didExitRegion` ให้) | **เรา** — ระบบบอกได้แค่ "เจอ advertisement" การไม่เจอไม่ใช่ event |
+| ผู้ใช้ force-stop แอป | ระบบยังปลุกแอปขึ้นมาได้ (*"Even if killed by the user, launch events triggered by monitoring APIs will cause a relaunch"*) | **หยุดถาวร** จนกว่าผู้ใช้เปิดแอปเอง — แก้ด้วยโค้ดไม่ได้ |
+| รีบูตเครื่อง | region อยู่ในระบบ ไม่ต้องทำอะไร | ต้องลงทะเบียนใหม่เองผ่าน `BOOT_COMPLETED` และ **ไม่ได้เฝ้าอะไรเลยจนกว่าผู้ใช้จะปลดล็อกครั้งแรก** |
+
+**เลือกไม่ใช้ foreground service โดยตั้งใจ** — มันไม่ได้แก้ปัญหาที่ยากที่สุด
+(service ตายไปกับ process เหมือนกัน) แต่ราคาคือ **notification ค้างที่ผู้ใช้เห็น
+ตลอดเวลา** ถ้าวันหนึ่งเพิ่มเข้ามาเป็นโหมดเสริม ต้องบอกผู้ใช้ตรง ๆ ว่าจะเห็น
+notification ค้าง และมันไม่เท่ากับพฤติกรรมของ iOS (ADR-14 หัวข้อ 3.1)
 
 **ข้อควรระวังสำหรับคนที่จะเขียนโค้ดตรวจว่าแอปถูกปลุกด้วย location event:**
 จากการทดสอบจริง `UIApplication.LaunchOptionsKey.location` ได้ `false` ทั้งที่แอปถูก

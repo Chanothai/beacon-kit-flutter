@@ -1,18 +1,27 @@
 /// `beacon_kit_android` — Android platform implementation ของ `beacon_kit`
 /// federated plugin
 ///
-/// **ขอบเขตของแพ็กเกจนี้ตอนนี้: สแกนตอนแอปเปิดอยู่เท่านั้น** ยังไม่มีส่วนทำงาน
-/// เบื้องหลัง (จะทำเป็นก้อนแยก) และยังไม่มีอะไรเทียบเท่า region monitoring ของ
-/// iOS — ดู ADR-9 ว่าทำไมถึงยังไม่ยกเมธอดคู่นั้นขึ้นเป็นสัญญากลาง
+/// ## ขอบเขตของแพ็กเกจนี้: สองเส้นทางที่แยกกัน
+///
+/// 1. **สแกนตอนแอปเปิดอยู่** (ADR-12) — ผ่านสัญญากลาง [BeaconKitPlatform]
+///    (`startBluetoothScan` / `rawAdvertisementEvents`)
+/// 2. **เฝ้า region เบื้องหลัง** (ADR-14) — อยู่ที่แพ็กเกจนี้ **ไม่ได้ยกขึ้นสัญญา
+///    กลาง** เพราะตอบตารางคำถามของ ADR-9 แล้วพบว่า **Android ทำไม่ได้เทียบเท่า iOS**
+///
+/// ตาม ADR-13 หัวข้อ 4 ข้อ 3: เมื่อพบว่าทำไม่ได้เทียบเท่า ให้แยกเป็นความสามารถ
+/// คนละชื่อตามที่แต่ละแพลตฟอร์มทำได้จริง แล้วให้แอปเลือกเองอย่างรู้ตัว —
+/// ไม่ใช่ดัดให้ดูเหมือนกันแล้วปล่อยให้ไปเจอความจริงหน้างาน
 library;
 
 import 'package:beacon_kit_platform_interface/beacon_kit_platform_interface.dart';
 
+import 'src/android_background_region.dart';
 import 'src/method_channel_beacon_kit_android.dart';
 import 'src/scan_permission_status.dart';
 
 export 'package:beacon_kit_platform_interface/beacon_kit_platform_interface.dart';
 
+export 'src/android_background_region.dart';
 export 'src/method_channel_beacon_kit_android.dart';
 export 'src/scan_permission_status.dart';
 
@@ -50,4 +59,33 @@ class BeaconKitAndroid {
   /// พาผู้ใช้ไปหน้า Settings ของแอป — ใช้เมื่อสถานะเป็น
   /// [ScanPermissionStatus.permanentlyDenied] ซึ่งขอสิทธิ์ซ้ำไม่มีประโยชน์แล้ว
   Future<void> openAppSettings() => _platform.openAppSettings();
+
+  // ---- เฝ้า region เบื้องหลัง (ADR-14) ----
+  //
+  // อยู่ที่นี่ ไม่ใช่ที่ `BeaconKitPlatform` เพราะ Android ทำไม่ได้เทียบเท่า iOS
+  // การยกขึ้นสัญญากลางจะทำให้ผู้เรียกเข้าใจว่าได้พฤติกรรมเดียวกันทั้งสองแพลตฟอร์ม
+  // ทั้งที่ไม่ใช่ — ข้อห้ามที่ ADR-9 เขียนดักไว้ตั้งแต่ก่อนเริ่มงาน Android
+
+  /// เริ่มเฝ้า region เบื้องหลัง — **อ่านตารางสัญญา/ไม่สัญญาใน
+  /// [MethodChannelBeaconKitAndroid.startBackgroundRegionMonitoring] ก่อนใช้**
+  Future<AndroidBackgroundMonitoringResult> startBackgroundRegionMonitoring({
+    required List<AndroidBeaconRegion> regions,
+    int exitTimeoutSeconds = 30,
+  }) => _platform.startBackgroundRegionMonitoring(
+    regions: regions,
+    exitTimeoutSeconds: exitTimeoutSeconds,
+  );
+
+  Future<void> stopBackgroundRegionMonitoring() =>
+      _platform.stopBackgroundRegionMonitoring();
+
+  /// สถานะที่ **แอปเราเองจำไว้** ไม่ใช่ความจริงจากระบบ —
+  /// ดูคำเตือนใน [AndroidBackgroundMonitoringStatus]
+  Future<AndroidBackgroundMonitoringStatus>
+  getBackgroundRegionMonitoringStatus() =>
+      _platform.getBackgroundRegionMonitoringStatus();
+
+  /// enter/exit ที่ **เราคำนวณเอง** จากการเห็น/ไม่เห็นผลสแกน
+  Stream<AndroidBackgroundRegionEvent> get backgroundRegionEvents =>
+      _platform.backgroundRegionEvents;
 }

@@ -66,11 +66,18 @@
 ## 0.1 วิธีอ่าน log
 
 ไฟล์ log เขียนโดยโค้ด native (`example/ios/Runner/BackgroundEvidenceLog.swift`)
-แต่ละบรรทัดคั่นด้วย TAB 5 คอลัมน์:
+แต่ละบรรทัดคั่นด้วย TAB **6 คอลัมน์**:
 
 ```
-timestamp(ISO8601+tz)  event  regionIdentifier  ข้อสรุป  สัญญาณดิบ
+timestamp(ISO8601+tz)  processId  event  regionIdentifier  ข้อสรุป  สัญญาณดิบ
 ```
+
+**คอลัมน์ `processId` เพิ่มเข้ามาใน ADR-14** — เป็นค่าสุ่ม 8 ตัวอักษรต่อ process
+เขียนเหมือนกันทั้ง iOS และ Android **สองบรรทัดที่ `processId` ต่างกันมาจากคนละ
+process แน่นอน ไม่ต้องเดาจาก `uptime` อีกต่อไป**
+
+ไฟล์ log ที่เก็บไว้ก่อนหน้านี้ยังเป็น 5 คอลัมน์และ **ห้ามแก้** — ตัวอ่านทั้งหมด
+(หน้า "ดู log" และ `tool/analyze_region_log.dart`) รับได้ทั้งสองรูปแบบ
 
 **ฟิลด์ในคอลัมน์สัญญาณดิบ**
 
@@ -80,7 +87,7 @@ timestamp(ISO8601+tz)  event  regionIdentifier  ข้อสรุป  สัญ
 | `state` | สถานะแอปตอนเกิด event (`foreground` / `background` / `inactive`) |
 | `uptime` | process นี้มีอายุกี่วินาทีแล้ว |
 | `launchKey` | มี location launch key มาด้วยหรือไม่ — **สัญญาณสนับสนุนเท่านั้น เชื่อเดี่ยว ๆ ไม่ได้** (ภาคผนวกข้อ 6) |
-| `monitoredRegions` | รายชื่อ region ที่ระบบลงทะเบียนไว้ ณ ตอน launch (มีเฉพาะบรรทัด `launch`) |
+| `monitoredRegions` | รายชื่อ region ที่ระบบลงทะเบียนไว้ ณ ตอน launch (มีเฉพาะบรรทัด `launch`) — **ระบบเป็นคนตอบ** ต่างจาก `restoredRegions=` ฝั่ง Android ที่เราจำเอง (ADR-14 หัวข้อ 1.2) |
 
 **ตารางแปลผลสำหรับเคสที่แอปถูก terminate — ใช้ทุกครั้งก่อนสรุปอะไรก็ตาม**
 
@@ -89,7 +96,7 @@ timestamp(ISO8601+tz)  event  regionIdentifier  ข้อสรุป  สัญ
 | ไม่มีบรรทัด `launch` ใหม่เลย | iOS ไม่ได้ปลุกแอป | ไล่ที่ region / สิทธิ์ Always / ระยะ beacon — ไม่ใช่ที่โค้ดรับ event |
 | มี `launch` แต่ `monitoredRegions=[]` | ถูกปลุกแต่ไม่มี region ค้างในระบบ | สงสัยว่ามีโค้ดไปล้าง region ทิ้ง หรือขั้นเตรียมข้อ 5 ไม่ได้ทำ |
 | มี `launch` + region ครบ แต่ไม่มี `enter`/`exit` ตามมา | ถูกปลุกจริงและ region ยังอยู่ แต่ **event ไปไม่ถึง handler** | ไล่ที่ delegate / เส้นทางส่ง event — คนละเรื่องกับสองแถวบน |
-| `enter`/`exit` + `everActive=false` + `state=background` | process ใหม่ที่ระบบสร้างขึ้นมาเอง = สิ่งที่ต้องการเห็น | บันทึกลงไฟล์สถานะ |
+| `enter`/`exit` + `everActive=false` + `state=background` | process ใหม่ที่ระบบสร้างขึ้นมาเอง = สิ่งที่ต้องการเห็น | ยืนยันซ้ำว่า `processId` ต่างจากบรรทัดก่อนหน้าจริง แล้วบันทึกลงไฟล์สถานะ |
 | `enter`/`exit` + `everActive=true` | process เดิมยังไม่ตาย | **ยังไม่ได้ทดสอบสิ่งที่ตั้งใจ** ทำใหม่ |
 
 ⚠️ **ห้ามสรุปว่า "ฟีเจอร์ไม่ทำงาน" จาก log ที่ว่างเปล่า** — log ว่างเป็นได้ 3 สาเหตุ

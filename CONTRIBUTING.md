@@ -53,16 +53,32 @@ dart format --output=none --set-exit-if-changed .
 
 # 2. analyze — ต้องสะอาดทุก package (--fatal-infos คือ info ก็ถือว่าไม่ผ่าน)
 for p in packages/beacon_kit_platform_interface packages/beacon_kit_ios \
-         packages/beacon_kit packages/beacon_kit/example; do
+         packages/beacon_kit_android packages/beacon_kit \
+         packages/beacon_kit/example; do
   (cd "$p" && flutter analyze --fatal-infos) || exit 1
 done
 
 # 3. test — ต้องผ่านทุก package
 for p in packages/beacon_kit_platform_interface packages/beacon_kit_ios \
-         packages/beacon_kit packages/beacon_kit/example; do
+         packages/beacon_kit_android packages/beacon_kit \
+         packages/beacon_kit/example; do
   (cd "$p" && flutter test) || exit 1
 done
 ```
+
+ถ้าแตะโค้ด **Kotlin** ต้องรันเพิ่ม:
+
+```bash
+cd packages/beacon_kit/example
+flutter build apk --debug
+# unit test ฝั่ง JVM — `flutter test` ไม่รันให้ (คนละ test runner)
+cd android
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+  ./gradlew :app:testDebugUnitTest :beacon_kit_android:testDebugUnitTest
+```
+
+`flutter test` **ไม่รัน** unit test ของ Kotlin เลย — ด้วยเหตุผลเดียวกับที่มันไม่รัน
+XCTest ถ้าแก้ Kotlin แล้วรันแค่ `flutter test` เท่ากับไม่ได้ทดสอบสิ่งที่แก้
 
 ถ้าแตะโค้ด Swift ต้องรันเพิ่ม:
 
