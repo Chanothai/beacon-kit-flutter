@@ -1280,3 +1280,261 @@ event ไว้แล้วส่งมาติด ๆ กัน โดยเ�
 **ต้องเก็บข้อมูลในสาขาจริงอย่างน้อย 3 จุดที่มีสภาพต่างกันก่อนล็อกค่าเหล่านี้ลง
 production** — ค่าในหัวข้อ 5 ใช้เป็น**ค่าเริ่มต้นสำหรับทดสอบ**เท่านั้น
 วิธีเก็บอยู่ในเช็คลิสต์ข้อ 16
+
+---
+
+## ADR-12: Android ก้อนที่ 1 — สแกนตอนแอปเปิดอยู่ (เพิ่ม 31 ส.ค. 2026)
+
+**สถานะ:** ✅ ค้นคว้าเสร็จ (หัวข้อ 1-4) · 🛑 **หยุดก่อนเขียนโค้ด** เพราะพบว่าไม่มี
+"สัญญากลาง" ให้ implement (หัวข้อ 5) — ต้องให้ผู้ถือโปรเจกต์ตัดสินก่อน
+
+**ขอบเขต:** เฉพาะการสแกนตอนแอปเปิดอยู่ (foreground) — ส่วนทำงานเบื้องหลังเป็นก้อน
+แยกที่จะทำหลังก้อนนี้เสร็จ ADR นี้จึงตอบเฉพาะสิ่งที่ก้อนที่ 1 ต้องรู้ บวกกับ
+บันทึกเรื่อง `PendingIntent` ไว้ล่วงหน้า
+
+**เครื่องทดสอบเป้าหมาย:** Redmi Note 9 · Android 12 (MIUI)
+
+### 1. สิทธิ์ที่ต้องประกาศและขอตอนรันบน Android 12
+
+**ยืนยันจากซอร์สจริงในเครื่อง** (`~/Library/Android/sdk/sources/android-37.0/`)
+และเอกสารทางการ ตาม CONTRIBUTING ข้อ 5
+
+**(ก) `BLUETOOTH_SCAN` — บังคับ และเป็น runtime permission**
+
+จาก `android/bluetooth/le/BluetoothLeScanner.java:113-115`:
+
+> "This method requires the calling app to have the
+> `android.Manifest.permission#BLUETOOTH_SCAN` permission."
+
+annotation จริงบนเมธอด (บรรทัด 122-127):
+
+```java
+@RequiresLegacyBluetoothAdminPermission
+@RequiresBluetoothScanPermission
+@RequiresBluetoothLocationPermission
+@RequiresPermission(allOf = {BLUETOOTH_PRIVILEGED, BLUETOOTH_SCAN}, ...)
+```
+
+เอกสารทางการยืนยันว่าเป็น runtime permission:
+
+> "The `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`, and `BLUETOOTH_SCAN` permissions
+> are **runtime permissions**. Therefore, you must explicitly request user approval
+> in your app before you can look for Bluetooth devices..."
+> — [Bluetooth permissions](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions)
+
+**(ข) `ACCESS_FINE_LOCATION` — ยังต้องมี เพราะ use case ของเราคือการอนุมานตำแหน่ง**
+
+จาก `BluetoothLeScanner.java:109-112`:
+
+> "An app must have `ACCESS_COARSE_LOCATION` permission in order to get results.
+> An App targeting Android Q or later must have `ACCESS_FINE_LOCATION` permission
+> in order to get results."
+
+**⚠️ กับดักที่สำคัญที่สุดของหัวข้อนี้ — `neverForLocation`**
+
+เอกสารทางการเสนอทางลัดว่าถ้าแอปไม่ได้ใช้ผลสแกนอนุมานตำแหน่ง ให้ประกาศ:
+
+```xml
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+                 android:usesPermissionFlags="neverForLocation" />
+```
+
+แล้วจะไม่ต้องขอ `ACCESS_FINE_LOCATION` เลย — **แต่เอกสารหน้าเดียวกันเตือนไว้ว่า:**
+
+> "If you include `neverForLocation` in your `android:usesPermissionFlags`,
+> **some BLE beacons are filtered from the scan results.**"
+
+**สรุปสำหรับโปรเจกต์นี้: ห้ามใช้ `neverForLocation` เด็ดขาด** — จุดประสงค์ทั้งหมด
+ของ `beacon_kit` คือการอนุมานว่าผู้ใช้อยู่สาขาไหน ซึ่งคือการอนุมานตำแหน่งตรงตัว
+การใส่ flag นี้จะทั้ง**ผิดความจริง**ที่ประกาศต่อระบบ และ**ทำให้ beacon บางตัวถูก
+กรองทิ้ง**จนอาการออกมาเป็น "สแกนไม่เจอบางตัว" ที่ดีบักยากมาก
+
+**(ค) `BLUETOOTH_CONNECT` — ก้อนที่ 1 ยังไม่ต้องใช้**
+
+`BLUETOOTH_CONNECT` ใช้สำหรับสื่อสารกับอุปกรณ์ที่จับคู่แล้ว ไม่ใช่การสแกน —
+ก้อนที่ 1 ไม่ต้องประกาศ ส่วน GATT connect/config ยังไม่ implement ทั้งสองแพลตฟอร์ม
+(README) เมื่อถึงตอนนั้นค่อยเพิ่ม
+
+**(ง) ความสัมพันธ์ระหว่างกัน — สรุปเป็นตาราง**
+
+| สิทธิ์ | ก้อนที่ 1 ต้องมีไหม | ประเภท | หมายเหตุ |
+|---|---|---|---|
+| `BLUETOOTH_SCAN` | ✅ ต้องมี | runtime (ต้องขอตอนรัน) | **ห้ามใส่ `neverForLocation`** |
+| `ACCESS_FINE_LOCATION` | ✅ ต้องมี | runtime | เพราะเราอนุมานตำแหน่งจริง |
+| `BLUETOOTH_CONNECT` | ❌ ยังไม่ต้อง | runtime | ไว้ตอนทำ GATT |
+| `BLUETOOTH` / `BLUETOOTH_ADMIN` (เก่า) | เฉพาะ `maxSdkVersion="30"` | install-time | สำหรับเครื่องที่ต่ำกว่า Android 12 |
+
+**🔶 ยังไม่ยืนยัน — ต้องทดสอบบนเครื่องจริง:** ผู้ใช้ต้องเปิดสวิตช์ Location
+ของระบบด้วยหรือไม่ (คนละเรื่องกับการ grant `ACCESS_FINE_LOCATION`) — ไม่พบประโยค
+ที่ระบุตรง ๆ ในเอกสารที่ตรวจ ให้ทดสอบบน Redmi Note 9 แล้วบันทึกผล
+
+### 2. การ throttle การสแกนในเบื้องหลัง
+
+**✅ ยืนยันแล้ว 2 ข้อ จากซอร์สจริง**
+
+**(ก) แอปที่ไม่ได้อยู่ foreground ถูกบังคับเป็นโหมดประหยัดพลังงาน**
+
+`android/bluetooth/le/ScanSettings.java:48-52`:
+
+> "Perform Bluetooth LE scan in low power mode. This is the default scan mode as it
+> consumes the least power. **This mode is enforced if the scanning application is
+> not in foreground.**"
+
+แปลว่าต่อให้แอปขอ `SCAN_MODE_LOW_LATENCY` ระบบจะบังคับลดเป็น `SCAN_MODE_LOW_POWER`
+ทันทีที่แอปไม่ได้อยู่ foreground — **ผลคือความถี่ที่ได้ผลสแกนลดลงอย่างมีนัยสำคัญ**
+นี่เป็นเหตุผลตรง ๆ ที่ก้อนที่ 2 (เบื้องหลัง) ต้องออกแบบต่างจากก้อนที่ 1 ไม่ใช่แค่
+"เอาโค้ดเดิมไปรันตอน background"
+
+**(ข) สแกนแบบไม่มี filter จะถูกหยุดเมื่อจอดับ**
+
+`BluetoothLeScanner.java:104-107`:
+
+> "For unfiltered scans, **scanning is stopped on screen off** to save power.
+> Scanning is resumed when screen is turned on again. To avoid this, use
+> `startScan(List, ScanSettings, ScanCallback)` with desired `ScanFilter`."
+
+**ผลต่อการออกแบบ: ต้องส่ง `ScanFilter` เสมอ ห้ามสแกนแบบไม่มี filter** — ตรงกับ
+แนวทางที่ฝั่ง iOS ทำอยู่แล้ว (`startBluetoothScan` ไม่มี wildcard scan ตาม ADR-4)
+
+**(ค) มี error code สำหรับ "สแกนถี่เกินไป"**
+
+`android/bluetooth/le/ScanCallback.java:62-63`:
+
+> "Fails to start scan as application tries to scan too frequently."
+> `public static final int SCAN_FAILED_SCANNING_TOO_FREQUENTLY = 6;`
+
+**🔶 แต่ตัวเลขจริงยังไม่ยืนยัน** — ตัวเลขที่พูดถึงกันทั่วไป ("เริ่ม/หยุดสแกนได้ไม่
+เกิน 5 ครั้งใน 30 วินาที") **ไม่พบในเอกสารทางการหรือในซอร์สที่ตรวจได้ในเครื่อง**
+ค่าจริงอยู่ในโค้ดของ Bluetooth apex (`ScanManager`/`AppScanStats`) ซึ่งไม่ได้มาพร้อม
+Android SDK — **ห้ามเขียนตัวเลขนี้ลงเอกสารหรือ hard-code ในโค้ดโดยอ้างว่าเป็นสเปก**
+สิ่งที่ทำได้แน่นอนคือ **ดัก `SCAN_FAILED_SCANNING_TOO_FREQUENTLY` แล้วรายงานเป็น
+error code ที่มีความหมาย** แทนการเงียบ
+
+**(ง) ข้อจำกัดที่กระทบก้อนที่ 2 โดยตรง (บันทึกไว้ก่อน)**
+
+> "Apps that target Android 12 or higher can't start foreground services while
+> running in the background, except for a few special cases. If an app attempts to
+> start a foreground service while running in the background, an exception occurs."
+> — [Behavior changes: Android 12](https://developer.android.com/about/versions/12/behavior-changes-12)
+
+### 3. `PendingIntent` mutability บน Android 12 (บันทึกไว้ก่อน ก้อนที่ 1 ยังไม่ใช้)
+
+> "If your app targets Android 12, you must **specify the mutability of each
+> `PendingIntent` object that your app creates.** This additional requirement
+> improves your app's security."
+> — [Behavior changes: Android 12](https://developer.android.com/about/versions/12/behavior-changes-12)
+
+วิธีตรวจว่าพลาดหรือไม่ (เอกสารหน้าเดียวกัน):
+
+> "Warning: Missing PendingIntent mutability flag [UnspecifiedImmutableFlag]"
+
+**เกี่ยวกับเราตรงไหน:** ก้อนที่ 2 ถ้าเลือกใช้
+`BluetoothLeScanner.startScan(List, ScanSettings, PendingIntent)` (API ที่ ADR-9
+ยกมาเป็นตัวเลือกสำหรับ background) จะต้องสร้าง `PendingIntent` ซึ่งบังคับระบุ
+mutability ทันที
+
+**🔶 ต้องตรวจก่อนใช้จริง:** ยังไม่ได้ยืนยันว่าเคสนี้ต้องใช้ `FLAG_MUTABLE` หรือ
+`FLAG_IMMUTABLE` — โดยหลักการ `PendingIntent` ที่ระบบต้องเติมข้อมูลผลสแกนเข้ามา
+มักต้องเป็น mutable แต่**ยังไม่พบเอกสารที่ระบุตรง ๆ สำหรับ `startScan` เคสนี้**
+ต้องยืนยันก่อนเขียนโค้ดก้อนที่ 2
+
+หมายเหตุอีกข้อจาก `BluetoothLeScanner.java:384-387`: ตอน `stopScan(PendingIntent)`
+> "When creating the PendingIntent parameter, please do not use the
+> `FLAG_CANCEL_CURRENT` flag. Otherwise, the stop scan may have no effect."
+
+### 4. ตอบ open question ของ ADR-9 ได้บางส่วนแล้ว
+
+| คำถามจาก ADR-9 | ตอบได้หรือยัง |
+|---|---|
+| ข้อจำกัด background scan throttling มีผลแค่ไหน | **ตอบแล้วบางส่วน** — บังคับ `SCAN_MODE_LOW_POWER` เมื่อไม่ได้อยู่ foreground + สแกนไม่มี filter หยุดเมื่อจอดับ (หัวข้อ 2) ส่วนตัวเลขการ throttle ยังไม่ยืนยัน |
+| Android เก็บชุด region ข้าม process แบบ `monitoredRegions` หรือไม่ | **ยังไม่ตอบ** — เป็นเรื่องของก้อนที่ 2 |
+| มี enter/exit semantics หรือต้องคำนวณเอง | **ยังไม่ตอบ** — ก้อนที่ 2 |
+| พฤติกรรมหลังผู้ใช้ force-stop แอป | **ยังไม่ตอบ** — ก้อนที่ 2 |
+
+### 5. 🛑 สิ่งที่พบแล้วต้องหยุด: **ไม่มี "สัญญากลาง" ให้ implement**
+
+โจทย์ระบุว่า `beacon_kit_android` ต้อง "implement ตามสัญญาที่
+`beacon_kit_platform_interface` กำหนดไว้ ห้ามแก้สัญญากลาง" — **ตรวจแล้วพบว่า
+`beacon_kit_platform_interface` ไม่ได้กำหนดสัญญาของ platform ไว้เลย**
+
+**หลักฐาน**
+
+`beacon_kit_platform_interface/lib/` มีแค่ 3 กลุ่ม ไม่มี abstract class ของ platform
+สักตัว:
+
+| กลุ่ม | ไฟล์ | เป็นสัญญาของ platform ไหม |
+|---|---|---|
+| entities | `beacon_advertisement.dart`, `ibeacon_frame.dart`, `eddystone_frame.dart`, … | ❌ เป็น data type |
+| parsers | `ibeacon_parser.dart`, `eddystone_parser.dart` | ❌ เป็น pure logic |
+| usecases | `plan_region_registration.dart`, `resolve_bigc_beacon_metadata.dart` | ❌ เป็น pure logic |
+
+สัญญาจริงชื่อ **`BeaconKitIosPlatform`** และอยู่ใน **`beacon_kit_ios`**
+(`packages/beacon_kit_ios/lib/src/beacon_kit_ios_platform.dart`)
+
+และ facade ผูกกับ iOS ตรง ๆ — `generic_ibeacon_eddystone_adapter.dart:3`:
+
+```dart
+import 'package:beacon_kit_ios/beacon_kit_ios.dart';
+```
+
+`beacon_kit/pubspec.yaml` ก็ endorse เฉพาะ iOS:
+
+```yaml
+plugin:
+  platforms:
+    ios:
+      default_package: beacon_kit_ios
+```
+
+**ทำไมถึงหยุดแทนที่จะเดินต่อ**
+
+ทางเลือกที่เดินต่อได้โดยไม่ถามมีแค่สองแบบ และทั้งคู่แย่:
+
+1. ให้ `beacon_kit_android` implement `BeaconKitIosPlatform` — แปลว่า package ของ
+   Android ต้อง `dependency` บน package ของ iOS และสืบทอด method ที่ชื่อ
+   `getIBeaconAuthorizationLevel` กับ `regionStateEvents` ที่นิยามด้วย semantic ของ
+   CoreLocation ล้วน **ผิดชัดเจน**
+2. สร้าง `BeaconKitAndroidPlatform` ขึ้นมาคู่ขนาน แล้วให้ adapter แตกเป็นสองทางตาม
+   แพลตฟอร์ม — ได้ผลลัพธ์ที่ **demo ผ่าน** แต่ทำให้มีสัญญาสองชุดที่ drift จากกันได้
+   และเป็นการฝัง `if (Platform.isAndroid)` ไว้ใน facade ซึ่งเป็นสิ่งที่ federated
+   plugin pattern มีไว้เพื่อกำจัดตั้งแต่แรก
+
+ADR-9 เขียนดักไว้แล้วว่าจุดนี้จะมาถึง:
+
+> "เมื่อถึงเวลาทำ Android ถ้าพบว่าต้องมี contract กลางจริง **ให้ยกขึ้นไปที่
+> `beacon_kit_platform_interface` พร้อมชื่อที่เป็นกลาง** แทนการดัด type ของ iOS
+> ให้ครอบ Android"
+
+นั่นคือทางที่ถูก แต่มันคือการ**แก้สัญญากลาง** ซึ่งโจทย์สั่งให้หยุดรายงานก่อน
+
+**ทางเลือกที่เสนอ (รอการตัดสิน)**
+
+| ทางเลือก | ทำอะไร | ผลต่อ iOS | ความเสี่ยง |
+|---|---|---|---|
+| **A. ยกสัญญาขึ้น platform interface** (ADR-9 แนะนำ) | สร้าง `BeaconKitPlatform` ใน `beacon_kit_platform_interface` ที่มีเฉพาะ **สิ่งที่ทั้งสองแพลตฟอร์มทำได้จริง** = `startBluetoothScan`/`stopBluetoothScan`/`rawAdvertisementEvents` · ส่วน iBeacon monitoring/region state/authorization level **คงไว้ที่ `beacon_kit_ios` ตามเดิม** เพราะเป็นความสามารถเฉพาะ iOS | ต้องแก้ `beacon_kit_ios` ให้ implement สัญญาใหม่เพิ่ม (ไม่ลบของเดิม) + แก้ adapter | ปานกลาง — มี test 80 ตัวคุมอยู่ |
+| **B. คู่ขนาน ไม่แตะของกลาง** | `BeaconKitAndroidPlatform` แยก + adapter แตกสองทาง | ไม่แตะ | ต่ำตอนนี้ **แต่หนี้จะโตเร็ว** — สัญญาสองชุด drift ได้ |
+| **C. เลื่อนก้อนที่ 1 ไปก่อน** | ทำ refactor สัญญาให้จบก่อนแล้วค่อยเริ่ม Android | — | เสียเวลา demo |
+
+**คำแนะนำของผม: ทางเลือก A** — และขอบเขตของมันเล็กกว่าที่ฟังดู เพราะก้อนที่ 1 ต้องการ
+แค่ 3 อย่าง (`startBluetoothScan` / `stopBluetoothScan` / `rawAdvertisementEvents`)
+ซึ่งเป็น**เส้นทาง CoreBluetooth ฝั่ง iOS ที่ไม่ผูกกับ CoreLocation เลย** และมี
+semantic ตรงกับ `BluetoothLeScanner` ของ Android แทบ 1:1 (ส่ง raw bytes กลับมาให้
+Dart parser ถอด) — ส่วนที่ผูกกับ iOS จริง ๆ (region monitoring, authorization level)
+**ไม่ต้องยกขึ้นมา** ปล่อยไว้ที่ `beacon_kit_ios` ตามที่ ADR-9 ตั้งใจ
+
+### 6. ข้อจำกัดระดับผลิตภัณฑ์ของ MIUI (บันทึกไว้ตั้งแต่ตอนนี้)
+
+**🔶 ยังไม่ยืนยันด้วยตัวเอง** — ยังไม่ได้รันบนเครื่องจริง และไม่พบเอกสารทางการของ
+Xiaomi ที่อ้างอิงได้ บันทึกเป็นสิ่งที่**ต้องทดสอบ** ไม่ใช่ข้อเท็จจริงที่ยืนยันแล้ว
+
+MIUI มีการจัดการพลังงานของตัวเองเพิ่มจาก Android มาตรฐาน ซึ่งอาจต้องให้ผู้ใช้
+เปิด Autostart และตั้ง battery saver เป็นไม่จำกัดด้วยมือ ไม่งั้นแอปถูกฆ่า
+
+**ถ้ายืนยันแล้วว่าจริง นี่คือข้อจำกัดระดับผลิตภัณฑ์ ไม่ใช่สิ่งที่แก้ได้ด้วยโค้ด** —
+ไม่มี API ให้แอปเปิด Autostart ให้ตัวเอง ทางแก้เดียวคือ **UX ที่พาผู้ใช้ไปตั้งค่า**
+(หน้าจออธิบาย + ปุ่มลัดไปหน้า setting ถ้าเปิดได้) ซึ่งต้องวางแผนร่วมกับทีมออกแบบ
+ตั้งแต่ต้น ไม่ใช่ปะทีหลัง
+
+⚠️ **ต้องไม่ให้เรื่องนี้ไปปนกับก้อนที่ 1** — ก้อนที่ 1 คือสแกนตอนแอปเปิดอยู่ ซึ่ง
+ไม่ได้รับผลจาก Autostart/battery saver ถ้าเอาไปเขียนใน README ตอนนี้ในบริบทของก้อน
+ที่ 1 จะทำให้คนเข้าใจผิดว่าต้องตั้งค่าพวกนี้ก่อนถึงจะ demo ได้
