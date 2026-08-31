@@ -1,0 +1,12 @@
+# analysis_options เฉพาะโฟลเดอร์ `tool/`
+#
+# **จงใจไม่ `include:` อะไรเลย** — root `analysis_options.yaml` include
+# `package:flutter_lints` ซึ่ง resolve ไม่ได้ที่ root (ไม่มี pubspec.yaml)
+# ทำให้ `dart run tool/...` เตือนทุกครั้งจนบัง output จริงของสคริปต์
+#
+# สคริปต์ในโฟลเดอร์นี้เป็น Dart ล้วน (dart:io + dart:core) ไม่พึ่ง Flutter และ
+# ไม่พึ่ง package ใด ๆ จึงรันได้โดยไม่ต้อง `pub get`
+linter:
+  rules:
+    - prefer_final_locals
+    - unnecessary_this
