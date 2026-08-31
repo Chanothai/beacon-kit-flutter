@@ -41,7 +41,7 @@ class _FakeAdapter implements BeaconAdapter {
           kind: DeviceIdKind.coreBluetoothPeripheralId,
         ),
         rssi: -50,
-        source: AdvertisementSource.coreBluetooth,
+        source: AdvertisementSource.rawParsed,
         timestamp: DateTime.utc(2026, 8, 27),
       );
 }

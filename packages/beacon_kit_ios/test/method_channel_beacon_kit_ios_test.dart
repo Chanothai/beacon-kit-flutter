@@ -296,7 +296,7 @@ void main() {
 
       expect(events, hasLength(2));
 
-      expect(events[0].source, AdvertisementSource.coreLocation);
+      expect(events[0].source, AdvertisementSource.osDecoded);
       expect(events[0].deviceId.kind, DeviceIdKind.iBeaconLogicalId);
       expect(events[0].deviceId.value, 'UUID-1:1:2');
       expect(events[0].rssi, -60);
@@ -305,7 +305,7 @@ void main() {
       expect(events[0].ibeaconMinor, 2);
       expect(events[0].proximity, BeaconProximity.near);
 
-      expect(events[1].source, AdvertisementSource.coreLocation);
+      expect(events[1].source, AdvertisementSource.osDecoded);
       expect(events[1].deviceId.kind, DeviceIdKind.iBeaconLogicalId);
       expect(events[1].deviceId.value, 'UUID-1:1:3');
       expect(events[1].rssi, -70);
@@ -347,7 +347,7 @@ void main() {
 
       expect(events, hasLength(1));
       final advertisement = events.single;
-      expect(advertisement.source, AdvertisementSource.coreBluetooth);
+      expect(advertisement.source, AdvertisementSource.rawParsed);
       expect(
         advertisement.deviceId.kind,
         DeviceIdKind.coreBluetoothPeripheralId,
@@ -387,7 +387,7 @@ void main() {
 
         expect(events, hasLength(1));
         final advertisement = events.single;
-        expect(advertisement.source, AdvertisementSource.coreBluetooth);
+        expect(advertisement.source, AdvertisementSource.rawParsed);
         expect(advertisement.deviceId.value, 'PERIPH-2');
         expect(advertisement.raw, isEmpty);
         expect(advertisement.rawBytes, isNull);

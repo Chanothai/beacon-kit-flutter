@@ -1,5 +1,6 @@
-/// สัญญากลาง (platform interface) ของ beacon_kit — vendor-agnostic broadcast-path
-/// entities และ pure-function parser สำหรับ iBeacon/Eddystone รวมถึง domain
+/// สัญญากลาง (platform interface) ของ beacon_kit — `BeaconKitPlatform`
+/// (สัญญาข้ามแพลตฟอร์มของเส้นทางสแกน advertisement ดิบ ตาม ADR-13),
+/// vendor-agnostic broadcast-path entities และ pure-function parser สำหรับ iBeacon/Eddystone รวมถึง domain
 /// entity/usecase สำหรับ mapping BigC ID scheme (identity triple ->
 /// ข้อมูลธุรกิจ)
 ///
@@ -9,6 +10,7 @@
 /// ADR-8 "Two-tier region registration"
 library;
 
+export 'src/beacon_kit_platform.dart';
 export 'src/entities/beacon_advertisement.dart';
 export 'src/entities/bigc_branch.dart';
 export 'src/entities/bigc_beacon_identity.dart';

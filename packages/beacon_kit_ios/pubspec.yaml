@@ -39,6 +39,10 @@ flutter:
     platforms:
       ios:
         pluginClass: BeaconKitIosPlugin
+        # ADR-13: register implementation เข้ากับสัญญากลาง `BeaconKitPlatform`
+        # ฝั่ง Dart — Flutter เรียก `BeaconKitIos.registerWith()` ให้อัตโนมัติ
+        # เฉพาะตอนรันบน iOS จริง จึงไม่ต้องมี `if (Platform.isIOS)` ที่ไหนเลย
+        dartPluginClass: BeaconKitIos
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

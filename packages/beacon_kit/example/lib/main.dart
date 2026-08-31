@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:beacon_kit/beacon_kit.dart';
+import 'package:beacon_kit_android/beacon_kit_android.dart'
+    show BeaconKitAndroid, ScanPermissionStatus;
 import 'package:flutter/material.dart';
 
 import 'diagnostics/launch_context.dart';
@@ -11,6 +14,24 @@ import 'log_page.dart';
 /// สาธารณะที่ K9P broadcast ออกมา ไม่ใช่ password) ใช้เป็น region เริ่มต้นของ
 /// demo นี้เท่านั้น
 const String _k9pDefaultUuid = '7777772E-6B6B-6D63-6E2E-636F6D000001';
+
+/// Service UUID ของ Eddystone (`0xFEAA`)
+const String _eddystoneServiceUuid = '0000feaa-0000-1000-8000-00805f9b34fb';
+
+/// ⚠️ **หนี้ทางเทคนิคชั่วคราว — ตั้งใจให้อยู่ในไฟล์นี้ไฟล์เดียว**
+///
+/// การแยกตามแพลตฟอร์มอยู่ใน example app เท่านั้น **ห้ามมีใน `beacon_kit`**
+/// (ตรวจได้ด้วย `grep -rn "Platform.is" packages/beacon_kit/lib` ต้องไม่เจอ)
+///
+/// **ทำไมยังต้องมี:** ADR-13 ยกขึ้นเป็นสัญญากลางเฉพาะเส้นทางสแกน advertisement ดิบ
+/// (3 เมธอด) ส่วนเส้นทาง iBeacon ของ iOS (region monitoring / authorization level)
+/// ยังคงอยู่ที่ `beacon_kit_ios` เพราะยังไม่ยืนยันว่า Android มีอะไรเทียบเท่า
+/// (ADR-9) — หน้าจอนี้จึงต้องรู้เองว่าจะเดินทางไหน
+///
+/// **แผนกำจัด:** ADR-13 หัวข้อ 4 — เมื่อก้อนที่ 2 (ทำงานเบื้องหลัง) ตอบได้ว่า
+/// Android ทำอะไรได้บ้าง ให้ยกเส้นทาง iBeacon ขึ้นเป็นสัญญากลางด้วยชื่อที่เป็นกลาง
+/// แล้วลบตัวแปรนี้ทิ้ง
+final bool _splitByPlatformUntilAdr13Step4 = Platform.isAndroid;
 
 void main() {
   runApp(const BeaconKitExampleApp());
@@ -76,6 +97,12 @@ class _ScanPageState extends State<ScanPage> {
   void initState() {
     super.initState();
     BeaconManager.register(_adapter);
+    if (_splitByPlatformUntilAdr13Step4) {
+      // ทุกอย่างข้างล่างนี้เป็นเส้นทาง iBeacon ของ iOS ล้วน (region monitoring,
+      // ระดับสิทธิ์ location, notification สำหรับพิสูจน์ B5) — Android ยังไม่มี
+      // อะไรเทียบเท่า เรียกไปก็ได้แต่ MissingPluginException
+      return;
+    }
     // เริ่มฟัง region event ทันทีตั้งแต่แอปเปิด **ไม่รอให้ผู้ใช้กดปุ่ม** —
     // จำเป็นสำหรับ B5: ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาส่ง event ไม่มีใคร
     // มากดปุ่มให้ ถ้าเริ่มฟังตอนกดปุ่มเท่านั้น event นั้นจะหายไปเงียบ ๆ
@@ -168,6 +195,10 @@ class _ScanPageState extends State<ScanPage> {
   }
 
   void _startScan() {
+    if (_splitByPlatformUntilAdr13Step4) {
+      unawaited(_startAndroidScan());
+      return;
+    }
     setState(() {
       _errorMessage = null;
       _isScanning = true;
@@ -196,9 +227,94 @@ class _ScanPageState extends State<ScanPage> {
     );
   }
 
+  /// เส้นทางของ Android — ใช้ **สัญญากลาง** `BeaconKitPlatform` ล้วน ไม่ผ่าน
+  /// `GenericIBeaconEddystoneAdapter` เพราะ adapter ตัวนั้นเรียก iBeacon region
+  /// monitoring ของ iOS ซึ่งยังไม่มีอะไรเทียบเท่าบน Android (ADR-9)
+  ///
+  /// บน Android เห็น iBeacon ผ่านเส้นทาง raw ได้เลย เพราะ Android ไม่ mask
+  /// manufacturer data เหมือน iOS — `IBeaconParser` ตัวเดียวกับที่มีอยู่แล้วเป็นคน
+  /// ถอด (**นี่คือครั้งแรกที่ parser ตัวนั้นถูกใช้งานจริง** บน iOS ไม่เคยถูกเรียก
+  /// เลยเพราะ CoreLocation ถอดให้ก่อน)
+  Future<void> _startAndroidScan() async {
+    setState(() {
+      _errorMessage = null;
+      _beacons.clear();
+    });
+
+    const beaconKitAndroid = BeaconKitAndroid();
+    final ScanPermissionStatus status;
+    try {
+      status = await beaconKitAndroid.requestScanPermissions();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'ขอสิทธิ์ไม่สำเร็จ: $error');
+      return;
+    }
+    if (!mounted) return;
+
+    // แต่ละสถานะมีทางออกของตัวเองชัดเจน **ห้ามมีเคสที่เงียบแล้วไม่ทำอะไรเลย** —
+    // บทเรียนตรงจากบั๊กบน iOS รอบ 2 ที่กด Start แล้วไม่มีอะไรเกิดขึ้นและไม่มี error
+    switch (status) {
+      case ScanPermissionStatus.granted:
+        break;
+      case ScanPermissionStatus.permanentlyDenied:
+        setState(
+          () => _errorMessage =
+              'สิทธิ์ถูกปฏิเสธถาวร — ขอซ้ำไม่มีผลแล้ว กำลังพาไปหน้า Settings',
+        );
+        await beaconKitAndroid.openAppSettings();
+        return;
+      case ScanPermissionStatus.denied:
+      case ScanPermissionStatus.notDetermined:
+        setState(
+          () => _errorMessage =
+              'ต้องให้สิทธิ์ Bluetooth (สแกน) และ Location ถึงจะสแกนได้',
+        );
+        return;
+    }
+
+    setState(() => _isScanning = true);
+    _subscription = BeaconKitPlatform.instance.rawAdvertisementEvents.listen(
+      (advertisement) {
+        final key =
+            '${advertisement.deviceId.kind}:${advertisement.deviceId.value}';
+        setState(() => _beacons[key] = advertisement);
+      },
+      onError: (Object error) {
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = error.toString();
+          _isScanning = false;
+        });
+      },
+    );
+
+    try {
+      await BeaconKitPlatform.instance.startBluetoothScan([
+        _eddystoneServiceUuid,
+      ]);
+    } on Object catch (error) {
+      await _subscription?.cancel();
+      _subscription = null;
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = error.toString();
+        _isScanning = false;
+      });
+    }
+  }
+
   Future<void> _stopScan() async {
     await _subscription?.cancel();
     _subscription = null;
+    if (_splitByPlatformUntilAdr13Step4) {
+      try {
+        await BeaconKitPlatform.instance.stopBluetoothScan();
+      } on Object {
+        // หยุดไม่สำเร็จไม่ควรทำให้ UI ค้างอยู่ในสถานะ "กำลังสแกน"
+      }
+    }
+    if (!mounted) return;
     setState(() => _isScanning = false);
   }
 
@@ -251,24 +367,25 @@ class _ScanPageState extends State<ScanPage> {
               ],
             ),
           ),
-          _BackgroundTestPanel(
-            authorizationLevel: _authorizationLevel,
-            isMonitoringRegions: _isMonitoringRegions,
-            lastRegionEvent: _lastRegionEvent,
-            onStartRegionMonitoring: _startRegionMonitoring,
-            onRefreshAuthorization: _refreshAuthorizationLevel,
-            enterCount: _enterCount,
-            exitCount: _exitCount,
-            lastEventAt: _lastEventAt,
-            onOpenLog: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => LogPage(
-                  log: _log,
-                  regionEvents: _adapter.regionStateEvents,
+          if (!_splitByPlatformUntilAdr13Step4)
+            _BackgroundTestPanel(
+              authorizationLevel: _authorizationLevel,
+              isMonitoringRegions: _isMonitoringRegions,
+              lastRegionEvent: _lastRegionEvent,
+              onStartRegionMonitoring: _startRegionMonitoring,
+              onRefreshAuthorization: _refreshAuthorizationLevel,
+              enterCount: _enterCount,
+              exitCount: _exitCount,
+              lastEventAt: _lastEventAt,
+              onOpenLog: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => LogPage(
+                    log: _log,
+                    regionEvents: _adapter.regionStateEvents,
+                  ),
                 ),
               ),
             ),
-          ),
           Expanded(
             child: beacons.isEmpty
                 ? const Center(child: Text('No beacons found yet'))
@@ -292,12 +409,11 @@ class _BeaconTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isCoreLocation =
-        advertisement.source == AdvertisementSource.coreLocation;
+    final isOsDecoded = advertisement.source == AdvertisementSource.osDecoded;
     final eddystone = advertisement.raw['eddystone'];
 
     return ListTile(
-      leading: Icon(isCoreLocation ? Icons.location_on : Icons.bluetooth),
+      leading: Icon(isOsDecoded ? Icons.location_on : Icons.bluetooth),
       title: Text(advertisement.deviceId.value),
       subtitle: Text(_subtitleFor(advertisement, eddystone)),
       trailing: Text('${advertisement.rssi} dBm'),
@@ -306,17 +422,27 @@ class _BeaconTile extends StatelessWidget {
 
   String _subtitleFor(BeaconAdvertisement advertisement, Object? eddystone) {
     final sourceLabel = switch (advertisement.source) {
-      AdvertisementSource.coreLocation => 'iBeacon (CoreLocation)',
-      AdvertisementSource.coreBluetooth => 'CoreBluetooth',
-      AdvertisementSource.android => 'Android',
+      AdvertisementSource.osDecoded => 'iBeacon (OS ถอดให้)',
+      AdvertisementSource.rawParsed => 'raw ADV (Dart parser ถอด)',
     };
 
-    if (advertisement.source == AdvertisementSource.coreLocation) {
+    if (advertisement.source == AdvertisementSource.osDecoded) {
       return '$sourceLabel\n'
           'uuid: ${advertisement.ibeaconUuid}, '
           'major: ${advertisement.ibeaconMajor}, '
           'minor: ${advertisement.ibeaconMinor}\n'
           'proximity: ${advertisement.proximity?.name ?? 'unknown'}';
+    }
+
+    // บน Android เส้นทาง raw เห็น iBeacon ได้ (Android ไม่ mask เหมือน iOS)
+    // จึงต้องแสดง uuid/major/minor ตรงนี้ด้วย ไม่งั้นหน้าจอสองเครื่องจะดูไม่
+    // เหมือนกันทั้งที่เป็น beacon ตัวเดียวกัน
+    if (advertisement.ibeaconUuid != null) {
+      return '$sourceLabel\n'
+          'uuid: ${advertisement.ibeaconUuid}, '
+          'major: ${advertisement.ibeaconMajor}, '
+          'minor: ${advertisement.ibeaconMinor}\n'
+          'txPower: ${advertisement.ibeaconTxPower} dBm';
     }
 
     if (eddystone != null) {

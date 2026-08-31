@@ -9,7 +9,7 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 
 ---
 
-## ตารางสถานะฟีเจอร์ (ณ 30 ส.ค. 2026)
+## ตารางสถานะฟีเจอร์ (ณ 31 ส.ค. 2026)
 
 | ฟีเจอร์ | สถานะ | อ่านว่ายังไง |
 |---|---|---|
@@ -19,7 +19,9 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 | **ปลุกแอปหลังผู้ใช้ปัดแอปทิ้งเอง (B5)** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว — **เฉพาะเคส force-quit** | ทดสอบ 2 รอบด้วย release/profile build หลังลบแอปติดตั้งใหม่: iOS ปลุก process ที่ตายแล้วขึ้นมาส่ง event จริง (exit 55/30 วิ · enter 5/3 วิ) **ยังไม่ได้ทดสอบกรณีระบบฆ่าแอปเองจากหน่วยความจำ ซึ่งเกิดบ่อยกว่ามากในการใช้งานจริง** |
 | **GATT connect / auth / config / OTA** | ❌ **ยังไม่ implement** | ไม่มีโค้ดส่วนนี้อยู่เลย `connect()` throw `UnsupportedError` ทันที |
 | **อ่านประวัติ sensor ย้อนหลัง** | ❌ **ยังไม่ implement** | มีแต่ interface ว่าง ๆ ไม่มี implementation |
-| **Android** (ทุกฟีเจอร์) | ❌ **ยังไม่มี** | เรียกจาก Android จะได้ `MissingPluginException` — ยังไม่มีแพ็กเกจ `beacon_kit_android` |
+| **Android — สแกนตอนแอปเปิดอยู่** | ⚠️ code-complete — **ยังไม่ได้ทดสอบบนเครื่องจริง** | มีแพ็กเกจ `beacon_kit_android` แล้ว ใช้ `BluetoothLeScanner` + `ScanFilter` ส่ง byte ดิบให้ **parser ตัวเดียวกับ iOS** ถอด · คอมไพล์ผ่าน (`flutter build apk --debug`) และมี unit test คุมการต่อสาย แต่**ยังไม่มีใครเห็นมันเจอ beacon จริง** |
+| **Android — ทำงานเบื้องหลัง** | ❌ **ยังไม่มี** | เป็นก้อนงานแยกที่ยังไม่เริ่ม · ยังไม่มีอะไรเทียบเท่า region monitoring ของ iOS (ADR-9 ยังเป็น open question) |
+| **Android — iBeacon region monitoring / สิทธิ์แบบ Always** | ❌ **ยังไม่มี** | เมธอดกลุ่มนี้อยู่ที่ `beacon_kit_ios` เท่านั้นโดยตั้งใจ (ADR-13) |
 
 **คำที่ใช้ในตารางนี้แปลว่า:**
 
@@ -60,6 +62,30 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 debounce เอง ค่าเริ่มต้นที่คำนวณจากข้อมูลจริงและวิธีคิดอยู่ใน ARCHITECTURE.md ADR-11
 (ย่อ: รวม session ถ้าห่างน้อยกว่า 5 นาที + ต้องอยู่ต่อเนื่องอย่างน้อย 2 นาที →
 ลด 85 ครั้งเหลือ 1)
+
+### 🤖 Android — สิ่งที่ต้องรู้ก่อนใช้
+
+**สิทธิ์:** `BLUETOOTH_SCAN` + `ACCESS_FINE_LOCATION` (ทั้งคู่เป็น runtime
+permission ต้องขอตอนรัน) — แพ็กเกจประกาศให้ใน manifest ของ plugin แล้ว แอปแค่
+เรียก `BeaconKitAndroid().requestScanPermissions()`
+
+⚠️ **`ACCESS_FINE_LOCATION` ตัดออกไม่ได้** แม้เอกสาร Android จะเสนอทางลัด
+`neverForLocation` ให้ — เพราะ (1) use case ของ SDK นี้คือการอนุมานว่าผู้ใช้อยู่
+สาขาไหน ซึ่งคือการอนุมานตำแหน่งตรงตัว การประกาศว่าไม่ใช่จึงผิดความจริง และ (2)
+เอกสารทางการเตือนเองว่าถ้าใส่ flag นั้น *"some BLE beacons are filtered from the
+scan results"* (ADR-12)
+
+**MIUI / Xiaomi (เช่น Redmi Note 9) — ข้อจำกัดระดับผลิตภัณฑ์ ไม่ใช่สิ่งที่แก้ด้วย
+โค้ดได้:** MIUI มีการจัดการพลังงานของตัวเองเพิ่มจาก Android มาตรฐาน ผู้ใช้อาจต้อง
+เปิด **Autostart** และตั้ง **battery saver เป็นไม่จำกัด** ด้วยมือ ไม่งั้นแอปถูกฆ่า
+
+**ไม่มี API ให้แอปเปิด Autostart ให้ตัวเองได้** — ทางแก้เดียวคือ **UX ที่พาผู้ใช้ไป
+ตั้งค่า** (หน้าจออธิบาย + ปุ่มลัดไปหน้า setting) ซึ่งต้องวางแผนร่วมกับทีมออกแบบ
+ตั้งแต่ต้น ไม่ใช่ปะทีหลัง
+
+🔶 **ยังไม่ยืนยันด้วยตัวเอง** — ยังไม่ได้รันบนเครื่องจริงและไม่พบเอกสารทางการของ
+Xiaomi ที่อ้างอิงได้ · และ**ไม่กระทบการสแกนตอนแอปเปิดอยู่** ซึ่งเป็นขอบเขตเดียวที่
+มีตอนนี้ — เรื่องนี้จะสำคัญตอนทำก้อนงานเบื้องหลัง
 
 **ข้อควรระวังสำหรับคนที่จะเขียนโค้ดตรวจว่าแอปถูกปลุกด้วย location event:**
 จากการทดสอบจริง `UIApplication.LaunchOptionsKey.location` ได้ `false` ทั้งที่แอปถูก
@@ -176,15 +202,14 @@ BeaconManager.register(adapter);
 final subscription = BeaconManager.scanAll().listen(
   (advertisement) {
     switch (advertisement.source) {
-      case AdvertisementSource.coreLocation:
-        // iOS ถอด uuid/major/minor/proximity มาให้แล้ว ไม่ต้อง parse เอง
+      case AdvertisementSource.osDecoded:
+        // OS ถอด uuid/major/minor/proximity มาให้แล้ว ไม่ต้อง parse เอง
         print('${advertisement.ibeaconMajor}/${advertisement.ibeaconMinor} '
             '${advertisement.rssi} dBm ${advertisement.proximity?.name}');
-      case AdvertisementSource.coreBluetooth:
-        // ได้ raw bytes มา Dart parser ถอดให้แล้วใส่ไว้ใน raw
-        print(advertisement.raw['eddystone']);
-      case AdvertisementSource.android:
-        break; // ยังไม่มี Android
+      case AdvertisementSource.rawParsed:
+        // ได้ raw bytes มา Dart parser ถอดให้แล้ว — ibeacon* กับ raw['eddystone']
+        // มีค่าก็ต่อเมื่อ parse สำเร็จ ต้องเช็ค null เสมอ
+        print(advertisement.ibeaconUuid ?? advertisement.raw['eddystone']);
     }
   },
   onError: (Object error) => print('scan error: $error'),

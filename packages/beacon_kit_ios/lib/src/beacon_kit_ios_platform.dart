@@ -64,13 +64,13 @@ abstract class BeaconKitIosPlatform extends PlatformInterface {
   }
 
   /// แต่ละ event = [BeaconAdvertisement] 1 ตัว (flatten แล้วจาก native batch ตาม
-  /// ADR-4), `source == AdvertisementSource.coreLocation` เสมอ
+  /// ADR-4), `source == AdvertisementSource.osDecoded` เสมอ
   Stream<BeaconAdvertisement> get iBeaconRangingEvents {
     throw UnimplementedError('iBeaconRangingEvents has not been implemented.');
   }
 
   /// แต่ละ event = [BeaconAdvertisement] 1 ตัว, `source ==
-  /// AdvertisementSource.coreBluetooth` เสมอ — service data ของ Eddystone
+  /// AdvertisementSource.rawParsed` เสมอ — service data ของ Eddystone
   /// (`0000feaa-0000-1000-8000-00805f9b34fb`) ถูก parse ด้วย `EddystoneParser`
   /// เสร็จแล้วก่อนส่งออก
   Stream<BeaconAdvertisement> get rawAdvertisementEvents {
