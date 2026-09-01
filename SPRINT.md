@@ -198,6 +198,6 @@ log เดิมวิ่งผ่าน Dart ซึ่งต้องมี Flu
 - region monitoring delegate + `region_state_events` channel + Always permission flow (B5/B6)
 - repo เตรียมเป็น SDK กลาง: LICENSE/NOTICE/README/CONTRIBUTING, แยก `DEVELOPMENT_TEAM`, tag `v0.1.0` push ขึ้น private remote แล้ว
 
-**ยืนยันบนเครื่องจริงแล้ว (29-30 ส.ค. 2026):** เช็คลิสต์ข้อ 2 (iBeacon ranging — แยก K9P 2 ตัวด้วย major/minor ได้ · background ไม่ kill: enter 5-8 วิ exit 30-50 วิ), ข้อ 6 (Eddystone URL frame จากอุปกรณ์บุคคลที่สาม), ข้อ 1 บางส่วน (Allow ครั้งเดียว + กด Start ซ้ำ), **ข้อ 12 = B5 (ปลุกหลัง force-quit — 2 รอบ)**
+**ยืนยันบนเครื่องจริงแล้ว (29-31 ส.ค. 2026):** เช็คลิสต์ข้อ 2 (iBeacon ranging — แยก K9P 2 ตัวด้วย major/minor ได้ · background ไม่ kill: enter 5-8 วิ exit 30-50 วิ), ข้อ 6 (Eddystone URL frame จากอุปกรณ์บุคคลที่สาม), **ข้อ 1b ครบทุกลำดับ** (รวมลำดับ Don't Allow → Settings → กลับแอปโดยไม่ force quit ที่ retest ผ่านเมื่อ 31 ส.ค. = ปิดบั๊กรอบ 2 สมบูรณ์), **ข้อ 12 = B5 (ปลุกหลัง force-quit — 2 รอบ)**
 
-**ยังไม่เคยยืนยันบนเครื่องจริงเลย:** เช็คลิสต์ข้อ 3, 4, 5, 7, 9, 10, 13, 14, 15 / ข้อ 1 ลำดับ Don't Allow → Settings / **B6 ทั้งหมด** / **B5 กรณีระบบฆ่าแอปเองจากหน่วยความจำ** (คนละเส้นทางกับ force-quit และเกิดบ่อยกว่าในการใช้งานจริง)
+**ยังไม่เคยยืนยันบนเครื่องจริงเลย:** เช็คลิสต์ข้อ 3, 4, 5, 7, 9, 10, 13, 14, 15 / **B6 ทั้งหมด** / **B5 กรณีระบบฆ่าแอปเองจากหน่วยความจำ** (คนละเส้นทางกับ force-quit และเกิดบ่อยกว่าในการใช้งานจริง) / **ทุกอย่างฝั่ง Android**
