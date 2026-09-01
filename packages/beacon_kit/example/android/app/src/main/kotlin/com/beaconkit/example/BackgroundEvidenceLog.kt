@@ -11,6 +11,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 /**
@@ -83,8 +84,31 @@ object BackgroundEvidenceLog {
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
     }
 
-    fun iso8601WithOffset(timestampMillis: Long): String =
-        formatter.get()!!.format(Date(timestampMillis))
+    /**
+     * ต้องตั้ง `timeZone` **ทุกครั้งก่อน format** ห้ามพึ่งค่าที่ติดมาตอนสร้าง
+     *
+     * **บั๊กจริงที่ CI จับได้ (1 ก.ย. 2026) — ไม่ใช่แค่เรื่องของเทสต์:**
+     * `SimpleDateFormat` จับ default TimeZone ไว้ตั้งแต่ตอน **construct** และ
+     * formatter ตัวนี้ถูก cache ไว้ใน `ThreadLocal` ตลอดอายุ process ผลคือ
+     *
+     * 1. แต่ละเธรด (BroadcastReceiver / main / นาฬิกาปลุก) สร้าง formatter ของ
+     *    ตัวเองคนละเวลา — ถ้าเขตเวลาของเครื่องเปลี่ยนระหว่างนั้น **บรรทัดในไฟล์
+     *    เดียวกันจะมี offset ไม่ตรงกัน**
+     * 2. เธรดที่สร้าง formatter ไปแล้วจะใช้ offset เดิมตลอดไป แม้ผู้ใช้เปลี่ยน
+     *    เขตเวลาของเครื่อง
+     *
+     * ทั้งสองข้อทำให้ไฟล์หลักฐานเชื่อถือไม่ได้แบบเงียบ ๆ ซึ่งร้ายแรงเป็นพิเศษกับ
+     * เส้นทางนี้ เพราะ process ถูกออกแบบให้มีชีวิตข้ามคืนและจุดประสงค์ทั้งหมดของ
+     * คอลัมน์เวลาคือให้ผู้ทดสอบเทียบกับนาฬิกาข้อมือได้
+     *
+     * **ไม่ได้เจอบนเครื่องพัฒนาเลย** เพราะเครื่องตั้งเป็น `Asia/Bangkok` อยู่แล้ว
+     * ค่าที่ติดมาตอนสร้างจึงบังเอิญถูกเสมอ — เจอก็ต่อเมื่อรันบน runner ที่เป็น UTC
+     */
+    fun iso8601WithOffset(timestampMillis: Long): String {
+        val formatter = formatter.get()!!
+        formatter.timeZone = TimeZone.getDefault()
+        return formatter.format(Date(timestampMillis))
+    }
 
     /**
      * ประกอบหนึ่งบรรทัด — **pure function** จึงมี unit test คลุมได้จริงโดยไม่ต้อง

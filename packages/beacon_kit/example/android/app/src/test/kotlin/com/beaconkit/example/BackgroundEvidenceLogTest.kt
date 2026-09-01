@@ -84,6 +84,34 @@ class BackgroundEvidenceLogTest {
         )
     }
 
+    /**
+     * **เทสต์ที่จับบั๊กจริงได้เมื่อ 1 ก.ย. 2026** — เขตเวลาที่เปลี่ยนระหว่าง process
+     * ต้องมีผลกับบรรทัดถัดไปทันที
+     *
+     * เดิม `SimpleDateFormat` ถูก cache ไว้ใน `ThreadLocal` และจับ default TimeZone
+     * ไว้ตั้งแต่ตอน construct → บรรทัดที่เขียนหลังเขตเวลาเปลี่ยนยังใช้ offset เดิม
+     * และเธรดต่างกันที่สร้าง formatter คนละเวลาจะให้ offset ไม่ตรงกันในไฟล์เดียวกัน
+     *
+     * **สองเทสต์ข้างบนจับไม่ได้** เพราะถ้าเครื่องที่รันตั้งเป็น `Asia/Bangkok` อยู่
+     * แล้ว (เครื่องพัฒนา) ค่าที่ติดมาตอนสร้างก็บังเอิญถูกเสมอ — และถ้าเป็น UTC
+     * (CI runner) ผลจะขึ้นกับว่าเทสต์ตัวไหนรันก่อนจนไป warm formatter ไว้ ซึ่งเป็น
+     * ความเปราะที่ตัวเทสต์เองก็ผิดด้วย
+     *
+     * ตัวนี้ format **สองครั้งในเทสต์เดียว** ภายใต้เขตเวลาคนละอัน จึงไม่ขึ้นกับ
+     * ลำดับการรันและไม่ขึ้นกับเขตเวลาของเครื่องที่รัน
+     */
+    @Test
+    fun `เขตเวลาที่เปลี่ยนระหว่าง process มีผลกับบรรทัดถัดไปทันที`() {
+        TimeZone.setDefault(TimeZone.getTimeZone("Asia/Bangkok"))
+        val bangkok = BackgroundEvidenceLog.iso8601WithOffset(0L)
+
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        val utc = BackgroundEvidenceLog.iso8601WithOffset(0L)
+
+        assertEquals("1970-01-01T07:00:00.000+07:00", bangkok)
+        assertEquals("1970-01-01T00:00:00.000Z", utc)
+    }
+
     @Test
     fun `processId เป็นเลขฐานสิบหกพิมพ์เล็ก 8 ตัว และคงที่ตลอด process`() {
         val first = BackgroundEvidenceLog.processId
