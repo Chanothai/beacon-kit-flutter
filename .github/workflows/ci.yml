@@ -15,6 +15,23 @@ on:
   pull_request:
     branches: [main, develop]
 
+# ยกเลิกรอบเก่าของ ref เดียวกันเมื่อมี commit ใหม่เข้ามา
+#
+# **เหตุผลที่เพิ่ม (1 ก.ย. 2026):** CI ของ PR #11/#12 ล้มทุก job ด้วยข้อความ
+# "The job was not started because recent account payments have failed or your
+# spending limit needs to be increased" — ไม่ใช่ความผิดของโค้ด แต่เป็นโควตาหมด
+#
+# ก่อนหน้านี้การ push 3 commit ติดกันบน PR เดียว = รัน CI เต็มชุด 3 รอบพร้อมกัน
+# ทั้งที่มีแค่รอบสุดท้ายที่มีความหมาย — บนงานที่มี job ของ macOS ซึ่งคิดเงินที่
+# อัตรา 10 เท่าของ Linux ความสิ้นเปลืองตรงนี้ไม่ใช่เรื่องเล็ก
+#
+# **ไม่ยกเลิกรอบของ main** เพราะ commit บน main แต่ละอันคือสถานะที่ต้องรู้ผลจริง
+# ทุกอัน ไม่ใช่ร่างระหว่างทาง — ถ้ายกเลิก จะมี commit บน main ที่ไม่มีใครรู้ว่า
+# ผ่านหรือไม่ ซึ่งเป็นสิ่งที่โปรเจกต์นี้พยายามเลี่ยงมาตลอด
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   format:
     name: Verify formatting (dart format, ทั้ง repo)
@@ -117,6 +134,9 @@ jobs:
         working-directory: packages/beacon_kit/example/android
         run: ./gradlew :app:testDebugUnitTest :beacon_kit_android:testDebugUnitTest
 
+  # ⚠️ job เดียวในไฟล์นี้ที่รันบน macOS ซึ่ง **คิดเงินที่อัตรา 10 เท่าของ Linux**
+  # จึงเป็นตัวกินงบเกือบทั้งหมดของ CI ทั้งไฟล์ (ดูบันทึกที่ `concurrency` ข้างบน
+  # ว่าทำไมเรื่องนี้ถึงกลายเป็นปัญหาจริงเมื่อ 31 ส.ค. 2026)
   build-ios:
     name: Build iOS (${{ matrix.mode }}, no signing)
     runs-on: macos-latest
@@ -124,7 +144,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [debug, profile, release]
+        # **PR รันแค่ release · main รันครบ 3 โหมด**
+        #
+        # release เป็นโหมดที่เข้มที่สุดในสามตัว และเป็นโหมดที่ใช้ทดสอบบนอุปกรณ์จริง
+        # จริง ๆ (CONTRIBUTING ข้อ 6 ห้ามใช้ debug build ทดสอบเคสที่แอปถูก terminate)
+        # ระหว่างรีวิว PR จึงคุ้มที่สุดต่อหนึ่งนาที macOS ที่จ่ายไป
+        #
+        # **การครอบคลุมไม่ได้หายไป ถูกเลื่อนไปตอน merge** — commit บน main ยังรันครบ
+        # ทั้งสามโหมดเหมือนเดิม ถ้าวันหนึ่ง debug หรือ profile พังโดยที่ release ผ่าน
+        # จะรู้ตอน merge ไม่ใช่ไม่รู้เลย
+        mode: ${{ github.event_name == 'pull_request'
+                  && fromJSON('["release"]')
+                  || fromJSON('["debug","profile","release"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
