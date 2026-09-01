@@ -3,7 +3,14 @@ import 'dart:io' show Platform;
 
 import 'package:beacon_kit/beacon_kit.dart';
 import 'package:beacon_kit_android/beacon_kit_android.dart'
-    show BeaconKitAndroid, ScanPermissionStatus;
+    show
+        AndroidBackgroundMonitoringResult,
+        AndroidBackgroundMonitoringStatus,
+        AndroidBackgroundRegionEvent,
+        AndroidBeaconRegion,
+        AndroidRegionState,
+        BeaconKitAndroid,
+        ScanPermissionStatus;
 import 'package:flutter/material.dart';
 
 import 'diagnostics/launch_context.dart';
@@ -70,6 +77,21 @@ class _ScanPageState extends State<ScanPage> {
   StreamSubscription<BeaconAdvertisement>? _subscription;
   StreamSubscription<IBeaconRegionStateEvent>? _regionSubscription;
 
+  // ---- เฝ้า region เบื้องหลังฝั่ง Android (ADR-14) ----
+  //
+  // **ตัวแปรคนละชุดกับฝั่ง iOS โดยตั้งใจ** ไม่ใช่เพราะขี้เกียจรวม — สองเส้นทางนี้
+  // ให้ข้อมูลคนละคุณภาพ (ระบบคำนวณให้ vs เราคำนวณเอง) การรวมตัวแปรจะทำให้หน้าจอ
+  // แสดงเลขเดียวกันโดยที่คนอ่านไม่รู้ว่ามาจากกลไกคนละแบบ
+  StreamSubscription<AndroidBackgroundRegionEvent>?
+  _androidBackgroundSubscription;
+  AndroidBackgroundMonitoringStatus? _androidBackgroundStatus;
+  AndroidBackgroundMonitoringResult? _androidBackgroundStartResult;
+  String? _lastAndroidBackgroundEvent;
+
+  /// จำนวน event ที่เกิดตอน process **ยังไม่เคยมี UI** — ตัวเลขที่ต้องมากกว่า 0
+  /// จึงจะพูดได้ว่าการทำงานเบื้องหลังทำงานจริง
+  int _androidBackgroundOriginEvents = 0;
+
   // ---- เครื่องมือสำหรับพิสูจน์ B5/B6 (อยู่ใน example app เท่านั้น) ----
   final RegionEventLog _log = const RegionEventLog();
   final ExampleDiagnostics _diagnostics = const ExampleDiagnostics();
@@ -99,8 +121,10 @@ class _ScanPageState extends State<ScanPage> {
     BeaconManager.register(_adapter);
     if (_splitByPlatformUntilAdr13Step4) {
       // ทุกอย่างข้างล่างนี้เป็นเส้นทาง iBeacon ของ iOS ล้วน (region monitoring,
-      // ระดับสิทธิ์ location, notification สำหรับพิสูจน์ B5) — Android ยังไม่มี
-      // อะไรเทียบเท่า เรียกไปก็ได้แต่ MissingPluginException
+      // ระดับสิทธิ์ location) — Android มีเส้นทางเบื้องหลังของตัวเองที่คนละกลไก
+      // (ADR-14) จึงแยกไปตั้งต้นคนละทาง ไม่ใช่เรียกของ iOS แล้วหวังว่าจะได้ผล
+      _listenToAndroidBackgroundEvents();
+      unawaited(_refreshAndroidBackgroundStatus());
       return;
     }
     // เริ่มฟัง region event ทันทีตั้งแต่แอปเปิด **ไม่รอให้ผู้ใช้กดปุ่ม** —
@@ -304,6 +328,122 @@ class _ScanPageState extends State<ScanPage> {
     }
   }
 
+  // ---- เฝ้า region เบื้องหลังฝั่ง Android (ADR-14) ----
+
+  /// เริ่มฟัง **ตั้งแต่แอปเปิด ไม่รอให้ผู้ใช้กดปุ่ม**
+  ///
+  /// จำเป็นด้วยเหตุผลเดียวกับฝั่ง iOS (ADR-10): event ที่ถูกคิวไว้ตอนแอปปิดอยู่จะ
+  /// ถูกปล่อยออกมาทั้งชุดทันทีที่มีคน subscribe ถ้าเริ่มฟังตอนกดปุ่มเท่านั้น
+  /// **หลักฐานที่รอมาทั้งคืนจะหายไปเงียบ ๆ** ก่อนที่ใครจะได้เห็น
+  void _listenToAndroidBackgroundEvents() {
+    _androidBackgroundSubscription = const BeaconKitAndroid()
+        .backgroundRegionEvents
+        .listen(
+          _onAndroidBackgroundEvent,
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(
+              () => _errorMessage = 'background region event error: $error',
+            );
+          },
+        );
+  }
+
+  void _onAndroidBackgroundEvent(AndroidBackgroundRegionEvent event) {
+    if (!mounted) return;
+    setState(() {
+      switch (event.state) {
+        case AndroidRegionState.enter:
+          _enterCount++;
+        case AndroidRegionState.exit:
+          _exitCount++;
+      }
+      if (event.fromBackgroundProcess) _androidBackgroundOriginEvents++;
+      // แสดง `event.timestamp` ไม่ใช่ `DateTime.now()` — event ที่ถูกคิวไว้อาจเก่า
+      // กว่าตอนนี้หลายชั่วโมง ถ้าแสดงเวลาปัจจุบันจะดูเหมือนทุกอย่างเพิ่งเกิดตอน
+      // เปิดแอป ซึ่งกลบสิ่งที่การทดสอบต้องการวัดพอดี
+      _lastEventAt = event.timestamp;
+      _lastAndroidBackgroundEvent =
+          '${event.state.name} ${event.regionIdentifier} '
+          '(${event.fromBackgroundProcess ? "process เบื้องหลัง" : "process ที่มี UI"})';
+    });
+  }
+
+  Future<void> _refreshAndroidBackgroundStatus() async {
+    try {
+      final status = await const BeaconKitAndroid()
+          .getBackgroundRegionMonitoringStatus();
+      if (!mounted) return;
+      setState(() => _androidBackgroundStatus = status);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'อ่านสถานะเบื้องหลังไม่ได้: $error');
+    }
+  }
+
+  /// ค่า N ที่ใช้ในเดโม — "ไม่เห็นกี่วินาทีถือว่าออกจาก region"
+  ///
+  /// **ตั้งใจให้อยู่ในแอป ไม่ใช่ใน SDK** ตาม ADR-11 หัวข้อ 7: ค่านี้เป็นการตัดสินใจ
+  /// ทางธุรกิจบนข้อมูลเทคนิค SDK ไม่รู้ว่า "เข้าสาขา" แปลว่าอะไรในเชิงธุรกิจ
+  ///
+  /// 30 วินาทีเลือกให้ตรงกับค่าหน่วงที่ **วัดได้จากพฤติกรรมของ iOS** ในการทดสอบ
+  /// ข้ามคืน 30-31 ส.ค. 2026 (ADR-11 หัวข้อ 2) เพื่อให้ผลรอบทดสอบแรกของสอง
+  /// แพลตฟอร์มเทียบกันได้ — ไม่ใช่ค่าที่เหมาะกับ production
+  static const int _androidExitTimeoutSeconds = 30;
+
+  Future<void> _startAndroidBackgroundMonitoring() async {
+    setState(() => _errorMessage = null);
+
+    const beaconKitAndroid = BeaconKitAndroid();
+    // ต้องมีสิทธิ์ก่อน ไม่งั้นการลงทะเบียนจะล้มเหลวทุก region และผู้ใช้จะเห็นแค่
+    // ตาราง failed ที่ไม่บอกว่าต้องทำอะไรต่อ
+    final status = await beaconKitAndroid.requestScanPermissions();
+    if (!mounted) return;
+    if (status != ScanPermissionStatus.granted) {
+      setState(
+        () => _errorMessage =
+            'ต้องให้สิทธิ์ Bluetooth (สแกน) และ Location ก่อนถึงจะเฝ้าเบื้องหลังได้ '
+            '(สถานะตอนนี้: ${status.name})',
+      );
+      return;
+    }
+
+    try {
+      final result = await beaconKitAndroid.startBackgroundRegionMonitoring(
+        regions: const [
+          AndroidBeaconRegion(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
+        ],
+        exitTimeoutSeconds: _androidExitTimeoutSeconds,
+      );
+      if (!mounted) return;
+      setState(() {
+        _androidBackgroundStartResult = result;
+        // แสดงความล้มเหลวรายอันเป็น error ทันที ไม่ปล่อยให้ต้องไปสังเกตเอาเองว่า
+        // ทำไมไม่มี event — "เงียบแล้วไม่รู้ว่าเงียบเพราะอะไร" คือปัญหาที่เสียเวลา
+        // ไปทั้งรอบทดสอบมาแล้ว (ADR-10)
+        if (result.failed.isNotEmpty) {
+          _errorMessage = 'ลงทะเบียนไม่สำเร็จ: ${result.failed}';
+        }
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'เริ่มเฝ้าเบื้องหลังไม่ได้: $error');
+    }
+    await _refreshAndroidBackgroundStatus();
+  }
+
+  Future<void> _stopAndroidBackgroundMonitoring() async {
+    try {
+      await const BeaconKitAndroid().stopBackgroundRegionMonitoring();
+      if (!mounted) return;
+      setState(() => _androidBackgroundStartResult = null);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'หยุดเฝ้าเบื้องหลังไม่ได้: $error');
+    }
+    await _refreshAndroidBackgroundStatus();
+  }
+
   Future<void> _stopScan() async {
     await _subscription?.cancel();
     _subscription = null;
@@ -322,6 +462,9 @@ class _ScanPageState extends State<ScanPage> {
   void dispose() {
     _subscription?.cancel();
     _regionSubscription?.cancel();
+    // ยกเลิกเฉพาะ **การฟัง** ไม่ได้สั่งหยุดเฝ้า — การเฝ้าเบื้องหลังต้องอยู่ต่อ
+    // หลังหน้าจอนี้ถูกทิ้ง ซึ่งเป็นเหตุผลทั้งหมดที่มันมีอยู่
+    _androidBackgroundSubscription?.cancel();
     BeaconManager.unregisterAll();
     super.dispose();
   }
@@ -367,6 +510,29 @@ class _ScanPageState extends State<ScanPage> {
               ],
             ),
           ),
+          if (_splitByPlatformUntilAdr13Step4)
+            _AndroidBackgroundPanel(
+              status: _androidBackgroundStatus,
+              startResult: _androidBackgroundStartResult,
+              lastEvent: _lastAndroidBackgroundEvent,
+              enterCount: _enterCount,
+              exitCount: _exitCount,
+              backgroundOriginEvents: _androidBackgroundOriginEvents,
+              lastEventAt: _lastEventAt,
+              exitTimeoutSeconds: _androidExitTimeoutSeconds,
+              onStart: _startAndroidBackgroundMonitoring,
+              onStop: _stopAndroidBackgroundMonitoring,
+              onRefresh: _refreshAndroidBackgroundStatus,
+              onOpenLog: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => LogPage(
+                    log: _log,
+                    regionEvents:
+                        const BeaconKitAndroid().backgroundRegionEvents,
+                  ),
+                ),
+              ),
+            ),
           if (!_splitByPlatformUntilAdr13Step4)
             _BackgroundTestPanel(
               authorizationLevel: _authorizationLevel,
@@ -626,4 +792,163 @@ class _EventCounter extends StatelessWidget {
       ],
     );
   }
+}
+
+/// แผงเครื่องมือทดสอบการทำงานเบื้องหลัง **ฝั่ง Android** — อยู่ใน example app เท่านั้น
+///
+/// ## ทำไมไม่ใช้แผงเดียวกับ iOS
+///
+/// สองแพลตฟอร์มทำคนละอย่าง ADR-14 หัวข้อ 1 สรุปไว้ และหน้าจอต้องสะท้อนความจริงนั้น
+/// ไม่ใช่ทำให้ดูเหมือนกันเพื่อความสวยงาม:
+///
+/// - iOS แสดง **ระดับสิทธิ์ location** (`always`/`whenInUse`) ซึ่งไม่มีความหมาย
+///   บน Android · Android แสดง **ค่า N ของ exit** ซึ่งไม่มีบน iOS
+/// - iOS แสดง `monitoredRegions` ที่ **ระบบ** ตอบ · Android แสดงรายการที่
+///   **เราเองจำไว้** ซึ่งอาจไม่ตรงกับความจริงหลัง force-stop
+///
+/// ถ้ายัดสองอย่างนี้ลงแผงเดียวกัน คนอ่านหน้าจอจะสรุปว่าสองแพลตฟอร์มให้ข้อมูล
+/// คุณภาพเดียวกัน ซึ่งเป็นสิ่งที่ ADR-9 สั่งห้ามไว้ตรง ๆ
+class _AndroidBackgroundPanel extends StatelessWidget {
+  const _AndroidBackgroundPanel({
+    required this.status,
+    required this.startResult,
+    required this.lastEvent,
+    required this.enterCount,
+    required this.exitCount,
+    required this.backgroundOriginEvents,
+    required this.lastEventAt,
+    required this.exitTimeoutSeconds,
+    required this.onStart,
+    required this.onStop,
+    required this.onRefresh,
+    required this.onOpenLog,
+  });
+
+  final AndroidBackgroundMonitoringStatus? status;
+  final AndroidBackgroundMonitoringResult? startResult;
+  final String? lastEvent;
+  final int enterCount;
+  final int exitCount;
+  final int backgroundOriginEvents;
+  final DateTime? lastEventAt;
+  final int exitTimeoutSeconds;
+  final Future<void> Function() onStart;
+  final Future<void> Function() onStop;
+  final Future<void> Function() onRefresh;
+  final VoidCallback onOpenLog;
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = status?.isActive ?? false;
+    final theme = Theme.of(context);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'เฝ้า region เบื้องหลัง (Android)',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            // ข้อความนี้ต้องอยู่บนหน้าจอ ไม่ใช่แค่ในเอกสาร — คนที่ทดสอบเป็นคนแรก
+            // ที่จะสรุปผล และเขาต้องเห็นข้อจำกัดพร้อมกับตัวเลข
+            Text(
+              'กลไกคนละอย่างกับ iOS: enter/exit คำนวณเองจากการเห็น/ไม่เห็นผลสแกน '
+              '· ไม่รอด force-stop · หลังรีบูตต้องรอผู้ใช้ปลดล็อกก่อน',
+              style: theme.textTheme.bodySmall,
+            ),
+            const Divider(),
+            _row('สั่งเฝ้าอยู่หรือไม่', isActive ? 'ใช่' : 'ไม่'),
+            _row(
+              'region ที่จำไว้',
+              status?.regionIdentifiers.join(', ').ifEmpty('—') ?? '—',
+            ),
+            _row('ไม่เห็นกี่วินาทีถือว่าออก', '$exitTimeoutSeconds วินาที'),
+            if (status != null && status!.queuedEventCount > 0)
+              _row(
+                'event ที่คิวไว้ตอนไม่มี engine',
+                '${status!.queuedEventCount}',
+              ),
+            if (startResult != null)
+              _row(
+                'ผลลงทะเบียนล่าสุด',
+                'สำเร็จ ${startResult!.registered.length}'
+                    '${startResult!.failed.isEmpty ? "" : " · ล้มเหลว ${startResult!.failed}"}',
+              ),
+            const Divider(),
+            _row('enter / exit ที่เห็นในรอบนี้', '$enterCount / $exitCount'),
+            // ตัวเลขที่สำคัญที่สุดของทั้งสปรินต์ — ถ้าเป็น 0 แปลว่ายังพิสูจน์
+            // ไม่ได้ว่าอะไรทำงานเบื้องหลัง ไม่ว่าตัวเลขอื่นจะสวยแค่ไหน
+            _row(
+              'ในนั้นเกิดตอน process ไม่มี UI',
+              '$backgroundOriginEvents',
+              emphasise: backgroundOriginEvents > 0,
+            ),
+            if (lastEvent != null) _row('event ล่าสุด', lastEvent!),
+            if (lastEventAt != null)
+              _row('เวลาที่ native บันทึก', '$lastEventAt'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton(
+                  onPressed: isActive ? null : () => onStart(),
+                  child: const Text('เริ่มเฝ้าเบื้องหลัง'),
+                ),
+                OutlinedButton(
+                  onPressed: isActive ? () => onStop() : null,
+                  child: const Text('หยุดเฝ้า'),
+                ),
+                TextButton(
+                  onPressed: () => onRefresh(),
+                  child: const Text('รีเฟรชสถานะ'),
+                ),
+                TextButton(onPressed: onOpenLog, child: const Text('ดู log')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _row(String label, String value, {bool emphasise = false}) {
+    return Builder(
+      builder: (context) {
+        final style = Theme.of(context).textTheme.bodySmall;
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 4, child: Text(label, style: style)),
+              Expanded(
+                flex: 5,
+                child: Text(
+                  value,
+                  style: emphasise
+                      ? style?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                        )
+                      : style,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+extension _IfEmpty on String {
+  /// คืน [fallback] เมื่อสตริงว่าง — กันช่องว่างเปล่าบนหน้าจอที่แยกไม่ออกว่า
+  /// "ไม่มีข้อมูล" หรือ "โหลดไม่สำเร็จ"
+  String ifEmpty(String fallback) => isEmpty ? fallback : this;
 }

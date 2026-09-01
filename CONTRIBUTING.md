@@ -53,16 +53,32 @@ dart format --output=none --set-exit-if-changed .
 
 # 2. analyze — ต้องสะอาดทุก package (--fatal-infos คือ info ก็ถือว่าไม่ผ่าน)
 for p in packages/beacon_kit_platform_interface packages/beacon_kit_ios \
-         packages/beacon_kit packages/beacon_kit/example; do
+         packages/beacon_kit_android packages/beacon_kit \
+         packages/beacon_kit/example; do
   (cd "$p" && flutter analyze --fatal-infos) || exit 1
 done
 
 # 3. test — ต้องผ่านทุก package
 for p in packages/beacon_kit_platform_interface packages/beacon_kit_ios \
-         packages/beacon_kit packages/beacon_kit/example; do
+         packages/beacon_kit_android packages/beacon_kit \
+         packages/beacon_kit/example; do
   (cd "$p" && flutter test) || exit 1
 done
 ```
+
+ถ้าแตะโค้ด **Kotlin** ต้องรันเพิ่ม:
+
+```bash
+cd packages/beacon_kit/example
+flutter build apk --debug
+# unit test ฝั่ง JVM — `flutter test` ไม่รันให้ (คนละ test runner)
+cd android
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+  ./gradlew :app:testDebugUnitTest :beacon_kit_android:testDebugUnitTest
+```
+
+`flutter test` **ไม่รัน** unit test ของ Kotlin เลย — ด้วยเหตุผลเดียวกับที่มันไม่รัน
+XCTest ถ้าแก้ Kotlin แล้วรันแค่ `flutter test` เท่ากับไม่ได้ทดสอบสิ่งที่แก้
 
 ถ้าแตะโค้ด Swift ต้องรันเพิ่ม:
 
@@ -77,6 +93,18 @@ xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner \
 ถ้าแก้ Swift แล้วรันแค่ `flutter test` เท่ากับไม่ได้ทดสอบสิ่งที่แก้เลย
 
 CI (`.github/workflows/ci.yml`) รันข้อ 1-3 ซ้ำทุก push/PR
+
+**ข้อยกเว้นเดียวที่ต้องรู้ — `Build iOS` บน PR รันแค่โหมด `release`**
+
+job นั้นรันบน macOS ซึ่ง GitHub คิดเงินที่อัตรา **10 เท่าของ Linux** จึงเป็นตัวกินงบ
+เกือบทั้งหมดของ CI ทั้งไฟล์ · บน PR จึงรันเฉพาะ `release` (โหมดที่เข้มที่สุด และเป็น
+โหมดที่ใช้ทดสอบบนอุปกรณ์จริงจริง ๆ ตามข้อ 6) ส่วน **commit บน `main` ยังรันครบทั้ง
+สามโหมดเหมือนเดิม**
+
+แปลว่าถ้า `debug` หรือ `profile` พังโดยที่ `release` ผ่าน **จะรู้ตอน merge ไม่ใช่
+ตอนรีวิว PR** — ถ้าคุณแก้อะไรที่กระทบ build เฉพาะโหมด (เช่น `#if DEBUG`,
+assertion, หรือ flag ของ Xcode ที่ต่างกันตามโหมด) ให้รันครบทั้งสามโหมดในเครื่องเอง
+ก่อนเปิด PR
 
 ## 4. กฎการรายงานสถานะ — ข้อที่สำคัญที่สุดในเอกสารนี้
 

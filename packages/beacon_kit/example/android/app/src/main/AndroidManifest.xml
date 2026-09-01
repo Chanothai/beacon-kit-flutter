@@ -1,7 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      android:name=".ExampleApplication" — **ไม่ใช้ ${applicationName} ที่ Flutter
+      เติมให้** (ค่าปกติคือ android.app.Application)
+
+      เหตุผล (ADR-14): เมื่อระบบส่งผลสแกนมาที่ BeaconScanReceiver ตอนแอปถูกปิดไปแล้ว
+      ระบบจะสร้าง process ใหม่แล้วเรียก Application.onCreate() **ก่อน** onReceive()
+      เสมอ — เป็นจุดเดียวที่รับประกันได้ว่าจะทำงานทุกครั้งที่ process เกิด ไม่ว่าจะ
+      เกิดด้วยเหตุใด เครื่องมือเขียน log จึงต้องอยู่ที่นั่น ไม่ใช่ที่ Activity
+
+      ระบุชื่อคลาสตรง ๆ แทนการตั้ง manifestPlaceholder เพื่อให้ตรวจได้จากไฟล์นี้ไฟล์
+      เดียวว่าใครเป็น Application — placeholder ที่ปลั๊กอินอื่นเขียนทับได้จะกลายเป็น
+      ความล้มเหลวเงียบ ๆ ที่ไม่มีใครเห็นจนกว่าจะไปทดสอบเบื้องหลังแล้วไม่มี log
+    -->
     <application
         android:label="example"
-        android:name="${applicationName}"
+        android:name=".ExampleApplication"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

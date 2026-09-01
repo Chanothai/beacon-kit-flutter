@@ -1673,3 +1673,555 @@ abstraction เป็นกลางโดยไม่มีตัวอย่�
 **สิ่งที่ควรทำเมื่อยี่ห้อที่สองมา:** ทำแบบเดียวกับรอบนี้ — implement ให้ทำงานได้
 ก่อนโดยยอมรับหนี้ชั่วคราวที่จำกัดขอบเขตไว้ที่จุดเดียว แล้วค่อย refactor สัญญาจาก
 ข้อมูลจริงสองชุด ไม่ใช่จากการเดาล่วงหน้า
+
+---
+
+## ADR-14: Android ก้อนที่ 2 — การทำงานเบื้องหลัง (เพิ่ม 31 ส.ค. 2026)
+
+**สถานะ:** ✅ ค้นคว้าเสร็จ (หัวข้อ 1-3) · ✅ ตัดสินใจแล้ว (หัวข้อ 4) ·
+✅ implement แล้ว (หัวข้อ 5) · 🛑 **ยังไม่ verified บนอุปกรณ์จริง** (หัวข้อ 7)
+
+**สถานะตามคำที่ CONTRIBUTING ข้อ 4 กำหนด: `code-complete, unverified`**
+
+**เครื่องเป้าหมาย:** Redmi Note 9 (`M2003J15SC`) · Android 12 (SDK 31) ·
+MIUI `V13.0.2.0.SJOMIXM` — ยืนยันรุ่นจาก `adb shell getprop` เมื่อ 31 ส.ค. 2026
+
+---
+
+### 1. ตอบตารางคำถามที่ค้างใน ADR-9 ให้ครบ
+
+ADR-9 สั่งไว้ว่า **"ก่อนตัดสิน ต้องรัน `beacon-sdk-verify` หรือการค้นคว้าเทียบเท่า
+กับเอกสาร Android อย่างเป็นระบบก่อน — ตอบตารางข้างบนให้ครบพร้อม citation แล้ว
+กลับมาเขียน ADR ต่อจากนี้ ไม่ใช่ตัดสินจากความจำ"** นี่คือการตอบนั้น
+
+ทุกข้อยึด**ซอร์สจริงในเครื่อง**ก่อนเอกสารเว็บ ตาม CONTRIBUTING ข้อ 5 —
+ซอร์สอยู่ที่ `~/Library/Android/sdk/sources/android-37.0/`
+
+| คำถามจาก ADR-9 | คำตอบ |
+|---|---|
+| กลไก `PendingIntent` ใช้แทน region monitoring ของ iOS ได้จริงในเชิง use case หรือไม่ | **ได้บางส่วน — ไม่เท่ากัน** (หัวข้อ 1.1) |
+| Android เก็บ "ชุด region ที่ลงทะเบียนไว้" ข้าม process แบบ `monitoredRegions` หรือไม่ | **ไม่มี** (หัวข้อ 1.2) |
+| มี enter/exit semantics หรือต้องคำนวณเอง | **ต้องคำนวณเองทั้งหมด** (หัวข้อ 1.3) |
+| พฤติกรรมหลังผู้ใช้ force-stop แอป เป็นอย่างไร | **หยุดถาวร แก้ด้วยโค้ดไม่ได้** (หัวข้อ 1.4) |
+| ข้อจำกัด background scan throttling มีผลแค่ไหน | **ตอบครบแล้ว** (หัวข้อ 1.5 + ADR-12 หัวข้อ 2) |
+
+#### 1.1 `PendingIntent` ปลุก process ที่ตายแล้วได้จริง — นี่คือส่วนที่เทียบได้
+
+`BluetoothLeScanner.java:175-177`:
+
+> "Start Bluetooth LE scan using a `PendingIntent`. The scan results will be
+> delivered via the PendingIntent. **Use this method of scanning if your process is
+> not always running and it should be started when scan results are available.**"
+
+ประโยคนี้คือคำตอบตรง ๆ ว่ากลไกนี้ **ตั้งใจให้ปลุก process ที่ไม่ได้รันอยู่** ซึ่ง
+เป็นความสามารถเดียวกับที่ `CLLocationManager` ให้บน iOS ตาม ADR-10
+(`CLLocationManager.h:492-496`: "Even if killed by the user, launch events
+triggered by monitoring APIs will cause a relaunch.")
+
+**แต่สิ่งที่ส่งมาไม่ใช่สิ่งเดียวกัน** — `BluetoothLeScanner.java:184-186`:
+
+> "When the PendingIntent is delivered, the Intent passed to the receiver or
+> activity will contain one or more of the extras `EXTRA_CALLBACK_TYPE`,
+> `EXTRA_ERROR_CODE` and `EXTRA_LIST_SCAN_RESULT` to indicate the result of the
+> scan."
+
+ได้ **รายการ `ScanResult`** ไม่ใช่ **`didEnterRegion`/`didExitRegion`** ความต่างนี้
+ไม่ใช่เรื่องรูปแบบข้อมูล แต่เป็นเรื่อง**ใครคำนวณ** — ดูหัวข้อ 1.3
+
+#### 1.2 ไม่มี `monitoredRegions` เทียบเท่า
+
+ฝั่ง iOS แอปถามระบบได้ว่า "ตอนนี้เฝ้าอะไรอยู่" และคำตอบรอดข้าม process
+(`CLLocationManager.monitoredRegions` — ADR-9 ยกมาแล้ว)
+
+ฝั่ง Android **ค้นแล้วไม่พบ API เทียบเท่า**: `BluetoothLeScanner` ทั้งคลาสมีเมธอด
+สาธารณะแค่ `startScan` / `stopScan` / `flushPendingScanResults` — **ไม่มีเมธอด
+ใดที่คืนรายการสิ่งที่ลงทะเบียนไว้** และ `stopScan(PendingIntent)` ต้องการให้ผู้เรียก
+**สร้าง `PendingIntent` ตัวเดิมขึ้นมาใหม่** เพื่อใช้ถอน ซึ่งเป็นหลักฐานทางอ้อมว่า
+ระบบไม่ได้ตั้งใจให้แอปถามย้อนกลับได้
+
+> "Stops an ongoing Bluetooth LE scan started using a PendingIntent. **When
+> creating the PendingIntent parameter, please do not use the FLAG_CANCEL_CURRENT
+> flag.** Otherwise, the stop scan may have no effect."
+> — `BluetoothLeScanner.java:384-387`
+
+**ผลต่อการออกแบบ:** รายการ region และสถานะเข้า/ออก **ต้องเป็นของเราเองทั้งหมด**
+เก็บลงดิสก์เอง กู้คืนเอง — `BackgroundRegionStore`
+
+⚠️ **และเป็นความจริงที่ต่างกันในเชิงคุณภาพ ไม่ใช่แค่ต่างที่มา:** ค่าที่ iOS ตอบคือ
+*"ระบบกำลังเฝ้าอะไรอยู่จริง"* ค่าที่เราตอบได้คือ *"เราเคยสั่งให้เฝ้าอะไรไว้"*
+สองอย่างนี้ต่างกันทันทีที่ระบบล้างการลงทะเบียนทิ้งโดยไม่บอกเรา (หัวข้อ 1.4) —
+บันทึกไว้ในเอกสารของ `AndroidBackgroundMonitoringStatus` และในชื่อฟิลด์ของ log
+(`restoredRegions=` ฝั่ง Android vs `monitoredRegions=` ฝั่ง iOS **ตั้งใจใช้คนละคำ**)
+
+#### 1.3 ไม่มี enter/exit จากระบบ — ต้องคำนวณเองทั้งหมด
+
+ระบบส่งได้อย่างเดียวคือ "เจอ advertisement" **การไม่เจอไม่ใช่ event มันคือความเงียบ**
+และไม่มีใครส่ง broadcast มาบอกว่าตอนนี้เงียบ
+
+ผลคือ "ออกจากโซน" ต้องแปลงจากความเงียบเป็น event ด้วยนาฬิกาปลุก ซึ่งมีเพดานของมัน —
+`AlarmManager.java:1286-1289` (`setAndAllowWhileIdle`):
+
+> "Under normal system operation, **it will not dispatch these alarms more than
+> about every minute** (at which point every such pending alarm is dispatched);
+> **when in low-power idle modes this duration may be significantly longer, such as
+> 15 minutes.**"
+
+ทางเลือกที่แม่นกว่า (`setExactAndAllowWhileIdle`) ต้องขอสิทธิ์พิเศษ —
+`AlarmManager.java:1352-1356`:
+
+> "Starting with `Build.VERSION_CODES.S`, apps targeting SDK level 31 or higher
+> need to request the `SCHEDULE_EXACT_ALARM` permission to use this API, unless the
+> app is exempt from battery restrictions. **The user and the system can revoke this
+> permission via the special app access screen in Settings.**"
+
+และหน้าเดียวกันระบุว่า "**Exact alarms should only be used for user-facing
+features.**" — การตรวจว่าออกจากโซนแล้วหรือยังไม่ใช่ฟีเจอร์ที่ผู้ใช้กดเรียก
+**ตัดสินใจ: ไม่ขอสิทธิ์นั้น** และยอมรับเพดานเวลาข้างบนอย่างเปิดเผย
+
+**สรุปความต่างที่ต้องรายงานทุกครั้ง:**
+
+| | iOS | Android |
+|---|---|---|
+| ใครคำนวณ enter/exit | **ระบบ** (CoreLocation) | **เรา** จากการเห็น/ไม่เห็น |
+| ค่าหน่วงก่อนประกาศ exit | ระบบกำหนด — **วัดได้เอง ~30 วินาที** ไม่พบเอกสาร Apple ที่ระบุหรือบอกว่าปรับได้ (ADR-11 หัวข้อ 2) | **เราตั้งเองได้** แต่ถูกจำกัดด้วยความถี่นาฬิกาปลุก (~1 นาที ปกติ / ~15 นาที ใน Doze) |
+| ความหมายของ exit | ระบบสรุปให้ว่าออกจากโซน | **ความเงียบ** ซึ่งอาจมาจาก beacon แบตหมด / Bluetooth ปิด / ระบบ throttle / MIUI ฆ่าแอป |
+
+#### 1.4 force-stop — หยุดถาวร และแก้ด้วยโค้ดไม่ได้
+
+`ApplicationInfo.java:416-426` (`FLAG_STOPPED`):
+
+> "...The system tries not to start it unless initiated by a user interaction...
+> **Stopped applications will not receive implicit broadcasts unless the sender
+> specifies `Intent#FLAG_INCLUDE_STOPPED_PACKAGES`.**"
+>
+> "Applications should avoid launching activities, binding to or starting services,
+> or otherwise causing a stopped application to run unless initiated by the user."
+>
+> "**An app can also return to the stopped state by a 'force stop'.**"
+
+แปลว่าเมื่อผู้ใช้ force-stop แล้ว **ไม่มีเส้นทางไหนที่แอปจะกลับมาเองได้** ตัวรับ
+`BOOT_COMPLETED` ก็ไม่ทำงาน (มันเป็น implicit broadcast) — ทางเดียวคือผู้ใช้เปิดแอปเอง
+
+**นี่คือความต่างที่ใหญ่ที่สุดจาก iOS** ฝั่งนั้น `CLLocationManager.h:492-496` ระบุ
+ตรงข้ามเลยว่า "**Even if killed by the user**, launch events triggered by
+monitoring APIs will cause a relaunch."
+
+⚠️ **ยังไม่ยืนยันเอง:** เอกสารข้างบนพูดถึง *broadcast* ที่ระบบส่ง ส่วนคำถามว่า
+**การลงทะเบียนสแกนใน Bluetooth stack ถูกล้างทิ้งด้วยหรือไม่** ตอนนี้ยังไม่พบเอกสาร
+ที่ระบุตรง ๆ — ต้องยืนยันบนเครื่องจริง (เช็คลิสต์ข้อ 3)
+
+#### 1.5 รีบูต — ไม่รอด ต้องลงทะเบียนใหม่เอง
+
+`Intent.java:2814-2821` (`ACTION_BOOT_COMPLETED`):
+
+> "You must hold the `android.Manifest.permission#RECEIVE_BOOT_COMPLETED`
+> permission in order to receive this broadcast."
+>
+> "**Upon receipt of this broadcast, the user is unlocked** and both
+> device-protected and credential-protected storage can accessed safely."
+
+**ช่องว่างที่ปิดไม่ได้ด้วยโค้ด:** ระหว่างที่เครื่องบูตเสร็จแล้วแต่ผู้ใช้ยังไม่ปลดล็อก
+เรายังไม่ได้เฝ้าอะไรเลย — ต่างจาก iOS ที่ region อยู่ในระบบตั้งแต่ก่อนรีบูต
+
+(หมายเหตุ: `ACTION_LOCKED_BOOT_COMPLETED` ยิงก่อนปลดล็อก แต่ component ที่จะรับได้
+ต้องเป็น direct-boot aware และเข้าถึงได้แค่ device-protected storage — **ยังไม่ได้
+ทำ** ประกาศตัวรับไว้แล้วแต่ยังไม่ประกาศ `directBootAware` จึงยังไม่มีผลจริงในเคสนั้น
+บันทึกเป็นหนี้ในหัวข้อ 6)
+
+---
+
+### 2. เปรียบเทียบทางเลือก — แต่ละแบบให้อะไร แลกอะไร
+
+| | **A. `startScan(PendingIntent)`** | **B. foreground service** | **C. `WorkManager`/`JobScheduler` แล้วสแกนเป็นรอบ** |
+|---|---|---|---|
+| ทำงานตอน process ตาย | ✅ ระบบสร้าง process ใหม่ให้ (`BluetoothLeScanner.java:175-177`) | ❌ service ตายไปกับ process | ✅ ระบบปลุกให้ |
+| ผู้ใช้เห็น notification ค้าง | ❌ ไม่มี | ⚠️ **มี ตลอดเวลา** | ❌ ไม่มี |
+| ความถี่การสแกน | `SCAN_MODE_LOW_POWER` (ระบบบังคับ) | ระดับ foreground ได้ | เป็นช่วง ๆ ห่างมาก |
+| ความหน่วงในการรู้ว่า "เข้า" | เท่าที่ระบบส่งผลสแกนมา | เร็วที่สุด | **แย่ที่สุด** — ขั้นต่ำของ periodic work คือ 15 นาที |
+| ความหน่วงในการรู้ว่า "ออก" | เพดานนาฬิกาปลุก (~1 นาที / ~15 นาที ใน Doze) | เร็ว | ≥ รอบของงาน |
+| รอดปัดแอปทิ้ง | ✅ (ต้องยืนยันบนเครื่อง) | ⚠️ แล้วแต่ OEM — MIUI ฆ่าบ่อย | ✅ |
+| รอด force-stop | ❌ | ❌ | ❌ |
+| รอดรีบูต | ❌ ต้องลงทะเบียนใหม่ผ่าน `BOOT_COMPLETED` | ❌ ต้องเริ่มใหม่ | ⚠️ `WorkManager` กู้คืนงานให้ |
+| ต้นทุนแบต | ต่ำสุด | สูงสุด | ต่ำ |
+
+**ทำไมตัด C ทิ้ง:** ความหน่วง 15 นาทีขั้นต่ำทำให้ "เดินเข้าสาขา" ถูกตรวจพบหลังจาก
+ลูกค้าออกจากร้านไปแล้ว ซึ่งทำลาย use case ทั้งหมด ไม่ใช่แค่ทำให้แย่ลง
+
+**ทำไมไม่เลือก B เป็นกลไกหลัก — ดูหัวข้อ 3**
+
+#### 2.1 `PendingIntent` mutability — คำถามที่ ADR-12 หัวข้อ 3 ค้างไว้
+
+ADR-12 บันทึกไว้ว่า *"ยังไม่ได้ยืนยันว่าเคสนี้ต้องใช้ `FLAG_MUTABLE` หรือ
+`FLAG_IMMUTABLE`... ต้องยืนยันก่อนเขียนโค้ดก้อนที่ 2"*
+
+**คำตอบ: ต้องเป็น `FLAG_MUTABLE`** และหลักฐานเป็นการต่อสองประโยคจากซอร์สจริง:
+
+1. ผลสแกนถูกส่งมาเป็น **extras ของ Intent ที่ส่งออก** —
+   `BluetoothLeScanner.java:184-186` (ยกไว้ในหัวข้อ 1.1)
+2. `PendingIntent.java:917-919` (`send(Context, int, Intent)`):
+
+> "@param intent Additional Intent data. See `Intent.fillIn()` for information on
+> how this is applied to the original Intent. **If flag `FLAG_IMMUTABLE` was set when
+> this pending intent was created, this argument will be ignored.**"
+
+`FLAG_IMMUTABLE` จึงหมายถึง **"ได้ broadcast แต่ไม่มีผลสแกนติดมาด้วย"** ซึ่งเป็น
+ความล้มเหลวชนิดที่เงียบที่สุด: การลงทะเบียนสำเร็จ broadcast มาถึง แต่ `onReceive`
+ไม่มีอะไรให้อ่าน
+
+⚠️ **ยังไม่ยืนยันเองบนเครื่อง** — ข้อสรุปนี้เป็น **การต่อประโยคจากสองหน้าเอกสาร**
+ไม่ใช่ประโยคเดียวที่ Android เขียนตรง ๆ ว่า "startScan ต้องใช้ MUTABLE" โค้ดฝั่ง
+Bluetooth ที่เป็นคนเรียก `send()` จริงอยู่ใน Bluetooth apex ซึ่ง**ไม่ได้มาพร้อม
+Android SDK** จึงอ่านยืนยันในเครื่องไม่ได้ — เช็คลิสต์ข้อ 6 ออกแบบไว้ให้ยืนยัน
+ด้วยการทดลองจริง (สลับเป็น `FLAG_IMMUTABLE` แล้วดูว่า extras หายไปหรือไม่)
+
+โค้ดดัก `EXTRA_ERROR_CODE`/รายการว่างไว้แล้วใน `BeaconScanReceiver` เพื่อให้เคสนี้
+ไม่ออกมาเป็น "ไม่มี event" เฉย ๆ
+
+`FLAG_UPDATE_CURRENT` ใช้ได้ปกติ (`PendingIntent.java:251-255`: "`FLAG_UPDATE_CURRENT`
+still works even if `FLAG_IMMUTABLE` is set") ส่วน `FLAG_CANCEL_CURRENT`
+**ห้ามใช้** ตาม `BluetoothLeScanner.java:384-387`
+
+#### 2.2 ข้อกำหนดของ foreground service ในเวอร์ชันใหม่ ๆ
+
+เครื่องทดสอบเป็น Android 12 แต่ SDK ต้อง target เวอร์ชันใหม่กว่าในอนาคต — บันทึกไว้
+ล่วงหน้าตามที่โจทย์สั่ง
+
+**Android 12 (API 31) — ห้ามเริ่ม FGS จากเบื้องหลัง** (ADR-12 หัวข้อ 2ง ยกไว้แล้ว)
+รายการข้อยกเว้นที่เกี่ยวกับเรา จาก
+[Exemptions from background start restrictions](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start):
+
+> - "Your app transitions from a user-visible state, such as an activity."
+> - "After the device reboots and receives the `ACTION_BOOT_COMPLETED`,
+>   `ACTION_LOCKED_BOOT_COMPLETED`, or `ACTION_MY_PACKAGE_REPLACED` intent action in
+>   a broadcast receiver."
+> - "**The user turns off battery optimizations for your app.**"
+
+**Android 14 (API 34) — ต้องประกาศชนิด และต้องมีสิทธิ์ของชนิดนั้น**
+([Foreground service types are required](https://developer.android.com/about/versions/14/changes/fgs-types-required)):
+
+> "If an app that targets Android 14 doesn't define types for a given service in the
+> manifest, then the system will raise `MissingForegroundServiceTypeException` upon
+> calling `startForeground()` for that service."
+>
+> "If you call `startForeground()` without declaring the appropriate foreground
+> service type permission, the system throws a `SecurityException`."
+
+ชนิดที่ตรงกับ use case ของเราคือ **`connectedDevice`** —
+`ServiceInfo.java:259-297` ระบุว่าต้องมี `FOREGROUND_SERVICE_CONNECTED_DEVICE`
+บวกกับอย่างน้อยหนึ่งใน `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` /
+`BLUETOOTH_ADVERTISE` / … ซึ่งเรามี `BLUETOOTH_SCAN` อยู่แล้ว
+
+**ชนิด `location` มีกับดักที่ต้องรู้** — `ServiceInfo.java:236-256` และหน้าเดียวกัน
+ของเอกสาร:
+
+> "The location runtime permissions are subject to while-in-use restrictions. For
+> this reason, **you cannot create a `location` foreground service while your app is
+> in the background**, unless you've been granted the `ACCESS_BACKGROUND_LOCATION`
+> runtime permission."
+
+**Android 15 (API 35) — จำกัดชนิดที่เริ่มจาก `BOOT_COMPLETED` ได้**
+([Behavior changes: Android 15](https://developer.android.com/about/versions/15/behavior-changes-15)):
+
+> "`BOOT_COMPLETED` receivers are not allowed to launch the following types of
+> foreground services: `dataSync`, `camera`, `mediaPlayback`, `phoneCall`,
+> `mediaProjection`, `microphone`"
+
+**`connectedDevice` ไม่อยู่ในรายการนี้** — แปลว่าถ้าวันหนึ่งเลือกทาง foreground
+service เส้นทาง `BOOT_COMPLETED` ยังใช้ได้ **แต่ต้องตรวจซ้ำเมื่อ target API
+สูงขึ้นจริง ไม่ใช่เชื่อบันทึกนี้** เพราะรายการนี้ยาวขึ้นทุกเวอร์ชัน
+
+#### 2.3 การขอยกเว้น battery optimization — ทำได้ แต่ Play Store บล็อกเคสของเรา
+
+**API มีจริงและใช้ได้** — `Settings.java:1715-1737`:
+
+> "Activity Action: Ask the user to allow an app to ignore battery optimizations...
+> For an app to use this, it also must hold the
+> `android.Manifest.permission#REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission."
+>
+> "**Note: most applications should not use this**; there are many facilities
+> provided by the platform for applications to operate correctly in the various power
+> saving modes. This is only for unusual applications that need to deeply control
+> their own execution, at the potential expense of the user's battery life."
+
+**แต่นโยบายของ Play Store เป็นตัวตัดสิน ไม่ใช่ API**
+([Optimize for Doze and App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby#exemption-cases)):
+
+> "**Google Play policies prohibit apps from requesting direct exemption from Power
+> Management features—Doze and App Standby—in Android 6.0 and above unless the core
+> function of the app is adversely affected.**"
+
+ตารางในหน้านั้นมีสองแถวที่เป็นเรื่องของเราโดยตรง:
+
+| Use case | ยอมรับได้? |
+|---|---|
+| "Peripheral device companion app. App's core function is maintaining a persistent connection with the peripheral device **for the purpose of providing the peripheral device internet access**." | Acceptable |
+| "Peripheral device companion app. App **only needs to connect to a peripheral device periodically to sync**, or only needs to connect to devices, such as wireless headphones, connected via standard Bluetooth profiles." | **Not Acceptable** |
+
+**เคสของ BigC ตรงกับแถวล่าง** — เราไม่ได้ให้ beacon เข้าอินเทอร์เน็ต เราแค่ฟัง
+advertisement เป็นระยะ
+
+**ข้อสรุป: ห้ามให้แอปกดขอยกเว้นเอง** ทางที่เหลือคือ **UX ที่พาผู้ใช้ไปตั้งค่าเอง**
+(หน้าอธิบาย + ปุ่มลัดไปหน้า setting) ซึ่งเป็นทางเดียวกับที่ ADR-12 หัวข้อ 6 สรุปไว้
+สำหรับ MIUI Autostart — **เรื่องเดียวกัน ปัญหาเดียวกัน แก้ด้วยโค้ดไม่ได้เหมือนกัน**
+
+**หมายเหตุที่ต้องอ่านคู่กัน:** การยกเว้น battery optimization ไม่ได้ยกเว้นทุกอย่าง —
+หน้าเดียวกันระบุว่า "An app that is partially exempt can use the network and hold
+partial wake locks during Doze and App Standby. **However, other restrictions still
+apply to the app**, just as they do to other apps."
+
+#### 2.4 Doze — สิ่งที่เอกสารบอก และสิ่งที่เอกสาร**ไม่ได้**บอก
+
+รายการข้อจำกัดของ Doze จากเอกสารทางการ (คัดมาทั้งรายการ):
+
+> - Suspends network access.
+> - Ignores wake locks.
+> - Defers standard `AlarmManager` alarms... to the next maintenance window.
+> - Doesn't perform Wi-Fi scans.
+> - Doesn't let sync adapters run.
+> - Doesn't let `JobScheduler` run.
+
+⚠️ **"BLE scanning" ไม่อยู่ในรายการนี้ และห้ามสรุปทั้งสองทางจากการที่มันไม่อยู่**
+เอกสารพูดถึง "Wi-Fi scans" ตรง ๆ แต่ไม่พูดถึง Bluetooth เลย — จะตีความว่า
+"แปลว่า BLE ไม่ถูกจำกัด" ก็เป็นการเดา จะตีความว่า "ถูกจำกัดเหมือนกัน" ก็เป็นการเดา
+**ต้องวัดเอง** (เช็คลิสต์ข้อ 5)
+
+สิ่งที่**รู้แน่**คือ **นาฬิกาปลุกของเราถูกจำกัดแน่นอน** (`AlarmManager.java:1286-1289`
+ยกไว้ในหัวข้อ 1.3) ซึ่งกระทบเฉพาะการประกาศ `exit` ไม่ใช่การเห็น `enter`
+
+---
+
+### 3. การตัดสินใจ — **เราสัญญาอะไรบน Android**
+
+โจทย์ระบุว่าประเด็นหลักคือข้อนี้ เพราะ "เหมือน iOS" อาจเป็นไปไม่ได้ — **และมันเป็นไป
+ไม่ได้จริง** ตามหลักฐานในหัวข้อ 1
+
+#### 3.1 กลไกที่เลือก: `PendingIntent` เป็นกลไกหลัก · **ไม่มี foreground service**
+
+**เหตุผลที่ไม่เลือก foreground service เป็นกลไกหลัก:**
+
+1. **มันไม่ได้แก้ปัญหาที่ยากที่สุด** ปัญหาคือ "ทำงานต่อเมื่อ process ตายแล้ว"
+   foreground service ตายไปกับ process เหมือนกัน มันแค่ทำให้ process ตายช้าลง
+   — ซึ่งบน MIUI ก็ยังไม่รับประกัน
+2. **ราคาที่จ่ายไปตกกับผู้ใช้ทุกคนตลอดเวลา** notification ค้างถาวรคือสิ่งที่ผู้ใช้
+   เห็นทุกครั้งที่ปัดแถบแจ้งเตือน แลกกับความสามารถที่ใช้จริงนาน ๆ ครั้ง
+3. **ADR-9 สั่งห้ามไว้ตรง ๆ** ว่าห้าม "เลี้ยง foreground service ไว้เงียบ ๆ แล้ว
+   เรียกว่าสำเร็จ" — ข้อนี้เขียนดักไว้ก่อนเริ่มงานนี้แล้ว
+
+**เก็บไว้เป็นทางเลือกในอนาคต ไม่ใช่ตัดทิ้ง:** ถ้าผลทดสอบพบว่าความถี่ของ
+`SCAN_MODE_LOW_POWER` ต่ำเกินไปจนพลาดลูกค้าที่เดินผ่านเร็ว ทางแก้คือเพิ่ม
+**โหมดที่ผู้ใช้เลือกเปิดเอง** ที่ใช้ foreground service — และถ้าทำ **ต้องเขียนบน
+หน้าจอตรง ๆ ว่าจะมี notification ค้างตลอด** ตามข้อบังคับของ ADR-9
+
+#### 3.2 สัญญาที่เขียนเป็นตาราง — ต้องปรากฏทั้งใน dartdoc และบนหน้าจอ example app
+
+| สัญญา | **ไม่สัญญา** |
+|---|---|
+| รอดข้ามการปัดแอปทิ้งจากรายการแอป — ระบบสร้าง process ใหม่มาส่ง event ให้ | **ไม่รอด force-stop** — ไม่มีทางแก้ด้วยโค้ด (หัวข้อ 1.4) |
+| ลงทะเบียนใหม่เองหลังรีบูต ผ่าน `BOOT_COMPLETED` | ช่วงหลังรีบูตจนถึงผู้ใช้ปลดล็อกครั้งแรก **ไม่ได้เฝ้าอะไรเลย** |
+| ไม่มี notification ค้างให้ผู้ใช้เห็น | จึงไม่ได้ความถี่การสแกนระดับ foreground |
+| `exit` ถูกยิงเมื่อไม่เห็นครบ `exitTimeoutSeconds` | **ไม่สัญญาว่าจะยิงภายในเวลานั้น** — เพดานนาฬิกาปลุก (หัวข้อ 1.3) |
+| รายงานความล้มเหลวของการลงทะเบียน **รายอัน** | ไม่ retry ให้เอง — ตัวเลข throttle ยืนยันไม่ได้ (ADR-12 หัวข้อ 2ค) |
+| event ที่เกิดตอนไม่มี Flutter engine ถูกคิวลงดิสก์ ไม่หาย | คิวมีเพดาน 200 event · ทิ้งตัวเก่าสุดก่อน |
+
+#### 3.3 **ไม่ยกขึ้นสัญญากลาง** — ทำตาม ADR-13 หัวข้อ 4 ข้อ 3
+
+ADR-13 เขียนแผนไว้ล่วงหน้าสองทาง และคำตอบคือทางที่สอง:
+
+> "3. ถ้าพบว่า **ทำไม่ได้เทียบเท่า** → ห้ามยกขึ้น ให้แยกเป็นความสามารถคนละชื่อตาม
+>    ที่แต่ละแพลตฟอร์มทำได้จริง แล้วให้แอปเลือกเองอย่างรู้ตัว"
+
+จึงตั้งชื่อทุกอย่างขึ้นต้นด้วย `Android` (`AndroidBeaconRegion`,
+`AndroidBackgroundRegionEvent`, `AndroidRegionState`) และวางไว้ที่
+`beacon_kit_android` ไม่ใช่ `beacon_kit_platform_interface`
+
+**ผลข้างเคียงที่ยอมรับ:** `_splitByPlatformUntilAdr13Step4` ใน example app
+**ยังต้องอยู่ต่อ** และตอนนี้เรารู้แล้วว่ามัน**จะอยู่ถาวร** ไม่ใช่หนี้ชั่วคราว —
+เพราะสองแพลตฟอร์มทำคนละอย่างจริง ๆ ไม่ใช่เพราะเรายังไม่ได้ refactor
+(ชื่อตัวแปรยังไม่เปลี่ยนในรอบนี้ บันทึกเป็นงานเก็บกวาดในหัวข้อ 6)
+
+#### 3.4 ค่า N (`exitTimeoutSeconds`) — เชื่อมกับงาน debounce ของ ADR-11
+
+**ค่าเริ่มต้น 30 วินาที** เลือกให้ **ตรงกับค่าหน่วงที่วัดได้จากพฤติกรรมของ iOS**
+(ADR-11 หัวข้อ 2: 43.5% ของช่วงที่วัดได้ตกในหน้าต่าง 29.5-30.5 วินาที) เพื่อให้ผล
+รอบทดสอบแรกของสองแพลตฟอร์ม **ต่างกันเพราะกลไก ไม่ใช่เพราะตั้งค่าคนละแบบ**
+
+**ตั้งได้ ไม่ hardcode** — ส่งผ่าน `startBackgroundRegionMonitoring(exitTimeoutSeconds:)`
+เก็บลง `BackgroundRegionStore` และ example app ถือค่านี้ไว้เอง (`_androidExitTimeoutSeconds`)
+ตามข้อกำหนดของ ADR-11 หัวข้อ 7 ที่ว่าค่าพวกนี้เป็นการตัดสินใจของแอป ไม่ใช่ของ SDK
+
+**บันทึกความต่างนี้เป็นข้อดีที่ตั้งใจใช้:**
+
+> บน iOS ค่าหน่วงก่อนประกาศ exit เป็นของระบบ **เราปรับไม่ได้** และ ADR-11 ค้นทั้ง
+> `CLRegion.h`, `CLBeaconRegion.h`, `CLLocationManager.h` แล้วไม่พบเอกสาร Apple ที่
+> ระบุค่าหรือบอกว่าปรับได้ — เราทำได้แค่ **วัด** แล้วออกแบบ debounce มารองรับ
+>
+> บน Android ค่านี้เป็นของเรา **จูนจากข้อมูลสาขาจริงได้โดยไม่ต้องรอ Apple** ตาม
+> แผนใน ADR-11 หัวข้อ 8 ที่ระบุว่าต้องเก็บข้อมูลอย่างน้อย 3 จุดก่อนล็อกค่าลง
+> production — งานนั้นทำบน Android ได้ครบวงจร ตั้งแต่วัดจนถึงปรับ
+
+⚠️ **แต่ไม่ได้แปลว่า Android เหนือกว่า** ชั้น debounce ของ ADR-11 (รวม session
+5 นาที + ต้องอยู่ต่อเนื่อง 2 นาที) **ยังจำเป็นเท่าเดิม** เพราะการปรับ N ลดได้แค่
+flap ที่เกิดจากค่าหน่วงของกลไก ไม่ได้ลด flap ที่เกิดจากสัญญาณแกว่งจริง
+
+---
+
+### 4. สิ่งที่ implement แล้ว
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `beacon_kit_android/.../BeaconRegionSpec.kt` | region + `ScanFilter` ที่เจาะจงถึงระดับ UUID/major/minor |
+| `beacon_kit_android/.../BackgroundRegionStore.kt` | สถานะที่ต้องรอดข้าม process (SharedPreferences + `commit()`) |
+| `beacon_kit_android/.../BackgroundRegionMonitor.kt` | ลงทะเบียน/ถอน · เครื่องสถานะ enter/exit · นาฬิกาปลุก |
+| `beacon_kit_android/.../BeaconScanReceiver.kt` | รับผลสแกนจาก `PendingIntent` |
+| `beacon_kit_android/.../RegionExitAlarmReceiver.kt` | แปลงความเงียบเป็น event `exit` |
+| `beacon_kit_android/.../BootCompletedReceiver.kt` | ลงทะเบียนใหม่หลังรีบูต |
+| `example/android/.../BackgroundEvidenceLog.kt` | เขียนไฟล์หลักฐาน — **native ล้วน ไม่พึ่ง Flutter** |
+| `example/android/.../ProcessState.kt` | แยก "ผู้ใช้เปิดแอป" ออกจาก "ระบบสร้าง process" |
+| `example/android/.../ExampleApplication.kt` | ตั้งเครื่องมือวัดก่อนอย่างอื่นทั้งหมด |
+
+#### 4.1 กติกา "ไม่มี parser ในฝั่ง Kotlin" ยังอยู่ครบ
+
+ปัญหา: เส้นทางเบื้องหลังไม่มี Flutter engine ให้เรียก `IBeaconParser` ฝั่ง Dart
+ถ้ากรองกว้าง ๆ แล้วมาแยก region ทีหลัง เรา**ถูกบังคับ**ให้เขียน parser ตัวที่สอง
+ในฝั่ง Kotlin ซึ่งจะ drift จากตัวหลักโดยไม่มีเทสต์ไหนจับได้
+
+ทางออก: **ลงทะเบียนสแกนหนึ่งครั้งต่อหนึ่ง region** แต่ละครั้งมี `PendingIntent`
+ของตัวเองที่พก `identifier` ติดไปด้วย ผลสแกนกลับมาแล้วรู้ทันทีว่าเป็น region ไหน
+**โดยไม่ถอด byte แม้แต่ตัวเดียว**
+
+**กับดักที่ต้องรู้:** `PendingIntent` สองตัวถือเป็นตัวเดียวกันถ้า
+`Intent.filterEquals` (action/data/type/component/categories) + requestCode ตรงกัน
+— **extras ไม่ถูกนับ** ถ้าต่างกันแค่ extras ทุก region จะได้ `PendingIntent`
+ตัวเดียวกันและ `identifier` จะเป็นของ region สุดท้ายเสมอ จึงใส่ทั้ง data URI ที่
+ไม่ซ้ำ (`beaconkit://scan/<identifier>`) และ requestCode ที่ไม่ซ้ำ
+
+🔶 **ยังไม่ยืนยัน:** จำนวนการลงทะเบียนพร้อมกันสูงสุดที่เครื่องรับได้ ADR-8 กำหนด
+เพดาน region ไว้ที่ 20 (ตามข้อจำกัดของ iOS) ซึ่งจะกลายเป็น 20 การลงทะเบียนบน
+Android — `ScanCallback.SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES` มีอยู่จริงในซอร์ส
+แต่**ไม่มีเอกสารระบุตัวเลข** โค้ดรายงาน error รายอันกลับไปแล้ว (ไม่เงียบ)
+แต่ยังไม่ได้ทดสอบว่าเพดานจริงอยู่ที่เท่าไร (เช็คลิสต์ข้อ 8)
+
+#### 4.2 เครื่องมือวัด: process identity marker (ทำก่อนกลไก ตามที่โจทย์สั่ง)
+
+**ปัญหาที่แก้ (ค้างจากข้อเสนอรอบเคส B1 ของ iOS ยังไม่เคยทำ):** ก่อนหน้านี้การตอบว่า
+"บรรทัดนี้มาจาก process ใหม่หรือเดิม" ทำได้ทางเดียวคือ **เดาจาก `uptime`** ซึ่งผิด
+ได้สองทาง — process เก่าที่ถูกปลุกอีกครั้งมี uptime สูงทั้งที่ไม่ใช่ของใหม่ และ
+process ใหม่ที่ส่ง event ช้าก็มี uptime สูงเช่นกัน
+
+**สิ่งที่ทำ:** สุ่ม UUID 8 ตัวอักษรตอน process เริ่ม เขียนเป็น **คอลัมน์ที่ 2 ของทุก
+บรรทัด** ทั้ง Android และ iOS — สองบรรทัดที่ `processId` ต่างกันมาจากคนละ process
+**แน่นอน ไม่ใช่การอนุมาน**
+
+รูปแบบบรรทัดใหม่ (6 คอลัมน์ TAB คั่น):
+
+```
+timestamp(ISO8601+offset) \t processId \t event \t regionIdentifier \t conclusion \t rawSignals
+```
+
+**ไฟล์เก่า 5 คอลัมน์ยังต้องอ่านได้ และห้ามแก้ไฟล์เก่า** —
+`docs/test-data/2026-08-30_overnight_region_flapping.log` เป็นหลักฐานดิบที่ ADR-11
+ทั้งฉบับตั้งอยู่บนมัน การแก้ย้อนหลังทำให้มันเชื่อถือไม่ได้ ตัวอ่านทุกตัวจึงแยกรุ่น
+ไฟล์ด้วยการดูว่าคอลัมน์ที่ 2 เป็นเลขฐานสิบหก 8 ตัวหรือไม่ (คอลัมน์ที่ 2 ของไฟล์เก่า
+คือชื่อ event ซึ่งไม่มีทางตรงกับรูปแบบนั้น)
+
+`tool/analyze_region_log.dart` ตอนนี้มีสองโหมดและ **บอกผู้อ่านเสมอว่าใช้โหมดไหน**:
+ไฟล์ที่มี `processId` จัดกลุ่มตามนั้นตรง ๆ (ข้อเท็จจริง) · ไฟล์เก่าต้องเดาจากลำดับ
+เวลา แล้วพิมพ์คำเตือนกำกับว่าเป็นการอนุมาน
+
+**สิ่งที่ทุกบรรทัดตอบได้แล้ว ตามที่โจทย์กำหนด:**
+
+| คำถาม | ตอบจาก |
+|---|---|
+| process ไหน | คอลัมน์ `processId` |
+| สถานะแอปตอนนั้น | คอลัมน์ `conclusion` (`foreground`/`background`/`relaunchedFromTerminated`) + `importance=` ที่ **ระบบ** จัดให้ |
+| ถูกสร้างขึ้นมาใหม่หรือไม่ | บรรทัด `launch` มี **หนึ่งบรรทัดต่อหนึ่ง process เสมอ** |
+
+**เกณฑ์ที่โจทย์กำหนดว่าถ้าทำไม่ได้ให้หยุด:** ต้องแยก "แอปไม่ถูกปลุกเลย" ออกจาก
+"ถูกปลุกแล้วแต่ไม่ได้รับ event" — แยกได้ด้วยการดูว่ามีบรรทัด `launch` ที่ `processId`
+ใหม่หรือไม่ ถ้ามี `launch` แต่ไม่มี `enter`/`exit` ตามมา = ถูกปลุกแล้วแต่ event
+ไม่ถึง · ถ้าไม่มีบรรทัดใหม่เลย = ไม่ถูกปลุก
+
+⚠️ **กลไกนี้เองก็ยังไม่ verified บนเครื่องจริง** — มันคือเครื่องมือวัด ไม่ใช่ผลการวัด
+
+---
+
+### 5. หนี้และข้อจำกัดที่รู้ตัว
+
+| หนี้ | สถานะ |
+|---|---|
+| ไม่มีช่องทางรายงาน error ของเส้นทางเบื้องหลัง (`EXTRA_ERROR_CODE`) ไปถึงผู้ใช้ SDK | `BeaconScanReceiver` ดักไว้แล้วแต่**ทิ้งเงียบ** — ต้องเพิ่ม stream ของ error |
+| ยังไม่ประกาศ `directBootAware` | `LOCKED_BOOT_COMPLETED` จึงยังไม่มีผลจริง — ต้องประเมินว่าคุ้มกับการย้าย log ไป device-protected storage หรือไม่ |
+| `_splitByPlatformUntilAdr13Step4` ชื่อยังสื่อว่าเป็นหนี้ชั่วคราว | ตอนนี้รู้แล้วว่าถาวร — ต้องเปลี่ยนชื่อและแก้เอกสารในรอบเก็บกวาด |
+| ยังไม่มี UX พาผู้ใช้ไปตั้งค่า MIUI Autostart / battery optimization | ADR-12 หัวข้อ 6 + หัวข้อ 2.3 ของ ADR นี้ ชี้ไปที่เรื่องเดียวกัน — เป็นงานที่ต้องทำร่วมกับทีมออกแบบ |
+| ยังไม่ทดสอบเพดานจำนวนการลงทะเบียนพร้อมกัน | หัวข้อ 4.1 |
+| **ยังไม่รู้ว่า `DateFormatter` ฝั่ง iOS มีปัญหา timezone แบบเดียวกับ Android หรือไม่** | ดูหัวข้อ 5.1 |
+
+#### 5.1 คำถามที่ยังไม่มีคำตอบ — เขตเวลาของ formatter ฝั่ง iOS
+
+**ฝั่ง Android เป็นบั๊กจริงที่ยืนยันแล้วและแก้แล้ว** (1 ก.ย. 2026): CI จับได้ว่า
+`SimpleDateFormat` จับ default TimeZone ไว้ตั้งแต่ตอน construct และ formatter ถูก
+cache ไว้ใน `ThreadLocal` ตลอดอายุ process → บรรทัดที่เขียนหลังเขตเวลาเปลี่ยนยังใช้
+offset เดิม และเธรดต่างกันที่สร้าง formatter คนละเวลาให้ offset ไม่ตรงกันในไฟล์เดียวกัน
+ไม่เจอบนเครื่องพัฒนาเพราะเครื่องตั้งเป็น `Asia/Bangkok` อยู่แล้ว จึงบังเอิญถูกเสมอ
+
+**ฝั่ง iOS `formatter` เป็น `static let` จึงมีรูปร่างความเสี่ยงเหมือนกันทุกประการ**
+— แต่ **ยังพิสูจน์ไม่ได้ว่ามีปัญหาจริงหรือไม่** และตอนนี้ยัง**ไม่ได้แก้**
+
+สิ่งที่ลองแล้วและผลที่ได้:
+
+| ลอง | ผล |
+|---|---|
+| ตั้ง `formatter.timeZone = TimeZone.current` ก่อน format แล้วเขียน XCTest ที่เปลี่ยน `NSTimeZone.default` ระหว่างเทสต์ | เทสต์ล้ม — `"...+07:00" is not equal to "...Z"` |
+| เปลี่ยนเป็น `TimeZone.autoupdatingCurrent` | เทสต์ยังล้มเหมือนเดิม |
+
+**แยกไม่ออกว่าผลนี้แปลว่าอะไร** ระหว่างสองข้อที่ต้องแก้คนละทางโดยสิ้นเชิง:
+
+1. iOS มีบั๊กจริงแบบเดียวกับ Android (เทสต์ถูก โค้ดยังผิด)
+2. `NSTimeZone.default` ที่ตั้งใน XCTest ไม่มีผลกับสิ่งที่ `DateFormatter` อ่าน
+   จึง**จำลองการเปลี่ยนเขตเวลาบน iOS ด้วยวิธีนี้ไม่ได้เลย** (เทสต์ผิด โค้ดอาจไม่มีปัญหา)
+
+header ของ `NSDateFormatter.h` ที่ตรวจแล้ว **ไม่มีประโยคใดระบุว่ามันอ่านเขตเวลาใหม่
+ทุกครั้งหรือไม่** จึงตอบจากเอกสารในเครื่องไม่ได้ตาม CONTRIBUTING ข้อ 5
+
+**ตัดสินใจ: ถอยการแก้ฝั่ง iOS ออกทั้งหมด แล้วบันทึกไว้เป็นคำถามที่ยังไม่มีคำตอบ**
+การไล่เปลี่ยน API ของ Swift ไปเรื่อย ๆ จนกว่าเทสต์จะเขียว คือการ**ดัดเทสต์ให้ผ่าน
+ไม่ใช่การพิสูจน์** และจะได้ผลลัพธ์ที่ดูเหมือน verified ทั้งที่ไม่ใช่ ซึ่งแย่กว่าการ
+ไม่แก้เลย
+
+**วิธีตอบคำถามนี้ให้จบ (ยังไม่ได้ทำ):** ทดสอบบนอุปกรณ์จริง — เปลี่ยนเขตเวลาของ
+iPhone ระหว่างที่ process เฝ้า region อยู่ แล้วดูว่าบรรทัดถัดไปในไฟล์หลักฐานใช้
+offset ใหม่หรือ offset เดิม เป็นการวัดพฤติกรรมจริงซึ่งตอบได้แน่นอน ต่างจากการ
+จำลองใน simulator
+
+---
+
+### 6. 🛑 สถานะการทดสอบบนอุปกรณ์จริง — **ยังไม่ได้ทดสอบ**
+
+**ติดตั้งแอปลงเครื่องไม่ได้** — MIUI ปฏิเสธการติดตั้งผ่าน adb:
+
+```
+adb: failed to install app-debug.apk:
+  Failure [INSTALL_FAILED_USER_RESTRICTED: Install canceled by user]
+```
+
+ตรวจแล้วว่าไม่ใช่ปัญหาที่แก้จากฝั่งเครื่องพัฒนาได้:
+`adb shell settings put global adb_install_need_confirm 0` ถูกปฏิเสธด้วย
+`SecurityException: Permission denial: writing to settings requires
+android.permission.WRITE_SECURE_SETTINGS`
+
+**ต้องให้เจ้าของเครื่องเปิดสวิตช์เอง** — MIUI Developer options →
+"ติดตั้งผ่าน USB" (Install via USB) ซึ่งต้องล็อกอินบัญชี Xiaomi และใส่ซิมในเครื่อง
+
+**ตามกฎการรายงานสถานะของ CONTRIBUTING ข้อ 4 สถานะที่ถูกต้องคือ
+`code-complete, unverified`** — ห้ามเขียนว่าอะไรทำงานได้ทั้งสิ้น รวมถึงข้อสรุปเรื่อง
+`FLAG_MUTABLE` ในหัวข้อ 2.1 ซึ่งเป็นการต่อประโยคจากเอกสาร ไม่ใช่การทดลอง
+
+ขั้นตอนการทดสอบทั้งหมดอยู่ที่
+**`docs/test-checklists/android_background_runbook.md`** พร้อมช่องกรอกผลที่ยังว่าง
+
+**สิ่งที่ห้ามทำจนกว่าจะมีผลจริง:**
+- ห้ามเขียนว่า Android ทำงานเบื้องหลังได้เท่า iOS
+- ห้ามรายงานว่าเคสไหนผ่าน ถ้ายังไม่เห็นบรรทัด log ที่มี `processId` ใหม่พร้อม
+  `conclusion=relaunchedFromTerminated`
+- ทุกครั้งที่รายงานผล ต้องระบุ **รุ่นเครื่อง / เวอร์ชัน Android / เวอร์ชัน MIUI /
+  สถานะ Autostart / สถานะ battery optimization**

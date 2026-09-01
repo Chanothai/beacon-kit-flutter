@@ -37,4 +37,57 @@
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="false" />
+
+    <!--
+      ADR-14: การเฝ้า region เบื้องหลัง
+
+      RECEIVE_BOOT_COMPLETED — จำเป็นเพราะการลงทะเบียน
+      startScan(..., PendingIntent) อยู่ในหน่วยความจำของ Bluetooth stack และ
+      **หายไปกับการรีบูต** ต่างจาก CLLocationManager.monitoredRegions ของ iOS ที่
+      ระบบเก็บให้ข้าม launch เอง (ADR-9) เราจึงต้องลงทะเบียนใหม่ด้วยตัวเอง
+
+      Intent.java:2814-2816 (ACTION_BOOT_COMPLETED): "You must hold the
+      android.Manifest.permission#RECEIVE_BOOT_COMPLETED permission in order to
+      receive this broadcast."
+
+      เป็น install-time permission ไม่ต้องขอตอนรัน
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application>
+        <!--
+          ผู้รับผลสแกนจาก PendingIntent
+
+          android:exported="false" — PendingIntent ถูก "ส่ง" ด้วยตัวตนของแอปเรา
+          เอง (ระบบเป็นแค่คนกดส่ง) จึงถึงตัวรับที่ไม่ exported ได้ปกติ และการเปิด
+          exported จะทำให้แอปอื่นปลอมผลสแกนเข้ามาได้ ซึ่งแปลว่าปลอม "ผู้ใช้อยู่
+          สาขานี้" ได้ด้วย
+        -->
+        <receiver
+            android:name=".BeaconScanReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".RegionExitAlarmReceiver"
+            android:exported="false" />
+
+        <!--
+          android:exported="true" **จำเป็น** สำหรับตัวรับ broadcast ของระบบ —
+          BOOT_COMPLETED ถูกส่งมาจาก process ของระบบ ไม่ใช่จากแอปเรา ตัวรับที่
+          exported="false" จะไม่ถูกเรียกเลย
+
+          ปลอดภัยเพราะทั้งสาม action เป็น "protected intent that can only be sent
+          by the system" (ระบุไว้ที่ Intent.java เอง สำหรับ ACTION_BOOT_COMPLETED)
+          แอปอื่นจึงยิงเข้ามาไม่ได้
+        -->
+        <receiver
+            android:name=".BootCompletedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

@@ -47,3 +47,32 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // NotificationCompat / NotificationManagerCompat สำหรับ notification ที่ยิงจาก
+    // โค้ด native ล้วน (ExampleNotifications) — ใช้ compat เพื่อให้พฤติกรรมเหมือนกัน
+    // ข้าม API level เหมือนที่ beacon_kit_android ใช้กับ permission
+    implementation("androidx.core:core-ktx:1.13.1")
+
+    // ล็อกรูปแบบบรรทัดของไฟล์หลักฐาน (BackgroundEvidenceLogTest) — ไฟล์นั้นคือ
+    // หลักฐานเดียวของรอบทดสอบที่เกิดตอนไม่มีใครดูหน้าจอ และเก็บซ้ำไม่ได้
+    testImplementation("org.jetbrains.kotlin:kotlin-test")
+}
+
+android {
+    sourceSets {
+        getByName("test") {
+            java.srcDirs("src/test/kotlin")
+        }
+    }
+    testOptions {
+        unitTests {
+            all {
+                it.useJUnitPlatform()
+                it.testLogging {
+                    events("passed", "skipped", "failed")
+                }
+            }
+        }
+    }
+}

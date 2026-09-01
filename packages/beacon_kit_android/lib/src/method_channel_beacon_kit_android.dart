@@ -1,6 +1,7 @@
 import 'package:beacon_kit_platform_interface/beacon_kit_platform_interface.dart';
 import 'package:flutter/services.dart';
 
+import 'android_background_region.dart';
 import 'scan_permission_status.dart';
 
 /// Service UUID ของ Eddystone (`0xFEAA`) ในรูปแบบ 128-bit เต็ม — ตรงกับที่ฝั่ง
@@ -23,7 +24,17 @@ class MethodChannelBeaconKitAndroid extends BeaconKitPlatform {
     'beacon_kit_android/raw_advertisement_events',
   );
 
+  /// ช่องของ enter/exit ที่คำนวณเบื้องหลัง — **แยกจากช่อง advertisement ดิบ**
+  ///
+  /// เหตุผลเดียวกับที่ ADR-6 แยกฝั่ง iOS: advertisement ดิบมาถี่มาก ส่วน enter/exit
+  /// นาน ๆ ครั้ง ถ้ารวมช่องเดียวกัน ผู้ฟังที่สนใจแค่ enter/exit ต้อง deserialize
+  /// ทุก event แล้วกรองทิ้งตลอดเวลาที่แอปทำงาน
+  static const EventChannel _backgroundRegionChannel = EventChannel(
+    'beacon_kit_android/background_region_events',
+  );
+
   Stream<BeaconAdvertisement>? _rawAdvertisementEvents;
+  Stream<AndroidBackgroundRegionEvent>? _backgroundRegionEvents;
 
   @override
   Future<void> startBluetoothScan(List<String> serviceUuids) {
@@ -41,6 +52,83 @@ class MethodChannelBeaconKitAndroid extends BeaconKitPlatform {
       _rawAdvertisementEvents ??= _rawAdvertisementChannel
           .receiveBroadcastStream()
           .map(_mapRawAdvertisementEvent);
+
+  /// เริ่มเฝ้า region เบื้องหลัง — **อ่าน ADR-14 ก่อนใช้**
+  ///
+  /// ## สิ่งที่เมธอดนี้สัญญา และสิ่งที่มันไม่สัญญา
+  ///
+  /// | สัญญา | ไม่สัญญา |
+  /// |---|---|
+  /// | รอดข้ามการปัดแอปทิ้งจากรายการแอป (ระบบสร้าง process ใหม่มาส่ง event ให้) | **ไม่รอดข้าม force-stop** — ไม่มีทางแก้ด้วยโค้ด |
+  /// | ลงทะเบียนใหม่เองหลังรีบูต (ผ่าน `BOOT_COMPLETED`) | ช่วงหลังรีบูตจนถึงผู้ใช้ปลดล็อกครั้งแรก **ไม่ได้เฝ้าอะไรเลย** |
+  /// | ไม่มี notification ค้างให้ผู้ใช้เห็น | จึงไม่ได้ความถี่การสแกนระดับ foreground |
+  /// | `exit` ถูกยิงเมื่อไม่เห็นครบ [exitTimeoutSeconds] | **ไม่สัญญาว่าจะยิงภายในเวลานั้น** — ดูข้างล่าง |
+  ///
+  /// ## [exitTimeoutSeconds] เป็นขั้นต่ำ ไม่ใช่เวลาที่จะได้จริง
+  ///
+  /// exit ถูกประกาศด้วยนาฬิกาปลุกของระบบ ซึ่ง `AlarmManager.setAndAllowWhileIdle`
+  /// ระบุเองว่า "it will not dispatch these alarms more than about every minute...
+  /// when in low-power idle modes this duration may be significantly longer, such
+  /// as 15 minutes" (`AlarmManager.java:1286-1289`) — ตั้ง 30 วินาทีจึงไม่ได้แปลว่า
+  /// จะได้ exit ภายใน 30 วินาที โดยเฉพาะตอนเครื่องอยู่ใน Doze
+  ///
+  /// ## ทำไมค่านี้ปรับได้ ต่างจาก iOS
+  ///
+  /// **นี่คือข้อดีที่ตั้งใจใช้ ไม่ใช่ผลข้างเคียง** ฝั่ง iOS ค่าหน่วงก่อนประกาศ exit
+  /// เป็นของระบบ ปรับไม่ได้ และ ADR-11 ค้นแล้วไม่พบเอกสาร Apple ที่ระบุค่าหรือบอกว่า
+  /// ปรับได้ — เราวัดได้เองว่า ~30 วินาที เท่านั้น ฝั่งนี้เราคุมเองได้ จึงจูนจาก
+  /// ข้อมูลสาขาจริงตาม ADR-11 หัวข้อ 8 ได้ **โดยไม่ต้องรอ Apple**
+  ///
+  /// ค่าเริ่มต้น 30 วินาทีเลือกให้ตรงกับสิ่งที่วัดได้จาก iOS โดยตั้งใจ เพื่อให้ผล
+  /// รอบทดสอบแรกของสองแพลตฟอร์มเทียบกันได้ ไม่ใช่ต่างกันเพราะตั้งค่าคนละแบบ
+  ///
+  /// **ห้ามส่งค่าที่ hard-code ไว้ใน business logic** — ADR-11 หัวข้อ 5 ระบุว่า
+  /// ค่าเหล่านี้เป็นการตัดสินใจทางธุรกิจบนข้อมูลเทคนิค ต้องมาจาก config ของแอป
+  Future<AndroidBackgroundMonitoringResult> startBackgroundRegionMonitoring({
+    required List<AndroidBeaconRegion> regions,
+    int exitTimeoutSeconds = 30,
+  }) async {
+    final raw = await _methodChannel.invokeMapMethod<Object?, Object?>(
+      'startBackgroundRegionMonitoring',
+      {
+        'regions': regions.map((r) => r.toMap()).toList(),
+        'exitTimeoutSeconds': exitTimeoutSeconds,
+      },
+    );
+    return AndroidBackgroundMonitoringResult.fromMap(raw ?? const {});
+  }
+
+  /// ถอนการเฝ้าทั้งหมด และล้างสถานะ + คิว event ที่ยังไม่ได้ส่ง
+  ///
+  /// **ไม่ถูกเรียกอัตโนมัติตอนแอปปิด** โดยตั้งใจ — การเฝ้าเบื้องหลังต้องอยู่ต่อ
+  /// หลังผู้ใช้ปิดแอป ซึ่งเป็นเหตุผลทั้งหมดที่มันมีอยู่
+  Future<void> stopBackgroundRegionMonitoring() =>
+      _methodChannel.invokeMethod<void>('stopBackgroundRegionMonitoring');
+
+  /// สถานะที่ **แอปเราเองจำไว้** — ดูคำเตือนใน [AndroidBackgroundMonitoringStatus]
+  Future<AndroidBackgroundMonitoringStatus>
+  getBackgroundRegionMonitoringStatus() async {
+    final raw = await _methodChannel.invokeMapMethod<Object?, Object?>(
+      'getBackgroundRegionMonitoringStatus',
+    );
+    return AndroidBackgroundMonitoringStatus.fromMap(raw ?? const {});
+  }
+
+  /// enter/exit จากเส้นทางเบื้องหลัง
+  ///
+  /// **event ที่เกิดตอนไม่มี Flutter engine ถูกคิวไว้ในดิสก์ฝั่ง native** และถูกส่ง
+  /// ออกมาทั้งชุดทันทีที่มีคน subscribe — ผู้ฟังจึงอาจได้ event ที่ `timestamp`
+  /// เก่ากว่าตอนนี้หลายชั่วโมง **ห้ามใช้ `DateTime.now()` แทน `event.timestamp`**
+  /// ไม่งั้นสถิติทั้งหมดจะกองอยู่ที่ "ตอนเปิดแอป" ซึ่งผิดความจริงทั้งชุด
+  ///
+  /// **ไม่กรอง flapping ให้** ตาม ADR-11 หัวข้อ 7: SDK มีหน้าที่รายงานสิ่งที่เกิดขึ้น
+  /// อย่างซื่อสัตย์ การกรองเป็นหน้าที่ของแอป (ผ่าน utility ที่เลือกใช้ได้)
+  Stream<AndroidBackgroundRegionEvent> get backgroundRegionEvents =>
+      _backgroundRegionEvents ??= _backgroundRegionChannel
+          .receiveBroadcastStream()
+          .map(AndroidBackgroundRegionEvent.tryParse)
+          .where((event) => event != null)
+          .cast<AndroidBackgroundRegionEvent>();
 
   /// ขอสิทธิ์ที่จำเป็นสำหรับสแกน BLE บน Android 12
   /// (`BLUETOOTH_SCAN` + `ACCESS_FINE_LOCATION` — ดู ADR-12 ว่าทำไมต้องมีทั้งคู่)

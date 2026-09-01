@@ -20,6 +20,23 @@ final class BackgroundEvidenceLog {
 
   static let fileName = "region_events.log"
 
+  /// **ตัวระบุ process** — สุ่มใหม่ทุกครั้งที่ process เริ่ม เขียนลงทุกบรรทัด
+  ///
+  /// **ปัญหาที่ตัวนี้แก้ (ค้างมาตั้งแต่รอบเคส B1 ยังไม่เคยทำ):** ก่อนหน้านี้การ
+  /// ตอบว่า "บรรทัดนี้มาจาก process ใหม่หรือ process เดิม" ทำได้ทางเดียวคือ
+  /// **เดาจาก `uptime`** ที่อยู่ในคอลัมน์สัญญาณดิบ — ถ้า uptime น้อยก็เดาว่าเพิ่ง
+  /// เริ่ม ซึ่งผิดได้สองทาง: process ที่รันมานานแล้วถูกปลุกอีกครั้งจะมี uptime สูง
+  /// ทั้งที่ไม่ใช่ process ใหม่ และ process ใหม่ที่ระบบสร้างขึ้นแล้วส่ง event ช้า
+  /// จะมี uptime สูงเช่นกัน
+  ///
+  /// ค่านี้ตอบได้แน่นอนโดยไม่ต้องเดา: **บรรทัดสองบรรทัดที่มี `processId` ต่างกัน
+  /// มาจากคนละ process เสมอ** และ `processId` ที่ไม่เคยปรากฏในบรรทัดก่อนหน้าใน
+  /// ไฟล์เดียวกัน = process ที่ถูกสร้างขึ้นมาใหม่
+  ///
+  /// ใช้ 8 ตัวอักษรแรกของ UUID พอ — ต้องอ่านด้วยตาบนหน้าจอมือถือระหว่างทดสอบ
+  /// ไม่ได้ต้องการความเป็นเอกลักษณ์ระดับ global
+  static let processId = String(UUID().uuidString.prefix(8)).lowercased()
+
   /// protection class ที่ไฟล์ log **ต้อง**ได้รับ
   ///
   /// **ทำไมต้องตั้งเอง ทั้งที่นี่เป็นค่า default ของ iOS อยู่แล้ว:**
@@ -95,14 +112,26 @@ final class BackgroundEvidenceLog {
 
   /// ประกอบหนึ่งบรรทัดของ log — **pure function** จึงมี XCTest คลุมได้จริง
   ///
-  /// รูปแบบคั่นด้วย TAB 5 คอลัมน์ ต้องตรงกับที่หน้า "ดู log" ฝั่ง Dart อ่าน:
-  /// `timestamp(ISO8601+offset) \t event \t regionIdentifier \t conclusion \t rawSignals`
+  /// รูปแบบคั่นด้วย TAB **6 คอลัมน์** ต้องตรงกับที่หน้า "ดู log" ฝั่ง Dart,
+  /// `tool/analyze_region_log.dart` และฝั่ง Android (`BackgroundEvidenceLog.kt`)
+  /// อ่าน:
+  /// `timestamp(ISO8601+offset) \t processId \t event \t regionIdentifier \t conclusion \t rawSignals`
+  ///
+  /// **คอลัมน์ `processId` เพิ่มเข้ามาทีหลัง** — ไฟล์ log เก่าที่เก็บไว้เป็นหลักฐาน
+  /// (เช่น `docs/test-data/2026-08-30_overnight_region_flapping.log`) ยังเป็น 5
+  /// คอลัมน์อยู่ ตัวอ่านทุกตัวจึงต้องรองรับทั้งสองแบบ วิธีแยกคือดูว่าคอลัมน์ที่ 2
+  /// เป็นเลขฐานสิบหก 8 ตัวหรือไม่ (ดู `LogEntry.tryParse`) **ห้ามแก้ไฟล์เก่าให้
+  /// เข้ารูปแบบใหม่** เพราะมันคือหลักฐานดิบจากรอบทดสอบที่เกิดขึ้นจริง
   ///
   /// ใช้เวลา **local พร้อม offset** ไม่ใช่ UTC ล้วน เพราะผู้ทดสอบต้องเทียบกับเวลา
   /// บนนาฬิกาข้อมือตอนถอด/ใส่แบตจริง การต้องบวกลบ 7 ชั่วโมงในหัวระหว่างอ่าน log
   /// คือที่มาของการอ่านผลผิด
+  ///
+  /// [processId] รับเป็นพารามิเตอร์ที่มีค่า default เพื่อให้ XCTest ตรึงค่าได้
+  /// โค้ดจริงไม่ต้องส่ง
   static func line(
     timestamp: Date,
+    processId: String = BackgroundEvidenceLog.processId,
     event: String,
     regionIdentifier: String,
     conclusion: String,
@@ -110,6 +139,7 @@ final class BackgroundEvidenceLog {
   ) -> String {
     return [
       iso8601WithOffset(timestamp),
+      processId,
       event,
       regionIdentifier,
       conclusion,

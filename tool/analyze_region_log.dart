@@ -14,15 +14,23 @@
 import 'dart:io';
 
 /// หนึ่งบรรทัดใน log — รูปแบบกำหนดไว้ที่
-/// `packages/beacon_kit/example/ios/Runner/BackgroundEvidenceLog.swift`
+/// `packages/beacon_kit/example/ios/Runner/BackgroundEvidenceLog.swift` และ
+/// `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/BackgroundEvidenceLog.kt`
+/// (ทั้งสองฝั่งประกอบบรรทัดเหมือนกันโดยตั้งใจ)
+///
+/// **กติกาการแยกรูปแบบซ้ำกับ `EvidenceLogLine` ใน example app โดยตั้งใจ** —
+/// ไฟล์นี้เป็นสคริปต์ที่ต้องรันได้ด้วย `dart run` เปล่า ๆ โดยไม่ `pub get` และ
+/// ไม่ผูกกับ pubspec ของ package ไหน (ระบุไว้ที่หัวไฟล์) จึง import ข้ามมาไม่ได้
+/// ถ้าจะแก้รูปแบบบรรทัด **ต้องแก้ทั้งสองที่**
 class LogEntry {
   LogEntry({
     required this.timestamp,
+    required this.processId,
     required this.event,
     required this.regionIdentifier,
     required this.conclusion,
-    required this.rawSignals,
     required this.lineNumber,
+    required this.rawSignals,
   });
 
   /// เวลาที่บันทึกในไฟล์ **ตามเขตเวลาของเครื่องที่ทดสอบ** (ไม่ใช่ UTC และไม่ใช่
@@ -32,6 +40,12 @@ class LogEntry {
   /// ถี่ตอนกี่โมงจะไร้ความหมายทันทีถ้าเลื่อนเขตเวลา — และไฟล์ log อาจถูกวิเคราะห์
   /// บนเครื่องคนละโซนกับเครื่องที่ทดสอบ
   final DateTime timestamp;
+
+  /// ตัวระบุ process ที่เขียนบรรทัดนี้ — `null` สำหรับ log ที่เก็บก่อน ADR-14
+  ///
+  /// **`null` แปลว่า "ไม่รู้" ไม่ใช่ "process เดิม"** — การนับ process จากไฟล์เก่า
+  /// จึงทำไม่ได้ และต้องรายงานว่าทำไม่ได้ ไม่ใช่เดาแล้วรายงานตัวเลข
+  final String? processId;
   final String event;
   final String regionIdentifier;
   final String conclusion;
@@ -58,6 +72,13 @@ class LogEntry {
         sign;
   }
 
+  /// คอลัมน์ที่ 2 เป็น `processId` ก็ต่อเมื่อหน้าตาเป็นเลขฐานสิบหกพิมพ์เล็ก 8 ตัว
+  ///
+  /// ใช้รูปแบบของค่าเป็นตัวแยกรุ่นไฟล์ แทนการนับคอลัมน์อย่างเดียว — คอลัมน์ที่ 2
+  /// ของไฟล์รูปแบบเก่าคือชื่อ event (`enter`/`exit`/`launch`) ซึ่งไม่มีทางตรงกับ
+  /// รูปแบบนี้ จึงแยกได้แน่นอนโดยไม่ต้องพึ่งจำนวนคอลัมน์ที่อาจเพี้ยนได้
+  static final RegExp _processIdPattern = RegExp(r'^[0-9a-f]{8}$');
+
   static LogEntry? tryParse(String line, int lineNumber) {
     final parts = line.split('\t');
     if (parts.length < 4) return null;
@@ -66,12 +87,20 @@ class LogEntry {
     // DateTime.parse แปลงเป็น UTC ให้อัตโนมัติเมื่อสตริงมี offset — บวก offset
     // กลับเข้าไปเพื่อให้ field ชั่วโมง/วัน อ่านได้ตรงกับนาฬิกาของผู้ทดสอบ
     final timestamp = parsed.toUtc().add(_offsetOf(parts[0]));
+
+    final hasProcessId =
+        parts.length >= 6 && _processIdPattern.hasMatch(parts[1]);
+    final offset = hasProcessId ? 1 : 0;
+    String columnAt(int index) =>
+        parts.length > index + offset ? parts[index + offset] : '';
+
     return LogEntry(
       timestamp: timestamp,
-      event: parts[1],
-      regionIdentifier: parts[2],
-      conclusion: parts[3],
-      rawSignals: parts.length > 4 ? parts[4] : '',
+      processId: hasProcessId ? parts[1] : null,
+      event: columnAt(1),
+      regionIdentifier: columnAt(2),
+      conclusion: columnAt(3),
+      rawSignals: columnAt(4),
       lineNumber: lineNumber,
     );
   }
@@ -177,13 +206,42 @@ void _printHeader(File file, List<LogEntry> entries, List<int> unparsed) {
   }
 }
 
-/// process แต่ละตัวมีชีวิตอยู่นานแค่ไหน — ดูจากบรรทัด `launch` และ `uptime`
+/// process แต่ละตัวมีชีวิตอยู่นานแค่ไหน และแต่ละ event มาจาก process ไหน
 ///
 /// สำคัญเพราะถ้ามีหลายบรรทัด `launch` ในไฟล์เดียว แปลว่า process ตายแล้วถูก
 /// ปลุกใหม่ระหว่างทาง ซึ่งเป็นคนละเรื่องกับการที่แอปรันยาวทั้งคืน
+///
+/// **สองโหมด และต้องบอกผู้อ่านเสมอว่ากำลังใช้โหมดไหน:**
+///
+/// - ไฟล์ที่มีคอลัมน์ `processId` (ตั้งแต่ ADR-14) — จัดกลุ่ม event ตาม
+///   `processId` ตรง ๆ **เป็นข้อเท็จจริง ไม่ใช่การอนุมาน**
+/// - ไฟล์รูปแบบเก่า — ต้องเดาว่า event อยู่ระหว่าง `launch` สองบรรทัดไหน ซึ่ง
+///   **ผิดได้** ถ้าบรรทัด `launch` หายไป (เช่นเขียนไฟล์ไม่สำเร็จตอนเครื่องล็อก)
+///   หรือถ้า event ถูกคิวไว้แล้วส่งข้ามรอบ process — จึงพิมพ์คำเตือนกำกับ
 void _printProcessLifetimes(List<LogEntry> entries) {
-  final launches = entries.where((e) => e.event == 'launch').toList();
   _title('อายุของแต่ละ process');
+
+  final withProcessId = entries.where((e) => e.processId != null).toList();
+  if (withProcessId.length == entries.length && entries.isNotEmpty) {
+    _printProcessLifetimesById(entries);
+    return;
+  }
+
+  if (withProcessId.isNotEmpty) {
+    print(
+      '⚠️  ไฟล์นี้ปนกันสองรูปแบบ: ${withProcessId.length} จาก ${entries.length} '
+      'บรรทัดมี processId — รายงานข้างล่างใช้วิธีเดาจากบรรทัด launch ทั้งไฟล์',
+    );
+    print('');
+  } else {
+    print(
+      '⚠️  ไฟล์นี้ไม่มีคอลัมน์ processId (เก็บก่อน ADR-14) — การจับคู่ event เข้ากับ '
+      'process ข้างล่างเป็น**การอนุมานจากลำดับเวลา ไม่ใช่ข้อเท็จจริง**',
+    );
+    print('');
+  }
+
+  final launches = entries.where((e) => e.event == 'launch').toList();
   if (launches.isEmpty) {
     print(
       'ไม่มีบรรทัด launch ในไฟล์นี้ (log อาจถูกล้างหลัง process เริ่มไปแล้ว)',
@@ -208,16 +266,98 @@ void _printProcessLifetimes(List<LogEntry> entries) {
       final uptime = e.uptimeSeconds;
       if (uptime != null && uptime > maxUptime) maxUptime = uptime;
     }
-    final regions = RegExp(r'monitoredRegions=\[([^\]]*)\]')
-        .firstMatch(launch.rawSignals)
-        ?.group(1);
     print(
       'launch #${i + 1} ${_wall(launch.timestamp)} '
       '· ${launch.conclusion} '
       '· อายุที่บันทึกได้สูงสุด ${_humanDuration(Duration(seconds: maxUptime.round()))} '
-      '· monitoredRegions=[${regions ?? "?"}]',
+      '· ${_launchRegions(launch)}',
     );
   }
+}
+
+/// รายงานแบบที่ **ไม่ต้องเดาอะไรเลย** — ใช้ได้เมื่อทุกบรรทัดมี `processId`
+void _printProcessLifetimesById(List<LogEntry> entries) {
+  // เรียงตามลำดับที่เจอครั้งแรกในไฟล์ ไม่ใช่ตามตัวอักษรของ id — ผู้อ่านต้องเห็น
+  // ลำดับเวลาที่ process เกิดขึ้นจริง
+  final order = <String>[];
+  final byProcess = <String, List<LogEntry>>{};
+  for (final entry in entries) {
+    final id = entry.processId!;
+    if (!byProcess.containsKey(id)) order.add(id);
+    byProcess.putIfAbsent(id, () => []).add(entry);
+  }
+
+  print(
+    'พบ ${order.length} process จาก processId ที่ต่างกัน (ไม่ใช่การอนุมาน)',
+  );
+  print('');
+
+  for (var i = 0; i < order.length; i++) {
+    final id = order[i];
+    final owned = byProcess[id]!;
+    final launch = owned.where((e) => e.event == 'launch').firstOrNull;
+    var maxUptime = 0.0;
+    for (final e in owned) {
+      final uptime = e.uptimeSeconds;
+      if (uptime != null && uptime > maxUptime) maxUptime = uptime;
+    }
+    final events = <String, int>{};
+    for (final e in owned) {
+      events[e.event] = (events[e.event] ?? 0) + 1;
+    }
+    final breakdown = events.entries
+        .map((e) => '${e.key}×${e.value}')
+        .join(' ');
+
+    print(
+      'process #${i + 1} pid=$id '
+      '${_wall(owned.first.timestamp)} → ${_wall(owned.last.timestamp)}',
+    );
+    print(
+      '   บริบทตอนเริ่ม : '
+      '${launch?.conclusion ?? "ไม่มีบรรทัด launch — process นี้เริ่มก่อนล้าง log"}',
+    );
+    print(
+      '   อายุสูงสุดที่บันทึกได้ : '
+      '${_humanDuration(Duration(seconds: maxUptime.round()))}',
+    );
+    print('   event : $breakdown');
+    if (launch != null) {
+      print('   ${_launchRegions(launch)}');
+    }
+    print('');
+  }
+
+  // สิ่งที่รอบทดสอบต้องการตอบให้ได้: มี process ที่ระบบสร้างขึ้นมาเองไหม
+  final relaunched = order
+      .where(
+        (id) => byProcess[id]!.any(
+          (e) =>
+              e.event == 'launch' && e.conclusion == 'relaunchedFromTerminated',
+        ),
+      )
+      .toList();
+  print(
+    'process ที่ขึ้นมาโดยผู้ใช้ไม่ได้เปิดแอปเอง (launch + relaunchedFromTerminated) : '
+    '${relaunched.length} จาก ${order.length}',
+  );
+  if (relaunched.isNotEmpty) {
+    print('   ${relaunched.join(", ")}');
+  }
+}
+
+/// region ที่ระบบยังเก็บไว้ให้ตอน launch — ชื่อ key ต่างกันตามแพลตฟอร์ม
+///
+/// iOS เขียน `monitoredRegions=[...]` (มาจาก `CLLocationManager.monitoredRegions`)
+/// ส่วน Android เขียน `restoredRegions=[...]` (มาจากไฟล์ที่เราเก็บเอง เพราะ
+/// Android ไม่มีชุด region ระดับ OS ให้ถาม — ดู ADR-14) **ตั้งใจใช้คนละชื่อ**
+/// เพื่อไม่ให้ใครอ่าน log แล้วเข้าใจว่าสองแพลตฟอร์มได้ค่านี้มาจากที่เดียวกัน
+String _launchRegions(LogEntry launch) {
+  for (final key in const ['monitoredRegions', 'restoredRegions']) {
+    final match = RegExp('$key=\\[([^\\]]*)\\]').firstMatch(launch.rawSignals);
+    if (match != null) return '$key=[${match.group(1)}]';
+  }
+  return 'region ตอน launch: ไม่มีข้อมูลในบรรทัดนี้';
 }
 
 /// ตรวจว่า enter/exit สลับกันเป็นคู่จริงหรือไม่ — คืนรายการความผิดปกติที่เจอ

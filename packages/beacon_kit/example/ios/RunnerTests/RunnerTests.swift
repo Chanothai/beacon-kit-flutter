@@ -311,9 +311,13 @@ class RunnerTests: XCTestCase {
 
   /// หน้า "ดู log" ฝั่ง Dart แยกคอลัมน์ด้วย TAB — ถ้ารูปแบบเพี้ยน หลักฐานที่เก็บมา
   /// ทั้งรอบทดสอบจะอ่านไม่ออก เทสต์นี้จึงล็อกจำนวนคอลัมน์และลำดับไว้
-  func testLogLineHasFiveTabSeparatedColumnsInOrder() {
+  ///
+  /// **6 คอลัมน์ตั้งแต่ ADR-14** — เพิ่ม `processId` เป็นคอลัมน์ที่ 2 ตัวอ่านฝั่ง
+  /// Dart ยังต้องอ่านไฟล์เก่า 5 คอลัมน์ได้อยู่ (ดู `LogEntry.tryParse`)
+  func testLogLineHasSixTabSeparatedColumnsInOrder() {
     let line = BackgroundEvidenceLog.line(
       timestamp: Date(timeIntervalSince1970: 0),
+      processId: "a1b2c3d4",
       event: "enter",
       regionIdentifier: "bigc-fleet-wide",
       conclusion: "relaunchedFromTerminated",
@@ -321,11 +325,43 @@ class RunnerTests: XCTestCase {
     )
 
     let columns = line.components(separatedBy: "\t")
-    XCTAssertEqual(columns.count, 5)
-    XCTAssertEqual(columns[1], "enter")
-    XCTAssertEqual(columns[2], "bigc-fleet-wide")
-    XCTAssertEqual(columns[3], "relaunchedFromTerminated")
-    XCTAssertEqual(columns[4], "launchKey=true everActive=false state=background uptime=0.4s")
+    XCTAssertEqual(columns.count, 6)
+    XCTAssertEqual(columns[1], "a1b2c3d4")
+    XCTAssertEqual(columns[2], "enter")
+    XCTAssertEqual(columns[3], "bigc-fleet-wide")
+    XCTAssertEqual(columns[4], "relaunchedFromTerminated")
+    XCTAssertEqual(columns[5], "launchKey=true everActive=false state=background uptime=0.4s")
+  }
+
+  /// `processId` ต้องเป็นค่าที่**อ่านได้ด้วยตาบนหน้าจอมือถือ** และคงที่ตลอดอายุ
+  /// process เดียวกัน — ถ้ามันเปลี่ยนระหว่าง process การแยก "process ใหม่" ออกจาก
+  /// "process เดิม" จะพังทันที ซึ่งเป็นเหตุผลเดียวที่คอลัมน์นี้มีอยู่
+  func testProcessIdIsStableEightHexCharacters() {
+    let first = BackgroundEvidenceLog.processId
+    let second = BackgroundEvidenceLog.processId
+
+    XCTAssertEqual(first, second, "processId ต้องไม่เปลี่ยนภายใน process เดียวกัน")
+    XCTAssertNotNil(
+      first.range(of: "^[0-9a-f]{8}$", options: .regularExpression),
+      "processId ต้องเป็นเลขฐานสิบหกตัวพิมพ์เล็ก 8 ตัว ได้ \(first)"
+    )
+  }
+
+  /// ค่า default ของ `processId` ต้องถูกใช้จริงเมื่อผู้เรียกไม่ส่งมา — เส้นทางที่
+  /// โค้ดจริงทั้งหมดใช้ ถ้าพลาดตรงนี้ log จะไม่มีตัวระบุ process เลยโดยไม่มีใครรู้
+  func testLogLineUsesProcessIdByDefault() {
+    let line = BackgroundEvidenceLog.line(
+      timestamp: Date(timeIntervalSince1970: 0),
+      event: "launch",
+      regionIdentifier: "-",
+      conclusion: "foreground",
+      rawSignals: "-"
+    )
+
+    XCTAssertEqual(
+      line.components(separatedBy: "\t")[1],
+      BackgroundEvidenceLog.processId
+    )
   }
 
   /// timestamp ต้องเป็นเวลา **local พร้อม offset** ไม่ใช่ UTC ล้วน และต้องเป็น

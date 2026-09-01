@@ -1,0 +1,303 @@
+package com.bigc.beacon_kit_android
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.os.SystemClock
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * สถานะทั้งหมดของการเฝ้า region เบื้องหลัง ที่ต้องรอดข้าม process
+ *
+ * ## ทำไมต้องเก็บลงดิสก์เอง — ต่างจาก iOS โดยพื้นฐาน
+ *
+ * ฝั่ง iOS ไม่มีคลาสแบบนี้เลย เพราะ **ระบบเก็บ region ให้** —
+ * `CLLocationManager.monitoredRegions` ระบุไว้ว่า region ที่ลงทะเบียนไว้ "during
+ * this or previous launches of your application" จะยังอยู่ในเซ็ตนี้ แอปจึงแค่ถาม
+ * ระบบก็รู้ว่าเฝ้าอะไรอยู่
+ *
+ * **Android ไม่มีอะไรเทียบเท่านั้น** ไม่มี API ให้ถามว่า "ตอนนี้ฉันลงทะเบียนสแกน
+ * อะไรไว้บ้าง" และไม่มีสถานะ enter/exit ที่ระบบคำนวณให้ ทั้งรายการ region และ
+ * สถานะเข้า/ออกจึงเป็น **ของเราเอง** ที่ต้องเก็บและกู้คืนเอง — ดู ADR-14
+ *
+ * ## ทำไม `commit()` ไม่ใช่ `apply()`
+ *
+ * `apply()` เขียนแบบไม่ซิงค์ ระบบอาจฆ่า process ทันทีที่ `onReceive()` คืนค่า
+ * ซึ่งแปลว่าสถานะที่เพิ่งเปลี่ยนหายไปเงียบ ๆ แล้วรอบถัดไปจะรายงาน enter ซ้ำ
+ * ทั้งที่ไม่เคยออก — เหตุผลเดียวกับที่ฝั่ง iOS ต้อง `fsync` ไฟล์ log
+ */
+class BackgroundRegionStore(context: Context) {
+
+    private val prefs: SharedPreferences =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    companion object {
+        private const val PREFS_NAME = "beacon_kit_android.background"
+
+        private const val KEY_REGIONS = "regions"
+        private const val KEY_ACTIVE = "active"
+        private const val KEY_EXIT_TIMEOUT_SECONDS = "exitTimeoutSeconds"
+        private const val KEY_BOOT_TOKEN = "bootToken"
+        private const val KEY_PENDING_EVENTS = "pendingEvents"
+
+        private const val PREFIX_INSIDE = "inside."
+        private const val PREFIX_LAST_SEEN_ELAPSED = "lastSeenElapsed."
+        private const val PREFIX_LAST_SEEN_WALL = "lastSeenWall."
+        private const val PREFIX_ALARM_AT_ELAPSED = "alarmAtElapsed."
+
+        /**
+         * ค่าเริ่มต้นของ "ไม่เห็นกี่วินาทีถึงถือว่าออกจาก region"
+         *
+         * **ไม่ใช่ค่าที่ยืนยันจากสเปกของแพลตฟอร์ม และห้ามอ้างว่าเป็น** — ตั้งไว้ที่
+         * 30 วินาทีเพราะเป็นค่าที่**วัดได้เองจากพฤติกรรมของ iOS** ในการทดสอบข้ามคืน
+         * 30-31 ส.ค. 2026 (ADR-11 หัวข้อ 2: 43.5% ของช่วงตกอยู่ในหน้าต่าง 29.5-30.5
+         * วินาที) การเริ่มด้วยค่าเดียวกันทำให้ผลของสองแพลตฟอร์ม**เทียบกันได้ตรง ๆ**
+         * ในรอบทดสอบแรก แทนที่จะต่างกันเพราะเลือกค่าคนละแบบ
+         *
+         * ⚠️ **บน Android ค่านี้เป็นของเรา ไม่ใช่ของระบบ** — นี่คือความต่างที่
+         * ADR-14 บันทึกไว้เป็นข้อดีที่ตั้งใจใช้: ฝั่ง iOS เราปรับไม่ได้เลย
+         * (ADR-11 ค้นแล้วไม่พบเอกสาร Apple ที่ระบุหรือให้ปรับ) ส่วนฝั่งนี้ปรับได้
+         * ผ่าน `exitTimeoutSeconds` และควรจูนจากข้อมูลสาขาจริงตาม ADR-11 หัวข้อ 8
+         */
+        const val DEFAULT_EXIT_TIMEOUT_SECONDS = 30
+
+        /**
+         * จำนวน event สูงสุดที่คิวไว้รอ Dart มารับ
+         *
+         * ต้องมีเพดาน เพราะถ้าผู้ใช้ไม่เปิดแอปเป็นสัปดาห์ คิวจะโตไม่หยุดใน
+         * SharedPreferences ซึ่งถูกโหลดทั้งไฟล์เข้าหน่วยความจำทุกครั้งที่เปิด
+         * **ทิ้งตัวเก่าสุดก่อน** เพราะ event ล่าสุดมีค่ากับผู้ใช้มากกว่า —
+         * และการทิ้งถูกบันทึกเป็น `droppedEvents` ไม่ใช่หายเงียบ
+         */
+        const val MAX_PENDING_EVENTS = 200
+    }
+
+    // ---- รายการ region ที่เฝ้าอยู่ ----
+
+    /**
+     * `true` เมื่อแอปสั่งให้เฝ้า region อยู่ และยังไม่ได้สั่งหยุด
+     *
+     * แยกจาก "รายการ region ว่างหรือไม่" โดยตั้งใจ — ต้องแยก "ผู้ใช้สั่งหยุดแล้ว"
+     * ออกจาก "ยังสั่งอยู่แต่ระบบล้างการลงทะเบียนไปเอง (เช่นหลังรีบูต)" ให้ได้
+     * ไม่งั้นตัวรับ `BOOT_COMPLETED` จะไม่รู้ว่าควรลงทะเบียนใหม่หรือไม่
+     */
+    var isActive: Boolean
+        get() = prefs.getBoolean(KEY_ACTIVE, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_ACTIVE, value).commit()
+        }
+
+    var regions: List<BeaconRegionSpec>
+        get() = BeaconRegionSpec.listFromJson(prefs.getString(KEY_REGIONS, "[]") ?: "[]")
+        set(value) {
+            prefs.edit()
+                .putString(KEY_REGIONS, BeaconRegionSpec.listToJson(value))
+                .commit()
+        }
+
+    fun regionFor(identifier: String): BeaconRegionSpec? =
+        regions.firstOrNull { it.identifier == identifier }
+
+    var exitTimeoutSeconds: Int
+        get() = prefs.getInt(KEY_EXIT_TIMEOUT_SECONDS, DEFAULT_EXIT_TIMEOUT_SECONDS)
+        set(value) {
+            prefs.edit().putInt(KEY_EXIT_TIMEOUT_SECONDS, value).commit()
+        }
+
+    // ---- สถานะเข้า/ออกของแต่ละ region ----
+
+    /**
+     * "โทเคนของรอบบูตนี้" — ใช้ตรวจว่าเวลาที่เก็บไว้ยังใช้เทียบได้หรือไม่
+     *
+     * [SystemClock.elapsedRealtime] นับจาก**ตอนบูต** ค่าที่เก็บไว้ก่อนรีบูตจึงเทียบ
+     * กับค่าหลังรีบูตไม่ได้เลย และถ้าเผลอเทียบจะได้ผลว่า "เพิ่งเห็นเมื่อกี้" ทั้งที่
+     * ผ่านมาหลายวัน แล้วรายงาน enter/exit ผิดทั้งชุด
+     *
+     * โทเคนคือเวลาบูตโดยประมาณ (`wallClock - elapsedRealtime`) ซึ่งคงที่ภายในรอบบูต
+     * เดียวกัน (ขยับเล็กน้อยตามการปรับนาฬิกา จึงเทียบด้วยความคลาดเคลื่อนที่ยอมได้)
+     */
+    private fun currentBootToken(): Long =
+        System.currentTimeMillis() - SystemClock.elapsedRealtime()
+
+    /** ต่างกันเกินค่านี้ = คนละรอบบูต (เผื่อการปรับนาฬิกาปกติ) */
+    private val bootTokenToleranceMillis = 10_000L
+
+    /**
+     * `true` ถ้าเวลาแบบ elapsed ที่เก็บไว้มาจากรอบบูตเดียวกับตอนนี้
+     *
+     * ถ้า `false` ผู้เรียก **ต้องไม่** ใช้ค่า `lastSeenElapsed` ที่เก็บไว้
+     */
+    fun storedElapsedTimesAreFromThisBoot(): Boolean {
+        if (!prefs.contains(KEY_BOOT_TOKEN)) return false
+        val stored = prefs.getLong(KEY_BOOT_TOKEN, 0)
+        return kotlin.math.abs(stored - currentBootToken()) <= bootTokenToleranceMillis
+    }
+
+    fun stampBootToken() {
+        prefs.edit().putLong(KEY_BOOT_TOKEN, currentBootToken()).commit()
+    }
+
+    fun isInside(identifier: String): Boolean =
+        prefs.getBoolean(PREFIX_INSIDE + identifier, false)
+
+    fun lastSeenElapsedMillis(identifier: String): Long =
+        prefs.getLong(PREFIX_LAST_SEEN_ELAPSED + identifier, 0L)
+
+    fun lastSeenWallMillis(identifier: String): Long =
+        prefs.getLong(PREFIX_LAST_SEEN_WALL + identifier, 0L)
+
+    fun scheduledExitAlarmElapsedMillis(identifier: String): Long =
+        prefs.getLong(PREFIX_ALARM_AT_ELAPSED + identifier, 0L)
+
+    /**
+     * บันทึกทุกอย่างของหนึ่ง region ใน `commit()` เดียว
+     *
+     * ต้องเป็นการเขียนครั้งเดียว ไม่ใช่หลายครั้งต่อกัน — ระบบฆ่า process ได้ทุกเมื่อ
+     * ระหว่างนั้น แล้วสถานะจะเหลือครึ่ง ๆ (เช่น `inside=true` แต่ `lastSeen` ยังเป็น
+     * ของเก่า) ซึ่งทำให้ตรรกะ exit คำนวณผิดโดยไม่มีใครรู้
+     */
+    fun recordSighting(identifier: String, alarmAtElapsedMillis: Long) {
+        prefs.edit()
+            .putBoolean(PREFIX_INSIDE + identifier, true)
+            .putLong(PREFIX_LAST_SEEN_ELAPSED + identifier, SystemClock.elapsedRealtime())
+            .putLong(PREFIX_LAST_SEEN_WALL + identifier, System.currentTimeMillis())
+            .putLong(PREFIX_ALARM_AT_ELAPSED + identifier, alarmAtElapsedMillis)
+            .putLong(KEY_BOOT_TOKEN, currentBootToken())
+            .commit()
+    }
+
+    fun recordExitAlarmScheduled(identifier: String, alarmAtElapsedMillis: Long) {
+        prefs.edit()
+            .putLong(PREFIX_ALARM_AT_ELAPSED + identifier, alarmAtElapsedMillis)
+            .commit()
+    }
+
+    fun markOutside(identifier: String) {
+        prefs.edit()
+            .putBoolean(PREFIX_INSIDE + identifier, false)
+            .remove(PREFIX_ALARM_AT_ELAPSED + identifier)
+            .commit()
+    }
+
+    /**
+     * ล้างสถานะเข้า/ออกทั้งหมด แต่ **ไม่ล้างคิว event ที่ Dart ยังไม่ได้รับ**
+     *
+     * ใช้ตอนรีบูต: การลงทะเบียนสแกนหายไปกับการรีบูตแน่นอน (ADR-14 หัวข้อการทดสอบ)
+     * สถานะ "อยู่ในโซน" ที่ค้างอยู่จึงไม่มีความหมายอีกต่อไป — ถ้าไม่ล้าง แอปจะคิดว่า
+     * ยังอยู่ในโซนตลอดไปและไม่มีวันรายงาน enter อีกเลย ซึ่งเป็นอาการเงียบที่แย่ที่สุด
+     */
+    fun clearRegionStates() {
+        val editor = prefs.edit()
+        for (key in prefs.all.keys) {
+            if (key.startsWith(PREFIX_INSIDE) ||
+                key.startsWith(PREFIX_LAST_SEEN_ELAPSED) ||
+                key.startsWith(PREFIX_LAST_SEEN_WALL) ||
+                key.startsWith(PREFIX_ALARM_AT_ELAPSED)
+            ) {
+                editor.remove(key)
+            }
+        }
+        editor.commit()
+    }
+
+    // ---- คิว event ที่รอส่งให้ Dart ----
+
+    /**
+     * event ที่เกิดตอนไม่มี Flutter engine ต้องถูกเก็บไว้ ไม่ใช่ทิ้ง
+     *
+     * นี่คือความต่างที่ทำให้เส้นทางเบื้องหลังของ Android ยากกว่าฝั่ง iOS: บน iOS
+     * host app เริ่ม CoreLocation ได้ตั้งแต่ `didFinishLaunchingWithOptions`
+     * (ADR-10) แล้ว event ที่ระบบคิวไว้จะไหลเข้ามาเอง ส่วนฝั่งนี้ระบบไม่ได้คิวอะไร
+     * ให้เลย — **เราคิวเอง** ไม่งั้น event ที่เกิดตอนแอปปิดจะหายทั้งหมดและผู้ใช้ SDK
+     * จะไม่มีทางรู้ว่าเคยมี
+     */
+    fun enqueueEvent(event: BackgroundRegionStateEvent) {
+        val array = runCatching {
+            JSONArray(prefs.getString(KEY_PENDING_EVENTS, "[]") ?: "[]")
+        }.getOrElse { JSONArray() }
+
+        array.put(event.toJson())
+
+        // ตัดหัวทิ้งเมื่อเกินเพดาน — ตัวเก่าสุดออกก่อน
+        val trimmed = if (array.length() > MAX_PENDING_EVENTS) {
+            JSONArray().also { out ->
+                for (i in (array.length() - MAX_PENDING_EVENTS) until array.length()) {
+                    out.put(array.get(i))
+                }
+            }
+        } else {
+            array
+        }
+
+        prefs.edit().putString(KEY_PENDING_EVENTS, trimmed.toString()).commit()
+    }
+
+    /** อ่านคิวแล้วล้างทิ้งใน `commit()` เดียว — ผู้เรียกต้องส่งต่อให้ครบ */
+    fun drainPendingEvents(): List<BackgroundRegionStateEvent> {
+        val raw = prefs.getString(KEY_PENDING_EVENTS, "[]") ?: "[]"
+        prefs.edit().remove(KEY_PENDING_EVENTS).commit()
+        val array = runCatching { JSONArray(raw) }.getOrElse { return emptyList() }
+        return (0 until array.length()).mapNotNull { index ->
+            array.optJSONObject(index)?.let(BackgroundRegionStateEvent::fromJson)
+        }
+    }
+
+    fun pendingEventCount(): Int {
+        val raw = prefs.getString(KEY_PENDING_EVENTS, "[]") ?: "[]"
+        return runCatching { JSONArray(raw).length() }.getOrDefault(0)
+    }
+
+    /** ล้างทุกอย่าง — ใช้ตอนแอปสั่ง `stopBackgroundRegionMonitoring` */
+    fun clearAll() {
+        prefs.edit().clear().commit()
+    }
+}
+
+/**
+ * event เข้า/ออก region ที่คำนวณได้ฝั่ง Android
+ *
+ * ⚠️ **ไม่ใช่ `IBeaconRegionStateEvent` ของ iOS และห้ามทำให้ดูเหมือนเป็นตัวเดียวกัน**
+ * ฝั่ง iOS ค่านี้มาจาก CoreLocation ที่ระบบคำนวณให้ ส่วนฝั่งนี้ **เราคำนวณเอง**
+ * จากการเห็น/ไม่เห็นผลสแกน ความเชื่อถือได้จึงคนละระดับ — ADR-14 หัวข้อ 3
+ */
+data class BackgroundRegionStateEvent(
+    val regionIdentifier: String,
+    /** `enter` หรือ `exit` — ไม่มี `unknown` เพราะเราไม่มี "determine state" ให้ถาม */
+    val state: String,
+    val timestampMillis: Long,
+    /**
+     * `true` เมื่อ event นี้เกิดตอนที่ process ยังไม่เคยมี UI เลย
+     *
+     * เก็บไว้กับตัว event เพราะถ้ารอไปสรุปตอน Dart มารับ จะสายเกินไป — ตอนนั้น
+     * ผู้ใช้เปิดแอปแล้วและบริบทเปลี่ยนไปแล้ว
+     */
+    val fromBackgroundProcess: Boolean,
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("regionIdentifier", regionIdentifier)
+        put("state", state)
+        put("timestampMillis", timestampMillis)
+        put("fromBackgroundProcess", fromBackgroundProcess)
+    }
+
+    fun toMap(): Map<String, Any?> = mapOf(
+        "regionIdentifier" to regionIdentifier,
+        "state" to state,
+        "timestampMillis" to timestampMillis,
+        "fromBackgroundProcess" to fromBackgroundProcess,
+    )
+
+    companion object {
+        fun fromJson(json: JSONObject): BackgroundRegionStateEvent? {
+            val identifier = json.optString("regionIdentifier")
+            val state = json.optString("state")
+            if (identifier.isEmpty() || state.isEmpty()) return null
+            return BackgroundRegionStateEvent(
+                regionIdentifier = identifier,
+                state = state,
+                timestampMillis = json.optLong("timestampMillis"),
+                fromBackgroundProcess = json.optBoolean("fromBackgroundProcess"),
+            )
+        }
+    }
+}

@@ -151,6 +151,8 @@ import beacon_kit_ios
   /// ของเราผิด ข้อมูลดิบยังอยู่
   private func rawSignalSummary() -> String {
     let uptime = Date().timeIntervalSince(processStartedAt)
+    // ไม่ใส่ processId ตรงนี้ — มันมีคอลัมน์ของตัวเองแล้ว (คอลัมน์ที่ 2) การใส่ซ้ำ
+    // จะทำให้ตัวอ่านที่ค้นด้วย regex เจอสองที่แล้วเลือกผิดตัวได้
     return
       "launchKey=\(launchedByLocationKey) everActive=\(hasEverBecomeActive) "
       + "state=\(Self.stateString(UIApplication.shared.applicationState)) "
@@ -242,6 +244,9 @@ import beacon_kit_ios
         "hasEverBecomeActive": hasEverBecomeActive,
         "applicationState": Self.stateString(UIApplication.shared.applicationState),
         "processUptimeSeconds": Date().timeIntervalSince(processStartedAt),
+        // ตัวระบุ process เดียวกับที่เขียนลงคอลัมน์ที่ 2 ของทุกบรรทัด log —
+        // ให้หน้าจอบอกได้ว่าบรรทัดที่เห็นมาจาก process ที่กำลังรันอยู่หรือไม่
+        "processId": BackgroundEvidenceLog.processId,
       ])
 
     case "prepareLogFile":
