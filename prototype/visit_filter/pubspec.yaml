@@ -1,0 +1,13 @@
+name: visit_filter_prototype
+description: >-
+  ต้นแบบชั้นกรอง visit — reducer บริสุทธิ์ ยังไม่ผูกกับ beacon_kit
+  และยังไม่ตัดสินว่าจะวางไว้ native หรือ Dart
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.13.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
