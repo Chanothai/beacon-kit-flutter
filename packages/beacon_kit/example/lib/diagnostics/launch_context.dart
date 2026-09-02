@@ -90,6 +90,84 @@ class LaunchDiagnostics {
 }
 
 /// สะพานไปยังโค้ด native ของ **example app เอง** (ไม่ใช่ของ `beacon_kit`)
+/// ผลของการพิสูจน์ว่า **เครื่องมือวัดเขียนไฟล์ได้จริง** โดยไม่ต้องพึ่ง beacon
+///
+/// native เขียน 1 บรรทัดผ่านตัวเขียนตัวเดียวกับที่เส้นทางเบื้องหลังใช้ แล้ว
+/// **อ่านไฟล์กลับขึ้นมาจริง ๆ** — ไม่ใช่แค่ "เรียกแล้วไม่ throw"
+///
+/// **ทำไมต้องมีทั้งชุด ไม่ใช่ `bool ok` ตัวเดียว:** ความล้มเหลวแต่ละแบบแก้คนละทาง
+/// เขียนไม่ได้ (`errorAfterWrite`) · เขียนได้แต่อ่านไม่ได้ (`readError` — บน iOS
+/// คือเครื่องรีบูตแล้วยังไม่ปลดล็อก) · เขียนได้อ่านได้แต่ไม่ตรง
+/// (`readBackMatches == false`) ถ้ายุบเป็นค่าเดียวจะกลับไปเดาเหมือนเดิม
+class EvidenceLogSelfTest {
+  const EvidenceLogSelfTest({
+    required this.path,
+    required this.errorBeforeWrite,
+    required this.writtenLine,
+    required this.errorAfterWrite,
+    required this.fileExists,
+    required this.fileSizeBytes,
+    required this.lineCount,
+    required this.readBackLine,
+    required this.readBackMatches,
+    required this.readError,
+  });
+
+  /// path เต็มของไฟล์หลักฐาน — เอาไปต่อท้าย `adb ... cat` ได้ตรง ๆ
+  final String path;
+
+  /// `lastError` ที่ค้างอยู่ **ก่อน** self-test เขียนทับ
+  ///
+  /// สำคัญที่สุดในชุดนี้: การเขียนที่สำเร็จจะล้าง `lastError` เป็น `null` ค่านี้
+  /// จึงเป็นครั้งเดียวที่จะได้เห็น error ที่เกิดตอนไม่มีใครดูหน้าจอ
+  final String? errorBeforeWrite;
+
+  final String writtenLine;
+
+  /// `null` = การเขียนของ self-test สำเร็จ
+  final String? errorAfterWrite;
+
+  final bool fileExists;
+  final int fileSizeBytes;
+
+  /// จำนวนบรรทัดที่ไม่ว่างในไฟล์ **หลัง** เขียน (รวมบรรทัดที่เพิ่งเขียน)
+  final int lineCount;
+
+  /// บรรทัดสุดท้ายที่อ่านกลับได้ — `null` ถ้าอ่านไม่ได้หรือไฟล์ว่าง
+  final String? readBackLine;
+
+  /// บรรทัดที่อ่านกลับได้ตรงกับบรรทัดที่เพิ่งเขียนหรือไม่
+  final bool readBackMatches;
+
+  /// `null` = อ่านไฟล์กลับมาได้ (คนละความล้มเหลวกับ [errorAfterWrite])
+  final String? readError;
+
+  /// ผ่าน = เขียนได้ **และ** อ่านกลับได้ **และ** ตรงกับที่เขียน
+  ///
+  /// [errorBeforeWrite] ไม่นับรวมโดยตั้งใจ — มันคือ error ของ *รอบก่อน* ไม่ใช่
+  /// ผลของการทดสอบครั้งนี้ แต่หน้าจอต้องแสดงมันเสมอ
+  bool get passed =>
+      errorAfterWrite == null &&
+      readError == null &&
+      fileExists &&
+      readBackMatches;
+
+  static EvidenceLogSelfTest fromMap(Map<String, Object?> raw) {
+    return EvidenceLogSelfTest(
+      path: (raw['path'] as String?) ?? '?',
+      errorBeforeWrite: raw['errorBeforeWrite'] as String?,
+      writtenLine: (raw['writtenLine'] as String?) ?? '',
+      errorAfterWrite: raw['errorAfterWrite'] as String?,
+      fileExists: (raw['fileExists'] as bool?) ?? false,
+      fileSizeBytes: (raw['fileSizeBytes'] as num?)?.toInt() ?? 0,
+      lineCount: (raw['lineCount'] as num?)?.toInt() ?? 0,
+      readBackLine: raw['readBackLine'] as String?,
+      readBackMatches: (raw['readBackMatches'] as bool?) ?? false,
+      readError: raw['readError'] as String?,
+    );
+  }
+}
+
 class ExampleDiagnostics {
   static const MethodChannel _channel = MethodChannel(
     'beacon_kit_example/diagnostics',
@@ -132,6 +210,17 @@ class ExampleDiagnostics {
   /// "แอปไม่เคยถูกปลุกเลย" — คนละสาเหตุกันคนละเรื่อง
   Future<String?> getLogWriteError() =>
       _channel.invokeMethod<String>('getLogWriteError');
+
+  /// เขียน 1 บรรทัดลงไฟล์หลักฐานจริง แล้วอ่านกลับมาทันที — ดู [EvidenceLogSelfTest]
+  Future<EvidenceLogSelfTest> runEvidenceLogSelfTest() async {
+    final raw = await _channel.invokeMapMethod<String, Object?>(
+      'runEvidenceLogSelfTest',
+    );
+    if (raw == null) {
+      throw StateError('native ไม่คืนผล self-test');
+    }
+    return EvidenceLogSelfTest.fromMap(raw);
+  }
 
   /// อ่าน protection class จริงของไฟล์ log กลับมาเพื่อตรวจสอบ (`null` = ยังไม่มีไฟล์)
   Future<String?> getLogFileProtection(String fileName) => _channel

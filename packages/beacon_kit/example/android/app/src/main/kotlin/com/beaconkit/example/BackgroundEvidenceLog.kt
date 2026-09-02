@@ -64,6 +64,23 @@ object BackgroundEvidenceLog {
      */
     val processId: String = UUID.randomUUID().toString().take(8).lowercase()
 
+    /**
+     * pid ของ Linux สำหรับ process นี้
+     *
+     * **ไม่ใช่ตัวระบุ process** ระบบนำ pid กลับมาใช้ซ้ำได้หลัง process ตาย สอง
+     * บรรทัดที่ pid เท่ากันจึงอาจมาจากคนละ process — [processId] เท่านั้นที่ตอบ
+     * เรื่องนี้ได้ ค่านี้มีไว้เพื่อ **เทียบกับเครื่องมือของระบบ** (`logcat`,
+     * `dumpsys activity processes`) ตอนดีบัก ซึ่งเป็นสิ่งที่ [processId] ทำไม่ได้
+     * เพราะระบบไม่รู้จักมัน
+     *
+     * เป็น `get()` ไม่ใช่ค่าที่คำนวณตอนสร้าง `object` **โดยตั้งใจ**: `android.os.*`
+     * ในชุด unit test ที่รันบน JVM เป็นแค่ stub ที่โยน `RuntimeException("Stub!")`
+     * ถ้าเรียกตอน initialize object เทสต์ทุกตัวในไฟล์นี้จะพังพร้อมกันทั้งที่ไม่มี
+     * ตัวไหนสนใจ pid เลย — และเทสต์เหล่านั้นคือสิ่งที่ล็อกรูปแบบบรรทัดไว้
+     */
+    val pid: Int
+        get() = Process.myPid()
+
     /** `null` = การเขียนครั้งล่าสุดสำเร็จ */
     @Volatile
     var lastError: String? = null
@@ -187,33 +204,150 @@ object BackgroundEvidenceLog {
     }
 
     /**
+     * **ตัวระบุ process ชุดมาตรฐาน — ต้องอยู่ต้นคอลัมน์สัญญาณดิบของทุกบรรทัด**
+     *
+     * รูปแบบตรงกับ `BackgroundEvidenceLog.processMarker` ฝั่ง iOS เป๊ะ ทั้งชื่อ key
+     * ลำดับ และหน่วย:
+     * ```
+     * procUuid=<8 hex> pid=<os pid> uptimeMs=<ms> receiverEntry=<true|false>
+     * ```
+     *
+     * ## ทำไมต้องมีทั้งชุด ทั้งที่แต่ละตัวดูซ้ำกับที่อื่น
+     *
+     * แต่ละค่าตอบคนละคำถาม และคำถามที่รอบทดสอบต้องตอบคือ **"บรรทัดนี้มาจาก process
+     * ใหม่จริงหรือไม่"** ซึ่งก่อนหน้านี้ตอบได้ทางเดียวคือ **เดาจาก `uptime`** —
+     * ผิดได้ทั้งสองทาง (process เก่าที่เพิ่งถูกปลุกมี uptime สูง / process ใหม่ที่
+     * ส่ง event ช้าก็มี uptime สูง)
+     *
+     * - `procUuid` — **คำตอบที่ไม่ต้องเดา** ค่าต่างกัน = คนละ process เสมอ
+     * - `pid` — สะพานไป `logcat`/`dumpsys` ซึ่งไม่รู้จัก `procUuid` (ดู [pid])
+     * - `uptimeMs` — อายุ process หน่วย **มิลลิวินาทีจำนวนเต็ม** ไม่ใช่วินาทีทศนิยม
+     *   เพราะช่วงที่ต้องแยกให้ออกคือหลักร้อยมิลลิวินาที (event ที่มาถึงทันทีหลัง
+     *   process เกิด = ถูกปลุกเพื่อ event นั้น) ซึ่ง `%.1f` วินาทีปัดทิ้งไปหมด
+     * - `receiverEntry` — บรรทัดนี้ถูกเขียนจากใน `BroadcastReceiver.onReceive`
+     *   หรือไม่ (ดู [rawSignals])
+     *
+     * ⚠️ `procUuid` **ซ้ำกับคอลัมน์ที่ 2 โดยตั้งใจ** และเป็นค่าเดียวกันเสมอ
+     * (มาจาก [processId] ตัวเดียวกัน จึงขัดแย้งกันไม่ได้) คอลัมน์ที่ 2 มีไว้ให้คน
+     * กวาดตาดูบนหน้าจอมือถือ ส่วน key นี้มีไว้ให้เครื่องอ่านคู่กับ `pid`/`uptimeMs`
+     * ที่อยู่ในคอลัมน์เดียวกัน โดยไม่ต้องแยกคอลัมน์ก่อน — ซึ่งจำเป็นตอน `grep`
+     * ไฟล์ดิบระหว่างทดสอบ
+     *
+     * [processId] และ [pid] รับเป็นพารามิเตอร์ที่มีค่า default เพื่อให้ unit test
+     * ตรึงค่าได้ (เหตุผลเดียวกับ [line]) — โค้ดจริงไม่ต้องส่ง
+     */
+    fun processMarker(
+        uptimeMillis: Long,
+        receiverEntry: Boolean,
+        processId: String = BackgroundEvidenceLog.processId,
+        pid: Int = BackgroundEvidenceLog.pid,
+    ): String =
+        "procUuid=$processId pid=$pid uptimeMs=$uptimeMillis receiverEntry=$receiverEntry"
+
+    /**
      * สัญญาณดิบชุดมาตรฐานของฝั่ง Android — เก็บ**สิ่งที่ระบบบอก** ไม่ใช่ข้อสรุปของเรา
      *
      * ถ้าวันหนึ่งพบว่าสูตรที่ใช้สรุป [ProcessState.conclusion] ผิด ข้อมูลดิบใน log
      * ยังตรวจย้อนกลับได้โดยไม่ต้องทดสอบใหม่ทั้งรอบ — เหตุผลเดียวกับฝั่ง iOS
      *
-     * ความหมายของแต่ละค่า:
-     * - `uptime` — อายุของ process นี้ **ใช้ key เดียวกับ iOS โดยตั้งใจ** เพื่อให้
-     *   `tool/analyze_region_log.dart` ดึงค่าได้ด้วยโค้ดชุดเดียว
-     * - `pid` — pid ของ Linux ไว้เทียบกับ `logcat` ตอนดีบัก (ถูกใช้ซ้ำได้ จึงไม่ใช่
-     *   ตัวระบุ process — ตัวระบุจริงอยู่คอลัมน์ที่ 2)
+     * ขึ้นต้นด้วย [processMarker] เสมอ ตามด้วยสัญญาณที่มีเฉพาะฝั่ง Android:
+     * - `everForeground` / `activities` / `state` — มาจาก [ProcessState]
      * - `importance` — ค่าที่ **ระบบ** จัดให้ process นี้ ไม่ใช่ค่าที่เราคำนวณเอง
      * - `doze` — เครื่องอยู่ใน Doze หรือไม่ ณ ตอนเขียนบรรทัด
      * - `battOpt` — แอปถูกยกเว้น battery optimization อยู่หรือไม่
+     *
+     * [receiverEntry] ไม่มีค่า default **โดยตั้งใจ** — ผู้เรียกต้องตอบทุกครั้งว่า
+     * บรรทัดนี้เขียนจากใน `BroadcastReceiver.onReceive` หรือไม่ ถ้าให้ default ไว้
+     * บรรทัดที่ผู้เรียกใหม่ลืมส่งจะได้ค่าที่ดู "ปกติ" แต่ไม่จริง ซึ่งแย่กว่าคอมไพล์
+     * ไม่ผ่าน ค่านี้เป็น**ข้อเท็จจริงของเส้นทางเรียก** ไม่ใช่สิ่งที่วัดที่ runtime
+     * ได้ — ดูรายการจุดเรียกทั้งหมดใน `ExampleApplication`
+     *
+     * `uptimeMs` ใช้ [SystemClock.elapsedRealtime] เทียบกับ
+     * [ProcessState.processStartedElapsedMillis] ซึ่งเป็นนาฬิกาที่ไม่กระโดดตอน
+     * เครื่อง sync เวลากับเครือข่ายกลางรอบทดสอบข้ามคืน (ดูเหตุผลที่ฟิลด์นั้น)
      */
-    fun rawSignals(context: Context, state: ProcessState): String {
-        val uptimeSeconds =
-            (SystemClock.elapsedRealtime() - state.processStartedElapsedMillis) / 1000.0
+    fun rawSignals(context: Context, state: ProcessState, receiverEntry: Boolean): String {
+        val uptimeMillis = SystemClock.elapsedRealtime() - state.processStartedElapsedMillis
         return buildString {
-            append("everForeground=${state.hasEverBeenForeground}")
+            append(processMarker(uptimeMillis, receiverEntry))
+            append(" everForeground=${state.hasEverBeenForeground}")
             append(" activities=${state.startedActivityCount}")
             append(" state=${state.rawLifecycleState}")
             append(" importance=${importanceName(context)}")
             append(" doze=${isDeviceIdle(context)}")
             append(" battOpt=${batteryOptimizationState(context)}")
-            append(" pid=${Process.myPid()}")
-            append(" uptime=${String.format(Locale.US, "%.1f", uptimeSeconds)}s")
         }
+    }
+
+    /**
+     * ฟิลด์ `restoredRegions=` ของบรรทัด `launch` — **แยก "ว่าง" ออกจาก "อ่านไม่ได้"**
+     *
+     * ```
+     * restoredRegions=[k9p-default]        <- อ่านได้ มี region
+     * restoredRegions=[]                   <- อ่านได้ ไม่มี region เก็บไว้จริง ๆ
+     * restoredRegions=<read-failed:invalid-json>   <- อ่านค่าที่เก็บไว้ไม่สำเร็จ
+     * ```
+     *
+     * ## ทำไมต้องแยก
+     *
+     * เดิมทุกความล้มเหลวของฝั่งอ่าน (JSON เสีย · element ที่ถอดไม่ออก · ข้อยกเว้น
+     * ระหว่างเปิดไฟล์สถานะ) จบลงที่ `restoredRegions=[]` เหมือนกันเป๊ะกับกรณีที่
+     * ไม่มี region เก็บไว้จริง ๆ — คนอ่าน log จึงถูกบังคับให้เดา และตารางแปลผลใน
+     * runbook ก็ชี้ไปทางเดียวคือ "มีโค้ดล้างสถานะทิ้ง" ซึ่งอาจไม่ใช่สาเหตุเลย
+     *
+     * เป็น pure function จึงมี unit test คลุมได้จริง — เหตุผลเดียวกับ [line]
+     *
+     * เหตุผลถูก**ทำให้ไม่มีช่องว่าง**ก่อนเสมอ เพราะคอลัมน์สัญญาณดิบคั่นค่าด้วย
+     * ช่องว่าง ถ้าเหตุผลมีช่องว่างปน (เช่นข้อความของข้อยกเว้น) ตัวอ่านจะเห็นเป็น
+     * หลาย key และตีความผิดโดยไม่มีอะไรฟ้อง
+     */
+    fun restoredRegionsField(identifiers: List<String>, readError: String?): String {
+        if (readError == null) {
+            return "restoredRegions=[${identifiers.joinToString(",")}]"
+        }
+        val reason = readError
+            .replace(Regex("\\s+"), "_")
+            .replace(">", "")
+            .ifEmpty { "unknown" }
+        return "restoredRegions=<read-failed:$reason>"
+    }
+
+    /**
+     * สามฟิลด์ที่ทำให้บรรทัด `exit` **อธิบายตัวเองได้โดยไม่ต้องเดา**
+     *
+     * ```
+     * sinceLastSeenMs=<ms> scheduledAtElapsed=<ms> firedAtElapsed=<ms>
+     * ```
+     *
+     * ## ปัญหาที่ตัวนี้แก้ (จากข้อมูลจริง 1 ก.ย. 2026)
+     *
+     * รอบทดสอบเจอ exit หน่วง **22 วินาที** กับ **3 นาที 15 วินาที** ทั้งที่
+     * `exitTimeoutSeconds=30` เท่ากันทั้งสองรอบ — จากไฟล์ log เดิมแยกไม่ออกเลยว่า
+     * เป็นเพราะ **ระบบเลื่อนนาฬิกาปลุก** หรือ **มีผลสแกนเข้ามาเลื่อนหน้าต่างออกไป**
+     * ซึ่งเป็นคนละสาเหตุที่แก้คนละทาง
+     *
+     * อ่านผลอย่างไร:
+     * - `sinceLastSeenMs` ≈ `exitTimeoutSeconds × 1000` → หน้าต่างทำงานตามที่ขอ
+     *   ส่วนที่หน่วงไปอยู่ที่นาฬิกาปลุก ดูได้จาก `firedAtElapsed − scheduledAtElapsed`
+     * - `sinceLastSeenMs` โตกว่ามาก → มีผลสแกนเข้ามาระหว่างทางแล้วเลื่อนหน้าต่างออกไป
+     *   (ยืนยันซ้ำได้ด้วย `sightingCount.<region>` ใน `shared_prefs`)
+     *
+     * **เก็บค่าดิบทั้งสองตัว ไม่เก็บผลต่าง** ด้วยเหตุผลเดียวกับคอลัมน์สัญญาณดิบ
+     * ทั้งคอลัมน์: ถ้าวันหนึ่งพบว่าวิธีคิดผลต่างของเราผิด ค่าดิบยังตรวจย้อนกลับได้
+     *
+     * `n/a` ทั้งสามช่อง = ผู้เรียกไม่มีค่าให้ ซึ่งในโค้ดปัจจุบันเกิดจาก
+     * **สาขาเดียว** คือตอนที่ `BackgroundRegionMonitor.onExitAlarm` พบว่าเทียบเวลา
+     * ข้ามรอบบูตไม่ได้ — บรรทัดนั้นจึง**ไม่ใช่หลักฐานว่า beacon หายไป**
+     * (ดู `docs/test-checklists/android_background_runbook.md` §5)
+     */
+    fun exitTimingField(
+        sinceLastSeenMillis: Long?,
+        scheduledAtElapsedMillis: Long?,
+        firedAtElapsedMillis: Long?,
+    ): String = buildString {
+        append("sinceLastSeenMs=${sinceLastSeenMillis ?: "n/a"}")
+        append(" scheduledAtElapsed=${scheduledAtElapsedMillis ?: "n/a"}")
+        append(" firedAtElapsed=${firedAtElapsedMillis ?: "n/a"}")
     }
 
     /**

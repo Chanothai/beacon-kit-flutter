@@ -37,6 +37,59 @@ final class BackgroundEvidenceLog {
   /// ไม่ได้ต้องการความเป็นเอกลักษณ์ระดับ global
   static let processId = String(UUID().uuidString.prefix(8)).lowercased()
 
+  /// pid ของระบบปฏิบัติการสำหรับ process นี้
+  ///
+  /// **ไม่ใช่ตัวระบุ process** ระบบนำ pid กลับมาใช้ซ้ำได้หลัง process ตาย สอง
+  /// บรรทัดที่ pid เท่ากันจึงอาจมาจากคนละ process — `processId` เท่านั้นที่ตอบ
+  /// เรื่องนี้ได้ ค่านี้มีไว้เพื่อ **เทียบกับเครื่องมือของระบบ** (Console.app,
+  /// `sysdiagnose`, log ของ CoreLocation) ตอนดีบัก ซึ่งเป็นสิ่งที่ `processId`
+  /// ทำไม่ได้เพราะระบบไม่รู้จักมัน — เหตุผลเดียวกับ `pid` ฝั่ง Android
+  static let pid = ProcessInfo.processInfo.processIdentifier
+
+  /// **ตัวระบุ process ชุดมาตรฐาน — ต้องอยู่ต้นคอลัมน์สัญญาณดิบของทุกบรรทัด**
+  ///
+  /// รูปแบบตรงกับ `BackgroundEvidenceLog.processMarker` ฝั่ง Android เป๊ะ ทั้งชื่อ
+  /// key ลำดับ และหน่วย:
+  /// ```
+  /// procUuid=<8 hex> pid=<os pid> uptimeMs=<ms> receiverEntry=<true|false>
+  /// ```
+  ///
+  /// ## ทำไมต้องมีทั้งชุด ทั้งที่แต่ละตัวดูซ้ำกับที่อื่น
+  ///
+  /// คำถามที่รอบทดสอบต้องตอบคือ **"บรรทัดนี้มาจาก process ใหม่จริงหรือไม่"** ซึ่ง
+  /// ก่อนหน้านี้ตอบได้ทางเดียวคือ **เดาจาก `uptime`** — ผิดได้ทั้งสองทาง
+  ///
+  /// - `procUuid` — **คำตอบที่ไม่ต้องเดา** ค่าต่างกัน = คนละ process เสมอ
+  /// - `pid` — สะพานไปเครื่องมือของระบบ ซึ่งไม่รู้จัก `procUuid`
+  /// - `uptimeMs` — อายุ process หน่วย **มิลลิวินาทีจำนวนเต็ม** ไม่ใช่วินาที
+  ///   ทศนิยมแบบเดิม เพราะช่วงที่ต้องแยกให้ออกคือหลักร้อยมิลลิวินาที (event ที่
+  ///   มาถึงทันทีหลัง process เกิด = ถูกปลุกเพื่อ event นั้น) ซึ่ง `%.1f` วินาที
+  ///   ปัดทิ้งไปหมด
+  /// - `receiverEntry` — บรรทัดนี้ถูกเขียนจากในโค้ดที่**ระบบเรียกเข้ามา**หรือไม่
+  ///   ฝั่งนี้หมายถึง callback ของ `CLLocationManagerDelegate` (ฝั่ง Android คือ
+  ///   `BroadcastReceiver.onReceive`) — คนละกลไก แต่ตอบคำถามเดียวกันคือ "บรรทัด
+  ///   นี้เขียนจากเส้นทางที่ทำงานได้โดยไม่ต้องมี UI ใช่ไหม"
+  ///
+  /// ⚠️ `procUuid` **ซ้ำกับคอลัมน์ที่ 2 โดยตั้งใจ** และเป็นค่าเดียวกันเสมอ
+  /// (มาจาก `processId` ตัวเดียวกัน จึงขัดแย้งกันไม่ได้) — คอลัมน์ที่ 2 ไว้ให้คน
+  /// กวาดตาดูบนหน้าจอมือถือ ส่วน key นี้ไว้ให้เครื่องอ่านคู่กับ `pid`/`uptimeMs`
+  /// ที่อยู่คอลัมน์เดียวกัน โดยไม่ต้องแยกคอลัมน์ก่อน ซึ่งจำเป็นตอน `grep` ไฟล์ดิบ
+  /// **แทนที่คอมเมนต์เดิมที่ห้ามใส่ `processId` ลงสัญญาณดิบ** — ข้อกังวลตอนนั้นคือ
+  /// regex จะเจอสองที่แล้วเลือกผิดตัว ซึ่งหมดไปเมื่อค่าทั้งสองมาจากแหล่งเดียวกัน
+  /// และมีเทสต์ล็อกไว้ว่าต้องเท่ากัน
+  ///
+  /// [processId] และ [pid] รับเป็นพารามิเตอร์ที่มีค่า default เพื่อให้ XCTest
+  /// ตรึงค่าได้ (เหตุผลเดียวกับ `line`) โค้ดจริงไม่ต้องส่ง
+  static func processMarker(
+    uptimeMillis: Int,
+    receiverEntry: Bool,
+    processId: String = BackgroundEvidenceLog.processId,
+    pid: Int32 = BackgroundEvidenceLog.pid
+  ) -> String {
+    return "procUuid=\(processId) pid=\(pid) uptimeMs=\(uptimeMillis) "
+      + "receiverEntry=\(receiverEntry)"
+  }
+
   /// protection class ที่ไฟล์ log **ต้อง**ได้รับ
   ///
   /// **ทำไมต้องตั้งเอง ทั้งที่นี่เป็นค่า default ของ iOS อยู่แล้ว:**

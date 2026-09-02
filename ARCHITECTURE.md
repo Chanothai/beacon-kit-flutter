@@ -1753,6 +1753,23 @@ triggered by monitoring APIs will cause a relaunch.")
 บันทึกไว้ในเอกสารของ `AndroidBackgroundMonitoringStatus` และในชื่อฟิลด์ของ log
 (`restoredRegions=` ฝั่ง Android vs `monitoredRegions=` ฝั่ง iOS **ตั้งใจใช้คนละคำ**)
 
+⚠️ **และเพราะเราเป็นคนอ่านไฟล์เอง เราจึงมีความล้มเหลวชนิดที่ iOS ไม่มี: อ่านไม่ออก**
+ฝั่ง iOS ถาม `monitoredRegions` แล้วได้เซ็ตกลับมาเสมอ ส่วนฝั่งนี้ค่าที่เก็บไว้เสียหาย
+หรือเปิดไฟล์ไม่ได้ก็เกิดขึ้นได้ **และเดิมมันจบลงที่ `restoredRegions=[]` เหมือนกับ
+"ไม่มี region เก็บไว้" เป๊ะ** ซึ่งเป็นความล้มเหลวเงียบที่ชี้การไล่สาเหตุไปผิดทาง
+ทั้งรอบทดสอบ — ไฟล์หลักฐานจึงต้องเขียนสองสถานะนี้คนละแบบ:
+
+```
+restoredRegions=[k9p-default]                <- อ่านได้ มี region
+restoredRegions=[]                           <- อ่านได้ ไม่มี region เก็บไว้จริง ๆ
+restoredRegions=<read-failed:invalid-json>   <- อ่านไม่สำเร็จ ตอบไม่ได้ว่ามีหรือไม่มี
+```
+
+`BeaconRegionSpec.listFromJsonReporting` / `BackgroundRegionStore.readRegions` /
+`BackgroundRegionMonitor.restoredRegions` คืน `ParsedRegionList` ที่มี `readError`
+มาด้วย ส่วน `BackgroundRegionStore.regions` (ที่ตรรกะ enter/exit ใช้) ยังคืน list
+ว่างตามเดิม — **เส้นทางที่เขียนหลักฐานต้องใช้ตัวที่รายงาน error เท่านั้น**
+
 #### 1.3 ไม่มี enter/exit จากระบบ — ต้องคำนวณเองทั้งหมด
 
 ระบบส่งได้อย่างเดียวคือ "เจอ advertisement" **การไม่เจอไม่ใช่ event มันคือความเงียบ**
@@ -2118,6 +2135,72 @@ process ใหม่ที่ส่ง event ช้าก็มี uptime สู
 timestamp(ISO8601+offset) \t processId \t event \t regionIdentifier \t conclusion \t rawSignals
 ```
 
+**ส่วนขยาย (1 ก.ย. 2026) — ตัวระบุ process แบบ key=value ต้นคอลัมน์สัญญาณดิบ:**
+คอลัมน์ที่ 2 ตอบได้แค่ "process ไหน" แต่ตอบไม่ได้ว่า pid ของระบบคือเบอร์อะไร
+(ไว้เทียบกับ `logcat`) และบรรทัดนั้นถูกเขียนจากเส้นทางที่ทำงานได้โดยไม่มี UI หรือไม่
+คอลัมน์สัญญาณดิบของ**ทุกบรรทัด ทั้งสองแพลตฟอร์ม** จึงขึ้นต้นด้วยชุดนี้เสมอ:
+
+```
+procUuid=<8 hex> pid=<os pid> uptimeMs=<ms> receiverEntry=<true|false>
+```
+
+| key | ตอบคำถาม | หมายเหตุ |
+|---|---|---|
+| `procUuid` | process ไหน | **ค่าเดียวกับคอลัมน์ที่ 2 เสมอ** (แหล่งเดียวกัน จึงขัดแย้งกันไม่ได้ มีเทสต์ล็อกไว้ทั้งสองฝั่ง) — ซ้ำโดยตั้งใจเพื่อให้ `grep` คอลัมน์เดียวได้ครบ |
+| `pid` | สะพานไปเครื่องมือของระบบ | **ไม่ใช่ตัวระบุ process** ระบบใช้ซ้ำได้หลัง process ตาย |
+| `uptimeMs` | อายุ process | **มิลลิวินาทีจำนวนเต็ม** แทน `uptime=<วินาที>s` เดิม เพราะช่วงที่ต้องแยกให้ออกคือหลักร้อยมิลลิวินาที (event ที่มาถึงทันทีหลัง process เกิด) ซึ่ง `%.1f` วินาทีปัดทิ้ง · Android วัดด้วย `SystemClock.elapsedRealtime()` (ไม่กระโดด) ส่วน iOS วัดด้วย `Date` (กระโดดได้ถ้าเครื่อง sync เวลา) เพราะทางเลือกฝั่ง iOS ไม่นับเวลาที่เครื่องหลับ |
+| `receiverEntry` | บรรทัดนี้เขียนจากโค้ดที่ **ระบบเรียกเข้ามา** หรือไม่ | Android = อยู่ใน `BroadcastReceiver.onReceive` · iOS = อยู่ใน callback ของ `CLLocationManagerDelegate` — **คนละกลไก** แต่ตอบคำถามเดียวกัน |
+
+`receiverEntry` เป็น **ข้อเท็จจริงของเส้นทางเรียก ไม่ใช่ค่าที่วัดที่ runtime**:
+ผู้เรียกทุกจุดต้องส่งค่าเอง (ไม่มี default ให้ลืม) และเหตุผลของแต่ละจุดเขียนกำกับไว้
+ที่ call site — บรรทัด `launch` เป็น `false` เสมอ **แม้ process นั้นจะเกิดเพราะ
+broadcast/location event ก็ตาม** เพราะ `Application.onCreate()` /
+`didFinishLaunchingWithOptions` จบก่อน callback จะถูกเรียก คู่ที่พิสูจน์ว่า "ระบบ
+สร้าง process ขึ้นมาเพื่อ event นี้" คือ **`procUuid` ที่ไม่เคยปรากฏมาก่อนในไฟล์
+เดียวกัน + บรรทัด `enter`/`exit` ของ `procUuid` นั้นที่มี `receiverEntry=true`
+และ `conclusion=relaunchedFromTerminated`**
+
+⚠️ **`conclusion` ของบรรทัด `launch` ไม่ใช่หลักฐาน และห้ามอ้างเป็นหลักฐาน**
+ด้วยเหตุผลเดียวกับที่ทำให้ `receiverEntry` ของบรรทัดนั้นเป็น `false` เสมอ:
+บรรทัด `launch` ถูกเขียน**ก่อน**ที่แอปจะมี UI ได้ ตอนนั้น `hasEverBeenForeground`
+(Android) / `hasEverBecomeActive` (iOS) ยังเป็น `false` ทุกครั้ง ค่าจึงออกมาเป็น
+`relaunchedFromTerminated` **เสมอ แม้ผู้ใช้จะกดไอคอนเปิดแอปเอง** — เก็บฟิลด์ไว้ได้
+ในฐานะสัญญาณดิบ แต่สิ่งที่พิสูจน์ว่าเป็น process ใหม่คือ **`procUuid` เท่านั้น**
+(`tool/analyze_region_log.dart` นับ process ที่ถูกปลุกจากบรรทัด `enter`/`exit`
+ไม่ใช่จากบรรทัด `launch` ด้วยเหตุผลนี้)
+
+`uptime=<วินาที>s` รูปแบบเดิมยังต้องอ่านได้ต่อไป (ไฟล์หลักฐานเก่าใช้รูปแบบนั้น) —
+`tool/analyze_region_log.dart` อ่าน `uptimeMs` ก่อนแล้วค่อย fallback
+
+**ส่วนขยาย (1 ก.ย. 2026, รอบสอง) — บรรทัด `exit` ต้องอธิบายตัวเองได้:**
+รอบทดสอบสนามเจอ exit หน่วง 22 วินาที กับ 3 นาที 15 วินาที **ด้วย
+`exitTimeoutSeconds=30` เท่ากันทั้งคู่** ซึ่งจากไฟล์ log แยกไม่ออกว่าเป็นการเลื่อน
+ของ `AlarmManager` หรือมีผลสแกนเข้ามาเลื่อนหน้าต่างออกไป — คนละสาเหตุที่แก้คนละทาง
+บรรทัด `exit` (เท่านั้น) จึงมีเพิ่มสามฟิลด์:
+
+```
+sinceLastSeenMs=<ms> scheduledAtElapsed=<ms> firedAtElapsed=<ms>
+```
+
+| ฟิลด์ | ตอบคำถาม |
+|---|---|
+| `sinceLastSeenMs` | **หน้าต่างที่ได้จริง** — `now − lastSeen` ณ วินาทีที่ตัดสินใจ เทียบกับค่าที่ขอไป |
+| `scheduledAtElapsed` / `firedAtElapsed` | **ระยะที่ระบบเลื่อนนาฬิกาปลุก** — เก็บค่าดิบสองตัว **ไม่เก็บผลต่าง** ตามหลักเดียวกับคอลัมน์สัญญาณดิบทั้งคอลัมน์ |
+
+`n/a` ทั้งสามช่อง = มาจากสาขา "เทียบเวลาข้ามรอบบูตไม่ได้" ของ `onExitAlarm`
+ซึ่ง**ไม่ใช่หลักฐานว่า beacon หายไป** — ห้ามเรนเดอร์เป็น `0` เพราะตัวเลขที่ดู
+สมเหตุสมผลแต่ไม่จริงอันตรายกว่าช่องว่าง (มีเทสต์ล็อกไว้)
+
+และเพิ่มคีย์ `sightingCount.<region>` ใน `SharedPreferences` นับทุกครั้งที่
+`recordSighting()` — ไฟล์ log บันทึกเฉพาะตอนสถานะเปลี่ยน ผลสแกนระหว่างที่ยังอยู่ใน
+โซนจึงไม่มีร่องรอยเลย · dump prefs สองครั้งห่างกันตามเวลาที่รู้แน่ = อัตราที่**ระบบ
+เลือกจะส่งผลมาให้** (ไม่ใช่อัตราที่ beacon advertise)
+
+⚠️ **`exitTimeoutSeconds` เป็นค่าขั้นต่ำ ไม่ใช่ค่าที่รับประกัน** — นาฬิกาปลุกใช้
+`setAndAllowWhileIdle` ซึ่งเอกสารระบุว่าเวลาที่ส่งเข้าไปเป็น inexact ("will not be
+delivered before this time, but may be deferred and delivered some time later")
+ดูคำต่อคำ + URL ที่ `docs/sources/android_background_ble.md` หัวข้อ 8
+
 **ไฟล์เก่า 5 คอลัมน์ยังต้องอ่านได้ และห้ามแก้ไฟล์เก่า** —
 `docs/test-data/2026-08-30_overnight_region_flapping.log` เป็นหลักฐานดิบที่ ADR-11
 ทั้งฉบับตั้งอยู่บนมัน การแก้ย้อนหลังทำให้มันเชื่อถือไม่ได้ ตัวอ่านทุกตัวจึงแยกรุ่น
@@ -2133,7 +2216,7 @@ timestamp(ISO8601+offset) \t processId \t event \t regionIdentifier \t conclusio
 | คำถาม | ตอบจาก |
 |---|---|
 | process ไหน | คอลัมน์ `processId` |
-| สถานะแอปตอนนั้น | คอลัมน์ `conclusion` (`foreground`/`background`/`relaunchedFromTerminated`) + `importance=` ที่ **ระบบ** จัดให้ |
+| สถานะแอปตอนนั้น | คอลัมน์ `conclusion` (`foreground`/`background`/`relaunchedFromTerminated`) + `importance=` ที่ **ระบบ** จัดให้ — ⚠️ ใช้ได้เฉพาะบรรทัด `enter`/`exit`/`selftest` · บรรทัด `launch` เป็น `relaunchedFromTerminated` เสมอโดยโครงสร้าง |
 | ถูกสร้างขึ้นมาใหม่หรือไม่ | บรรทัด `launch` มี **หนึ่งบรรทัดต่อหนึ่ง process เสมอ** |
 
 **เกณฑ์ที่โจทย์กำหนดว่าถ้าทำไม่ได้ให้หยุด:** ต้องแยก "แอปไม่ถูกปลุกเลย" ออกจาก
@@ -2221,7 +2304,9 @@ android.permission.WRITE_SECURE_SETTINGS`
 
 **สิ่งที่ห้ามทำจนกว่าจะมีผลจริง:**
 - ห้ามเขียนว่า Android ทำงานเบื้องหลังได้เท่า iOS
-- ห้ามรายงานว่าเคสไหนผ่าน ถ้ายังไม่เห็นบรรทัด log ที่มี `processId` ใหม่พร้อม
-  `conclusion=relaunchedFromTerminated`
+- ห้ามรายงานว่าเคสไหนผ่าน ถ้ายังไม่เห็นบรรทัด **`enter`/`exit`** ที่มี `procUuid`
+  ซึ่งไม่เคยปรากฏมาก่อนในไฟล์เดียวกัน พร้อม `conclusion=relaunchedFromTerminated`
+  และ `receiverEntry=true` — **บรรทัด `launch` ไม่นับ** เพราะ `conclusion` ของมัน
+  เป็น `relaunchedFromTerminated` เสมอโดยโครงสร้างของโค้ด
 - ทุกครั้งที่รายงานผล ต้องระบุ **รุ่นเครื่อง / เวอร์ชัน Android / เวอร์ชัน MIUI /
   สถานะ Autostart / สถานะ battery optimization**

@@ -70,6 +70,8 @@ class MainActivity : FlutterActivity() {
 
             "getLogWriteError" -> result.success(BackgroundEvidenceLog.lastError)
 
+            "runEvidenceLogSelfTest" -> result.success(evidenceLogSelfTest())
+
             "requestNotificationAuthorization" -> {
                 // Android 12 (เครื่องทดสอบ) ยังไม่มี POST_NOTIFICATIONS ให้ขอ —
                 // notification ใช้ได้เลย คืน true ตรงตามความจริงบนเวอร์ชันนี้
@@ -90,5 +92,85 @@ class MainActivity : FlutterActivity() {
 
             else -> result.notImplemented()
         }
+    }
+
+    /**
+     * **พิสูจน์ว่าเครื่องมือวัดทำงานได้ โดยไม่ต้องพึ่ง beacon เลย**
+     *
+     * เขียนหนึ่งบรรทัดผ่าน [BackgroundEvidenceLog.append] ตัวเดียวกับที่เส้นทาง
+     * เบื้องหลังใช้ แล้ว**อ่านไฟล์กลับขึ้นมาจริง ๆ** เทียบว่าบรรทัดนั้นลงดิสก์แล้ว
+     *
+     * ## ทำไมต้องมี
+     *
+     * `append()` **ห้าม throw** (ผู้เรียกอยู่ในเส้นทางที่ crash แล้วไม่มีใครรู้)
+     * มันจึงเก็บ error ไว้ใน `lastError` เงียบ ๆ ผลคือ "เขียนไฟล์ไม่ได้" กับ
+     * "ระบบไม่เคยส่ง event มา" **จบที่อาการเดียวกันเป๊ะ: ไฟล์ log ว่าง** ปุ่มนี้
+     * แยกสองกรณีนั้นออกจากกันได้ก่อนเริ่มทดสอบ แทนที่จะไปรู้ตอนเก็บข้อมูลทั้งคืน
+     * เสร็จแล้ว ซึ่งเก็บซ้ำไม่ได้
+     *
+     * ## ทำไมต้องอ่าน `lastError` ก่อนเขียน
+     *
+     * `append()` ที่สำเร็จจะ **ตั้ง `lastError` กลับเป็น `null`** — ถ้าอ่านหลังเขียน
+     * อย่างเดียว error ที่สะสมมาจากรอบเบื้องหลังจะถูกลบทิ้งพร้อมกับหลักฐานว่ามัน
+     * เคยเกิด จึงคืนทั้งค่าก่อนและหลังเขียน แล้วให้หน้าจอแสดงทั้งคู่
+     *
+     * ## ทำไมเขียน `event=selftest` ลงไฟล์จริง ไม่ใช่ไฟล์ชั่วคราว
+     *
+     * ถ้าเขียนลงไฟล์อื่น มันจะพิสูจน์แค่ว่า "เขียนไฟล์บางไฟล์ได้" ซึ่งไม่ใช่คำถาม
+     * — คำถามคือไฟล์ **นี้** path **นี้** เขียนได้ไหม · `selftest` ไม่กวน
+     * `tool/analyze_region_log.dart` เพราะตัววิเคราะห์ลำดับข้ามทุก event ที่ไม่ใช่
+     * `enter`/`exit` และบรรทัดนี้ยังเป็นหลักฐานมีประโยชน์ด้วยว่า "ตอน HH:MM
+     * เครื่องมือวัดยังเขียนได้อยู่"
+     */
+    private fun evidenceLogSelfTest(): Map<String, Any?> {
+        val context = applicationContext
+        val state = ExampleApplication.processState
+
+        // ต้องอ่าน**ก่อน** append เสมอ — ดูเหตุผลใน KDoc ข้างบน
+        val errorBeforeWrite = BackgroundEvidenceLog.lastError
+
+        val line = BackgroundEvidenceLog.line(
+            timestampMillis = System.currentTimeMillis(),
+            event = "selftest",
+            regionIdentifier = "-",
+            conclusion = state.conclusion,
+            // receiverEntry = false — บรรทัดนี้เขียนจากปุ่มบน UI ไม่ใช่จาก
+            // `onReceive` การใส่ true จะเป็นการโกหกในไฟล์หลักฐาน
+            rawSignals = BackgroundEvidenceLog.rawSignals(
+                context = context,
+                state = state,
+                receiverEntry = false,
+            ),
+        )
+        BackgroundEvidenceLog.append(context, line)
+        val errorAfterWrite = BackgroundEvidenceLog.lastError
+
+        val file = BackgroundEvidenceLog.logFile(context)
+        var readBackLine: String? = null
+        var lineCount = 0
+        var readError: String? = null
+        try {
+            if (file.exists()) {
+                val lines = file.readLines().filter { it.isNotBlank() }
+                lineCount = lines.size
+                readBackLine = lines.lastOrNull()
+            }
+        } catch (error: Throwable) {
+            // อ่านไม่ได้เป็นคนละความล้มเหลวกับเขียนไม่ได้ — ต้องรายงานแยกกัน
+            readError = "${error.javaClass.simpleName}: ${error.message}"
+        }
+
+        return mapOf(
+            "path" to file.absolutePath,
+            "errorBeforeWrite" to errorBeforeWrite,
+            "writtenLine" to line,
+            "errorAfterWrite" to errorAfterWrite,
+            "fileExists" to file.exists(),
+            "fileSizeBytes" to file.length(),
+            "lineCount" to lineCount,
+            "readBackLine" to readBackLine,
+            "readBackMatches" to (readBackLine == line),
+            "readError" to readError,
+        )
     }
 }

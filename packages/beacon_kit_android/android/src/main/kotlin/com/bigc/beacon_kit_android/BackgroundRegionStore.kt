@@ -46,6 +46,27 @@ class BackgroundRegionStore(context: Context) {
         private const val PREFIX_ALARM_AT_ELAPSED = "alarmAtElapsed."
 
         /**
+         * ตัวนับผลสแกนที่ระบบส่งมาถึงเราจริง — **ต่อ region ต่อรอบการเฝ้าหนึ่งรอบ**
+         *
+         * มีไว้ตอบคำถามที่ไฟล์ log ตอบไม่ได้: **ระบบส่งผลสแกนมาถี่แค่ไหน** ไฟล์
+         * หลักฐานบันทึกเฉพาะตอน "สถานะเปลี่ยน" (enter/exit) ผลสแกนที่เข้ามา
+         * ระหว่างที่ยังอยู่ในโซนไม่ทิ้งร่องรอยอะไรเลย — ซึ่งเป็นข้อมูลที่จำเป็นต่อ
+         * การตีความว่า exit ที่มาช้าเกิดจาก "ระบบเลื่อนนาฬิกาปลุก" หรือ
+         * "มีผลสแกนเข้ามาเลื่อนหน้าต่างออกไป"
+         *
+         * วิธีใช้: dump prefs สองครั้งห่างกันตามเวลาที่รู้แน่ แล้วหารส่วนต่าง
+         * ```bash
+         * adb exec-out run-as com.beaconkit.example \
+         *   cat shared_prefs/beacon_kit_android.background.xml | grep sightingCount
+         * ```
+         *
+         * ⚠️ **ไม่ใช่จำนวน advertisement ที่ beacon ส่งออกมา** — เป็นจำนวนครั้งที่
+         * **ระบบเลือกจะส่งผลมาถึงเรา** หลังผ่าน batching/duty cycle ของ BT stack
+         * แล้ว ห้ามอ่านเป็นอัตราการ advertise ของ K9P
+         */
+        private const val PREFIX_SIGHTING_COUNT = "sightingCount."
+
+        /**
          * ค่าเริ่มต้นของ "ไม่เห็นกี่วินาทีถึงถือว่าออกจาก region"
          *
          * **ไม่ใช่ค่าที่ยืนยันจากสเปกของแพลตฟอร์ม และห้ามอ้างว่าเป็น** — ตั้งไว้ที่
@@ -98,6 +119,23 @@ class BackgroundRegionStore(context: Context) {
     fun regionFor(identifier: String): BeaconRegionSpec? =
         regions.firstOrNull { it.identifier == identifier }
 
+    /**
+     * รายการ region พร้อม **เหตุผลถ้าอ่านค่าที่เก็บไว้ไม่สำเร็จ**
+     *
+     * [regions] คืน list ว่างในทุกกรณีที่ผิดพลาด ทั้ง "ไม่เคยเขียน / ถูกล้างไปแล้ว"
+     * และ "มีค่าอยู่แต่ถอดไม่ออก" — สองอย่างนี้แยกไม่ออกจากอาการภายนอกเลย ทั้งที่
+     * แก้คนละทาง ตัวนี้จึงมีไว้ให้เส้นทางที่ **เขียนหลักฐาน** ใช้ ไม่ใช่เส้นทาง
+     * ตัดสินใจปกติ (ตรรกะ enter/exit ยังใช้ [regions] ตามเดิม)
+     *
+     * ไม่มีคีย์ `regions` ในไฟล์เลย = **ว่างจริง** ไม่ใช่อ่านไม่สำเร็จ (เกิดจาก
+     * ยังไม่เคยสั่งเฝ้า หรือ [clearAll] ล้างไปแล้ว)
+     */
+    fun readRegions(): ParsedRegionList {
+        val raw = prefs.getString(KEY_REGIONS, null)
+            ?: return ParsedRegionList(emptyList(), null)
+        return BeaconRegionSpec.listFromJsonReporting(raw)
+    }
+
     var exitTimeoutSeconds: Int
         get() = prefs.getInt(KEY_EXIT_TIMEOUT_SECONDS, DEFAULT_EXIT_TIMEOUT_SECONDS)
         set(value) {
@@ -149,6 +187,10 @@ class BackgroundRegionStore(context: Context) {
     fun scheduledExitAlarmElapsedMillis(identifier: String): Long =
         prefs.getLong(PREFIX_ALARM_AT_ELAPSED + identifier, 0L)
 
+    /** จำนวนผลสแกนที่ระบบส่งมาถึง region นี้ในรอบการเฝ้าปัจจุบัน — ดู [PREFIX_SIGHTING_COUNT] */
+    fun sightingCount(identifier: String): Int =
+        prefs.getInt(PREFIX_SIGHTING_COUNT + identifier, 0)
+
     /**
      * บันทึกทุกอย่างของหนึ่ง region ใน `commit()` เดียว
      *
@@ -163,6 +205,19 @@ class BackgroundRegionStore(context: Context) {
             .putLong(PREFIX_LAST_SEEN_WALL + identifier, System.currentTimeMillis())
             .putLong(PREFIX_ALARM_AT_ELAPSED + identifier, alarmAtElapsedMillis)
             .putLong(KEY_BOOT_TOKEN, currentBootToken())
+            // อ่านแล้วบวกหนึ่งใน `edit()` ก้อนเดียวกับที่เหลือ — ต้องอยู่ใน commit
+            // เดียวกันด้วยเหตุผลเดียวกับที่ระบุข้างบน ถ้าแยกเป็นอีก commit แล้ว
+            // ระบบฆ่า process คั่นกลาง ตัวนับจะไม่ตรงกับสถานะที่มันควรอธิบาย
+            //
+            // ⚠️ read-modify-write ตัวนี้ **ไม่ atomic ข้าม process** —
+            // `SharedPreferences` แบบ `MODE_PRIVATE` ไม่รับประกันเรื่องนั้น
+            // (`MODE_MULTI_PROCESS` ถูก deprecate ไปแล้ว) แอปนี้มี process เดียว
+            // จึงยอมรับได้ แต่ถ้าวันหนึ่งประกาศ `android:process` แยก ตัวนับนี้
+            // จะนับตกได้เงียบ ๆ — เป็นตัวเลขวินิจฉัย ไม่ใช่ค่าที่ตรรกะใดพึ่งพา
+            .putInt(
+                PREFIX_SIGHTING_COUNT + identifier,
+                prefs.getInt(PREFIX_SIGHTING_COUNT + identifier, 0) + 1,
+            )
             .commit()
     }
 
@@ -192,7 +247,11 @@ class BackgroundRegionStore(context: Context) {
             if (key.startsWith(PREFIX_INSIDE) ||
                 key.startsWith(PREFIX_LAST_SEEN_ELAPSED) ||
                 key.startsWith(PREFIX_LAST_SEEN_WALL) ||
-                key.startsWith(PREFIX_ALARM_AT_ELAPSED)
+                key.startsWith(PREFIX_ALARM_AT_ELAPSED) ||
+                // ล้างตัวนับด้วย เพราะมันมีความหมายคู่กับเวลาแบบ elapsed ที่กำลัง
+                // ถูกล้างพอดี — ตัวนับที่ข้ามรอบบูตมาจะทำให้คนที่หารหาอัตราได้
+                // ตัวเลขที่ผสมสองรอบเข้าด้วยกันโดยไม่รู้ตัว
+                key.startsWith(PREFIX_SIGHTING_COUNT)
             ) {
                 editor.remove(key)
             }
@@ -272,12 +331,53 @@ data class BackgroundRegionStateEvent(
      * ผู้ใช้เปิดแอปแล้วและบริบทเปลี่ยนไปแล้ว
      */
     val fromBackgroundProcess: Boolean,
+
+    /**
+     * `now - lastSeenElapsed` **ณ วินาทีที่ตัดสินใจประกาศ exit** — มีเฉพาะ
+     * `state == "exit"` · `null` = ตอบไม่ได้
+     *
+     * ## ทำไมต้องเก็บ ทั้งที่รู้ `exitTimeoutSeconds` อยู่แล้ว
+     *
+     * รอบทดสอบ 1 ก.ย. 2026 เจอ exit หน่วง 22 วินาที กับ 3 นาที 15 วินาที
+     * **ด้วย `exitTimeoutSeconds=30` เท่ากันทั้งคู่** ซึ่งแยกไม่ออกเลยจากไฟล์ log
+     * ว่าเป็นเพราะ (ก) ระบบเลื่อนนาฬิกาปลุกออกไป หรือ (ข) มีผลสแกนเข้ามาเลื่อน
+     * หน้าต่างออกไป — สองสาเหตุนี้แก้คนละทางโดยสิ้นเชิง
+     *
+     * ค่านี้ตอบข้อ (ข) ได้ทันทีจากบรรทัดเดียว: มันคือ **หน้าต่างที่ได้จริง**
+     * ถ้ามันโตกว่า `exitTimeoutSeconds` มาก แปลว่าเวลาที่นาฬิกาปลุกได้ดังจริง
+     * ห่างจาก `lastSeen` ไปไกลแล้ว
+     *
+     * `null` เมื่อเทียบเวลาข้ามรอบบูตไม่ได้ — **ห้ามเติม 0 หรือ -1 แทน** เพราะ
+     * ตัวเลขปลอมในไฟล์หลักฐานอันตรายกว่าช่องว่าง
+     */
+    val exitSinceLastSeenMillis: Long? = null,
+
+    /**
+     * เวลาที่**เราขอ**ให้นาฬิกาปลุกดัง (`SystemClock.elapsedRealtime`) — มีเฉพาะ exit
+     *
+     * คู่กับ [exitFiredAtElapsedMillis] · **ผลต่างของสองค่านี้คือระยะที่ระบบเลื่อน
+     * นาฬิกาปลุกออกไป วัดตรง ๆ ไม่ต้องอนุมาน** ซึ่งจำเป็นเพราะ
+     * `setAndAllowWhileIdle` ระบุไว้เองว่าเวลาที่ส่งเข้าไปเป็นค่า **inexact**
+     * (ดู `docs/sources/android_background_ble.md` หัวข้อ 8)
+     *
+     * เก็บ**ค่าดิบทั้งสองตัว ไม่เก็บผลต่าง** ตามหลักเดียวกับคอลัมน์สัญญาณดิบ:
+     * ถ้าวันหนึ่งพบว่าวิธีคิดผลต่างของเราผิด ค่าดิบยังตรวจย้อนกลับได้
+     */
+    val exitScheduledAtElapsedMillis: Long? = null,
+
+    /** เวลาที่นาฬิกาปลุก **ดังจริง** — คู่กับ [exitScheduledAtElapsedMillis] */
+    val exitFiredAtElapsedMillis: Long? = null,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("regionIdentifier", regionIdentifier)
         put("state", state)
         put("timestampMillis", timestampMillis)
         put("fromBackgroundProcess", fromBackgroundProcess)
+        // `JSONObject.put(String, Any?)` เก็บ null เป็น "ไม่มีคีย์" ให้เอง จึงไม่
+        // ต้องแยกสาขา และฝั่งอ่านใช้ `has()` แยก "ไม่มีค่า" ออกจาก "ค่าเป็น 0" ได้
+        put("exitSinceLastSeenMillis", exitSinceLastSeenMillis)
+        put("exitScheduledAtElapsedMillis", exitScheduledAtElapsedMillis)
+        put("exitFiredAtElapsedMillis", exitFiredAtElapsedMillis)
     }
 
     fun toMap(): Map<String, Any?> = mapOf(
@@ -285,6 +385,9 @@ data class BackgroundRegionStateEvent(
         "state" to state,
         "timestampMillis" to timestampMillis,
         "fromBackgroundProcess" to fromBackgroundProcess,
+        "exitSinceLastSeenMillis" to exitSinceLastSeenMillis,
+        "exitScheduledAtElapsedMillis" to exitScheduledAtElapsedMillis,
+        "exitFiredAtElapsedMillis" to exitFiredAtElapsedMillis,
     )
 
     companion object {
@@ -297,7 +400,16 @@ data class BackgroundRegionStateEvent(
                 state = state,
                 timestampMillis = json.optLong("timestampMillis"),
                 fromBackgroundProcess = json.optBoolean("fromBackgroundProcess"),
+                // `optLong` คืน 0 เมื่อไม่มีคีย์ ซึ่งแยกจาก "ค่าเป็น 0 จริง" ไม่ได้
+                // — event ที่คิวไว้ตอนแอปปิดต้องกลับมาเป็นค่าเดิมเป๊ะ ไม่ใช่ 0 ปลอม
+                exitSinceLastSeenMillis = json.optLongOrNull("exitSinceLastSeenMillis"),
+                exitScheduledAtElapsedMillis =
+                    json.optLongOrNull("exitScheduledAtElapsedMillis"),
+                exitFiredAtElapsedMillis = json.optLongOrNull("exitFiredAtElapsedMillis"),
             )
         }
+
+        private fun JSONObject.optLongOrNull(key: String): Long? =
+            if (has(key) && !isNull(key)) optLong(key) else null
     }
 }
