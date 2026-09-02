@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'epoch_millis.dart';
 import 'visit_observation.dart';
 
 /// ตัวอ่านไฟล์หลักฐานใน `docs/test-data/` — **สำหรับเทสต์และเครื่องมือเท่านั้น**
@@ -14,37 +15,38 @@ import 'visit_observation.dart';
 ///   `timestamp · processId · event · regionId · conclusion · rawSignals`
 final class RegionLogEntry {
   const RegionLogEntry({
-    required this.instant,
-    required this.utcOffset,
+    required this.atMs,
+    required this.utcOffsetMs,
     required this.event,
     required this.regionId,
     required this.lineNumber,
   });
 
-  /// เวลาสัมบูรณ์ (UTC) — ใช้คำนวณระยะห่างเท่านั้น
-  final DateTime instant;
+  /// เวลาสัมบูรณ์เป็นจำนวนเต็มมิลลิวินาทีนับจาก epoch (UTC)
+  final EpochMillis atMs;
 
   /// offset ที่เขียนอยู่ในไฟล์ เช่น `+07:00`
   ///
   /// ⚠️ **ต้องเก็บไว้** — ทั้งสองไฟล์ใช้เวลาท้องถิ่นของเครื่องทดสอบ ไม่ใช่ UTC
   /// การรายงานเป็น UTC จะทำให้ข้อสรุปเรื่อง "ช่วงกลางคืน" เลื่อนไป 7 ชั่วโมง
-  final Duration utcOffset;
+  final EpochMillis utcOffsetMs;
 
   final String event;
   final String regionId;
   final int lineNumber;
-
-  /// เวลาหน้าปัดของเครื่องทดสอบ (ยังคง flag เป็น UTC ตามข้อจำกัดของ `DateTime`)
-  DateTime get wallClock => instant.add(utcOffset);
 }
 
 /// ฟอร์แมตกลับเป็นรูปแบบเดียวกับที่อยู่ในไฟล์ (เวลาท้องถิ่น + offset)
-String formatWithOffset(DateTime instant, Duration utcOffset) {
-  final wall = instant.toUtc().add(utcOffset);
-  final sign = utcOffset.isNegative ? '-' : '+';
-  final absolute = utcOffset.abs();
-  final hh = absolute.inHours.toString().padLeft(2, '0');
-  final mm = (absolute.inMinutes % 60).toString().padLeft(2, '0');
+///
+/// เป็นหนึ่งในสองที่ที่ `DateTime` ยังปรากฏ — **ขอบของระบบ** ตรรกะของชั้นกรอง
+/// ไม่แตะชนิดนี้เลย
+String formatWithOffset(EpochMillis atMs, EpochMillis utcOffsetMs) {
+  final wall =
+      DateTime.fromMillisecondsSinceEpoch(atMs + utcOffsetMs, isUtc: true);
+  final sign = utcOffsetMs.isNegative ? '-' : '+';
+  final absolute = utcOffsetMs.abs();
+  final hh = (absolute ~/ 3600000).toString().padLeft(2, '0');
+  final mm = (absolute % 3600000 ~/ 60000).toString().padLeft(2, '0');
   final base = wall.toIso8601String();
   // `toIso8601String()` ของ DateTime ที่เป็น UTC ลงท้ายด้วย `Z` เสมอ
   return '${base.substring(0, base.length - 1)}$sign$hh:$mm';
@@ -52,18 +54,30 @@ String formatWithOffset(DateTime instant, Duration utcOffset) {
 
 final RegExp _offsetPattern = RegExp(r'(?:Z|([+-])(\d{2}):(\d{2}))$');
 
-Duration _parseUtcOffset(String timestamp) {
+EpochMillis _parseUtcOffsetMs(String timestamp) {
   final match = _offsetPattern.firstMatch(timestamp);
   if (match == null) {
     throw FormatException('ไม่มี UTC offset ในเวลา "$timestamp" — '
         'ไฟล์หลักฐานต้องมี offset เสมอ');
   }
-  if (match.group(1) == null) return Duration.zero;
+  if (match.group(1) == null) return 0;
   final sign = match.group(1) == '-' ? -1 : 1;
-  return Duration(
-    hours: sign * int.parse(match.group(2)!),
-    minutes: sign * int.parse(match.group(3)!),
-  );
+  return sign *
+      (int.parse(match.group(2)!) * 3600000 +
+          int.parse(match.group(3)!) * 60000);
+}
+
+/// แปลง `DateTime` ที่ได้จากการ parse เป็นจำนวนเต็มมิลลิวินาที
+///
+/// **โยนถ้ามีเศษต่ำกว่ามิลลิวินาที** — ชั้นกรองทำงานบนจำนวนเต็มมิลลิวินาทีเท่านั้น
+/// การปัดเงียบ ๆ ตรงนี้จะทำให้ผลของสามภาษาต่างกันโดยไม่มีใครเห็น
+EpochMillis _epochMillisOf(DateTime parsed, String raw) {
+  if (parsed.microsecondsSinceEpoch % 1000 != 0) {
+    throw FormatException(
+      'เวลา "$raw" ละเอียดกว่ามิลลิวินาที — ชั้นกรองรองรับแค่มิลลิวินาที',
+    );
+  }
+  return parsed.millisecondsSinceEpoch;
 }
 
 List<RegionLogEntry> parseRegionLog(String path) {
@@ -86,8 +100,8 @@ List<RegionLogEntry> parseRegionLog(String path) {
     }
     entries.add(
       RegionLogEntry(
-        instant: DateTime.parse(columns[0]),
-        utcOffset: _parseUtcOffset(columns[0]),
+        atMs: _epochMillisOf(DateTime.parse(columns[0]), columns[0]),
+        utcOffsetMs: _parseUtcOffsetMs(columns[0]),
         event: columns[eventIndex],
         regionId: columns[eventIndex + 1],
         lineNumber: i + 1,
@@ -111,18 +125,18 @@ List<VisitObservation> observationsFromLog(List<RegionLogEntry> entries) {
     switch (entry.event) {
       case 'enter':
         observations.add(
-          RegionSeen(regionId: entry.regionId, at: entry.instant),
+          RegionSeen(regionId: entry.regionId, atMs: entry.atMs),
         );
       case 'exit':
         observations.add(
-          RegionNotSeen(regionId: entry.regionId, at: entry.instant),
+          RegionNotSeen(regionId: entry.regionId, atMs: entry.atMs),
         );
       default:
-        observations.add(TimeAdvanced(at: entry.instant));
+        observations.add(TimeAdvanced(atMs: entry.atMs));
     }
   }
   if (entries.isNotEmpty) {
-    observations.add(ObservationsEnded(at: entries.last.instant));
+    observations.add(ObservationsEnded(atMs: entries.last.atMs));
   }
   return observations;
 }

@@ -34,8 +34,12 @@ final class ConformanceCase {
   final String? logFile;
 }
 
-final DateTime _t0 = DateTime.utc(2026, 9, 2, 10);
-DateTime _at(Duration offset) => _t0.add(offset);
+/// จุดอ้างอิงเวลาคงที่ของทุกเคส (2026-09-02T10:00:00Z) เป็นจำนวนเต็มมิลลิวินาที
+const int _t0Ms = 1788343200000;
+
+/// ⚠️ `Duration` ตรงนี้เป็น **ความสะดวกในการเขียนเคสเท่านั้น** — แปลงเป็นจำนวนเต็ม
+/// มิลลิวินาทีก่อนถึง reducer เสมอ · ไฟล์นี้ไม่ได้ถูกพอร์ต port อ่านไฟล์ vector แทน
+int _at(Duration offset) => _t0Ms + offset.inMilliseconds;
 const Duration _fiveMinutes = Duration(minutes: 5);
 
 /// เพดานการตาบอดที่ใช้ในเคสส่วนใหญ่ — **เป็นค่าที่เลือกให้เทสต์อ่านง่าย
@@ -50,8 +54,8 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionNotSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionSeen(regionId: 'a', at: _at(const Duration(seconds: 10))),
+      RegionNotSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(seconds: 10))),
     ],
   ),
   ConformanceCase(
@@ -60,7 +64,7 @@ final List<ConformanceCase> conformanceCases = [
         '(เกิดจริงกับไฟล์ Android)',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
-    observations: [RegionSeen(regionId: 'a', at: _at(Duration.zero))],
+    observations: [RegionSeen(regionId: 'a', atMs: _at(Duration.zero))],
   ),
   ConformanceCase(
     name: 'still-present-when-cooldown-elapses',
@@ -69,9 +73,9 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      TimeAdvanced(at: _at(const Duration(hours: 4))),
-      TimeAdvanced(at: _at(const Duration(hours: 8))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      TimeAdvanced(atMs: _at(const Duration(hours: 4))),
+      TimeAdvanced(atMs: _at(const Duration(hours: 8))),
     ],
   ),
   ConformanceCase(
@@ -81,10 +85,10 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 2))),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 3))),
-      TimeAdvanced(at: _at(const Duration(hours: 9))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 2))),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 3))),
+      TimeAdvanced(atMs: _at(const Duration(hours: 9))),
     ],
   ),
   ConformanceCase(
@@ -94,9 +98,9 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 6, seconds: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 6, seconds: 1))),
     ],
   ),
   ConformanceCase(
@@ -106,11 +110,11 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 2))),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 3))),
-      TimeAdvanced(at: _at(const Duration(minutes: 6, seconds: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 2))),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 3))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 6, seconds: 1))),
     ],
   ),
   ConformanceCase(
@@ -119,12 +123,12 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
-      RegionSeen(regionId: 'b', at: _at(const Duration(minutes: 4))),
-      RegionNotSeen(regionId: 'b', at: _at(const Duration(minutes: 5))),
-      TimeAdvanced(at: _at(const Duration(minutes: 6, seconds: 30))),
-      ObservationsEnded(at: _at(const Duration(minutes: 10))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'b', atMs: _at(const Duration(minutes: 4))),
+      RegionNotSeen(regionId: 'b', atMs: _at(const Duration(minutes: 5))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 6, seconds: 30))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 10))),
     ],
   ),
   ConformanceCase(
@@ -135,13 +139,13 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'zulu', at: _at(Duration.zero)),
-      RegionSeen(regionId: 'alpha', at: _at(Duration.zero)),
-      RegionSeen(regionId: 'mike', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'zulu', at: _at(const Duration(seconds: 1))),
-      RegionNotSeen(regionId: 'alpha', at: _at(const Duration(seconds: 1))),
-      RegionNotSeen(regionId: 'mike', at: _at(const Duration(seconds: 1))),
-      TimeAdvanced(at: _at(const Duration(minutes: 6))),
+      RegionSeen(regionId: 'zulu', atMs: _at(Duration.zero)),
+      RegionSeen(regionId: 'alpha', atMs: _at(Duration.zero)),
+      RegionSeen(regionId: 'mike', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'zulu', atMs: _at(const Duration(seconds: 1))),
+      RegionNotSeen(regionId: 'alpha', atMs: _at(const Duration(seconds: 1))),
+      RegionNotSeen(regionId: 'mike', atMs: _at(const Duration(seconds: 1))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 6))),
     ],
   ),
   ConformanceCase(
@@ -151,8 +155,8 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      ObservationsEnded(at: _at(const Duration(hours: 3))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      ObservationsEnded(atMs: _at(const Duration(hours: 3))),
     ],
   ),
   ConformanceCase(
@@ -162,9 +166,9 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
-      ObservationsEnded(at: _at(const Duration(minutes: 3))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 3))),
     ],
   ),
   ConformanceCase(
@@ -174,10 +178,10 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 5))),
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 4))),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 6))),
-      ObservationsEnded(at: _at(const Duration(minutes: 7))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 5))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 4))),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 6))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 7))),
     ],
   ),
   ConformanceCase(
@@ -187,11 +191,11 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionNotSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
-      ObservationsEnded(at: _at(const Duration(minutes: 2))),
+      RegionNotSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 2))),
     ],
   ),
   ConformanceCase(
@@ -204,18 +208,18 @@ final List<ConformanceCase> conformanceCases = [
       regions: {
         'a': RegionState(
           present: true,
-          lastPresentAt: _t0,
+          lastPresentAtMs: _t0Ms,
           visit: OpenVisit(
-            startedAt: _t0,
+            startedAtMs: _t0Ms,
             evidence: VisitStartEvidence.arrivalObserved,
           ),
         ),
       },
-      lastObservationAt: _t0,
+      lastObservationAtMs: _t0Ms,
     ),
     observations: [
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 30))),
-      ObservationsEnded(at: _at(const Duration(minutes: 31))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 30))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 31))),
     ],
   ),
   ConformanceCase(
@@ -224,12 +228,12 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionNotSeen(regionId: 'a', at: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(Duration.zero)),
       for (var i = 0; i < 40; i++) ...[
-        RegionSeen(regionId: 'a', at: _at(Duration(minutes: i))),
-        RegionNotSeen(regionId: 'a', at: _at(Duration(minutes: i, seconds: 30))),
+        RegionSeen(regionId: 'a', atMs: _at(Duration(minutes: i))),
+        RegionNotSeen(regionId: 'a', atMs: _at(Duration(minutes: i, seconds: 30))),
       ],
-      ObservationsEnded(at: _at(const Duration(minutes: 45))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 45))),
     ],
   ),
   // ── ตาบอด ────────────────────────────────────────────────────────────────
@@ -241,15 +245,15 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
       SensingLost(
-        at: _at(const Duration(minutes: 1)),
+        atMs: _at(const Duration(minutes: 1)),
         cause: SensingLossCause.bluetoothOff,
       ),
-      SensingRestored(at: _at(const Duration(minutes: 11))),
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 11))),
-      ObservationsEnded(at: _at(const Duration(minutes: 12))),
+      SensingRestored(atMs: _at(const Duration(minutes: 11))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 11))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 12))),
     ],
   ),
   ConformanceCase(
@@ -260,15 +264,15 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
       SensingLost(
-        at: _at(const Duration(minutes: 2)),
+        atMs: _at(const Duration(minutes: 2)),
         cause: SensingLossCause.bluetoothOff,
       ),
-      SensingRestored(at: _at(const Duration(minutes: 30))),
-      RegionSeen(regionId: 'a', at: _at(const Duration(minutes: 31))),
-      ObservationsEnded(at: _at(const Duration(minutes: 32))),
+      SensingRestored(atMs: _at(const Duration(minutes: 30))),
+      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 31))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 32))),
     ],
   ),
   ConformanceCase(
@@ -278,14 +282,14 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
       SensingLost(
-        at: _at(const Duration(minutes: 2)),
+        atMs: _at(const Duration(minutes: 2)),
         cause: SensingLossCause.locationServicesOff,
       ),
-      SensingRestored(at: _at(const Duration(minutes: 17))),
-      ObservationsEnded(at: _at(const Duration(minutes: 18))),
+      SensingRestored(atMs: _at(const Duration(minutes: 17))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 18))),
     ],
   ),
   ConformanceCase(
@@ -294,16 +298,16 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
       SensingLost(
-        at: _at(const Duration(minutes: 2)),
+        atMs: _at(const Duration(minutes: 2)),
         cause: SensingLossCause.permissionRevoked,
       ),
       SensingRestored(
-        at: _at(const Duration(minutes: 17, milliseconds: -1)),
+        atMs: _at(const Duration(minutes: 17, milliseconds: -1)),
       ),
-      ObservationsEnded(at: _at(const Duration(minutes: 18))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 18))),
     ],
   ),
   ConformanceCase(
@@ -314,20 +318,20 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
       SensingLost(
-        at: _at(const Duration(minutes: 2)),
+        atMs: _at(const Duration(minutes: 2)),
         cause: SensingLossCause.bluetoothOff,
       ),
       // ถ้านาฬิกาไม่หยุด cooldown จะครบตั้งแต่นาทีที่ 6 — ตรงนี้ต้องไม่มีอะไรออก
-      TimeAdvanced(at: _at(const Duration(minutes: 9))),
-      SensingRestored(at: _at(const Duration(minutes: 10))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 9))),
+      SensingRestored(atMs: _at(const Duration(minutes: 10))),
       // เงียบจริง 9 นาที หัก 8 นาทีที่ตาบอด = 1 นาที ยังไม่ครบ
-      TimeAdvanced(at: _at(const Duration(minutes: 12))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 12))),
       // เงียบจริง 13 นาที หัก 8 = 5 นาที ครบพอดี
-      TimeAdvanced(at: _at(const Duration(minutes: 14))),
-      ObservationsEnded(at: _at(const Duration(minutes: 15))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 14))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 15))),
     ],
   ),
   ConformanceCase(
@@ -337,17 +341,17 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
       SensingLost(
-        at: _at(const Duration(minutes: 1)),
+        atMs: _at(const Duration(minutes: 1)),
         cause: SensingLossCause.scanRegistrationLost,
       ),
       // นาฬิกาปลุกของเราเองยังดังได้แม้ Bluetooth ปิด — exit ระหว่างตาบอดจึงเกิดจริง
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 3))),
-      SensingRestored(at: _at(const Duration(minutes: 8))),
-      TimeAdvanced(at: _at(const Duration(minutes: 12))),
-      TimeAdvanced(at: _at(const Duration(minutes: 13))),
-      ObservationsEnded(at: _at(const Duration(minutes: 14))),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 3))),
+      SensingRestored(atMs: _at(const Duration(minutes: 8))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 12))),
+      TimeAdvanced(atMs: _at(const Duration(minutes: 13))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 14))),
     ],
   ),
   ConformanceCase(
@@ -358,22 +362,22 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionSeen(regionId: 'a', at: _at(Duration.zero)),
-      RegionNotSeen(regionId: 'a', at: _at(const Duration(minutes: 1))),
+      RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
       SensingLost(
-        at: _at(const Duration(minutes: 2)),
+        atMs: _at(const Duration(minutes: 2)),
         cause: SensingLossCause.bluetoothOff,
       ),
       SensingLost(
-        at: _at(const Duration(minutes: 8)),
+        atMs: _at(const Duration(minutes: 8)),
         cause: SensingLossCause.bluetoothOff,
       ),
       SensingLost(
-        at: _at(const Duration(minutes: 14)),
+        atMs: _at(const Duration(minutes: 14)),
         cause: SensingLossCause.unknown,
       ),
-      SensingRestored(at: _at(const Duration(minutes: 18))),
-      ObservationsEnded(at: _at(const Duration(minutes: 19))),
+      SensingRestored(atMs: _at(const Duration(minutes: 18))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 19))),
     ],
   ),
   ConformanceCase(
@@ -383,13 +387,13 @@ final List<ConformanceCase> conformanceCases = [
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
-      RegionNotSeen(regionId: 'a', at: _at(Duration.zero)),
+      RegionNotSeen(regionId: 'a', atMs: _at(Duration.zero)),
       SensingLost(
-        at: _at(const Duration(minutes: 1)),
+        atMs: _at(const Duration(minutes: 1)),
         cause: SensingLossCause.bluetoothOff,
       ),
-      SensingRestored(at: _at(const Duration(minutes: 40))),
-      ObservationsEnded(at: _at(const Duration(minutes: 41))),
+      SensingRestored(atMs: _at(const Duration(minutes: 40))),
+      ObservationsEnded(atMs: _at(const Duration(minutes: 41))),
     ],
   ),
   const ConformanceCase(

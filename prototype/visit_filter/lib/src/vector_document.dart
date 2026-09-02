@@ -17,8 +17,8 @@ Map<String, Object?> buildVectorDocument({required String repoRoot}) {
         : testCase.observations!;
 
     final run = runConformanceCase(
-      cooldown: testCase.cooldown,
-      blindnessCeiling: testCase.blindnessCeiling,
+      cooldownMs: testCase.cooldown.inMilliseconds,
+      blindnessCeilingMs: testCase.blindnessCeiling.inMilliseconds,
       initialState: testCase.initialState,
       observations: observations,
     );

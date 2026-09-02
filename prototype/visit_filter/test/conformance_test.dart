@@ -48,9 +48,8 @@ void main() {
 
     test('เล่นเคส "$name" จากไฟล์ vector แล้วได้ผลตามที่เขียนไว้', () {
       final run = runConformanceCase(
-        cooldown: Duration(milliseconds: caseJson['cooldownMs']! as int),
-        blindnessCeiling:
-            Duration(milliseconds: caseJson['blindnessCeilingMs']! as int),
+        cooldownMs: caseJson['cooldownMs']! as int,
+        blindnessCeilingMs: caseJson['blindnessCeilingMs']! as int,
         initialState:
             decodeState(caseJson['initialState']! as Map<String, Object?>),
         observations: observationsForCase(caseJson, repoRoot: repoRoot),

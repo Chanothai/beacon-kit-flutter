@@ -14,8 +14,8 @@ import 'package:visit_filter_prototype/visit_filter.dart';
 /// `SensingLost` อยู่ในไฟล์หลักฐานทั้งสอง (บิลด์ที่เก็บ log ยังไม่มีการตรวจว่า
 /// ตาบอด) ค่าที่ใส่จึงเป็นแค่ค่าที่ต้องใส่ให้ครบพารามิเตอร์
 final VisitFilter filter = VisitFilter(
-  cooldown: const Duration(minutes: 5),
-  blindnessCeiling: const Duration(minutes: 15),
+  cooldownMs: const Duration(minutes: 5).inMilliseconds,
+  blindnessCeilingMs: const Duration(minutes: 15).inMilliseconds,
 );
 
 const String testDataDir = '../../docs/test-data';
@@ -92,7 +92,7 @@ void main() {
     group('${expected.file} — ${expected.platform}', () {
       final path = '$testDataDir/${expected.file}';
       final entries = parseRegionLog(path);
-      final offset = entries.first.utcOffset;
+      final offsetMs = entries.first.utcOffsetMs;
       final result = runLog(path);
       final starts = result.events.whereType<VisitStarted>().toList();
       final ends = result.events.whereType<VisitEnded>().toList();
@@ -121,7 +121,7 @@ void main() {
 
       test('การมาเยือนเริ่มที่เวลาท้องถิ่นตรงกับ GROUND_TRUTH.md', () {
         expect(
-          formatWithOffset(starts.single.at, offset),
+          formatWithOffset(starts.single.atMs, offsetMs),
           expected.visitStartsAt,
         );
       });
@@ -130,23 +130,22 @@ void main() {
         expect(ends, hasLength(1));
         expect(ends.single.reason, VisitEndReason.observationsEnded,
             reason: 'ไฟล์จบขณะยังอยู่ในโซน');
-        expect(formatWithOffset(ends.single.endedAt, offset), expected.visitEndsAt);
+        expect(formatWithOffset(ends.single.endedAtMs, offsetMs), expected.visitEndsAt);
         expect(result.state.regionsWithOpenVisit, isEmpty);
       });
 
       test('เวลาในไฟล์เป็น local +07:00 ไม่ใช่ UTC', () {
-        expect(offset, const Duration(hours: 7));
+        expect(offsetMs, const Duration(hours: 7).inMilliseconds);
         // ตัวกรองที่ตีความเป็น UTC จะรายงานเวลาเลื่อนไป 7 ชั่วโมง ซึ่งทำให้
         // ข้อสรุปเรื่อง "ช่วงกลางคืน" ผิดทั้งหมด — ล็อกส่วนต่างไว้ตรงนี้
         expect(
-          formatWithOffset(starts.single.at, Duration.zero),
+          formatWithOffset(starts.single.atMs, 0),
           isNot(expected.visitStartsAt),
         );
         expect(
-          starts.single.at.difference(
-            DateTime.parse(expected.visitStartsAt).toUtc(),
-          ),
-          Duration.zero,
+          starts.single.atMs -
+              DateTime.parse(expected.visitStartsAt).millisecondsSinceEpoch,
+          0,
         );
       });
     });
@@ -159,7 +158,7 @@ void main() {
         result.events.whereType<VisitStarted>(),
         hasLength(1),
         reason: '${expected.file} ต้องผ่านด้วย cooldown '
-            '${filter.cooldown} ตัวเดียวกับอีกไฟล์',
+            '${filter.cooldownMs} ms ตัวเดียวกับอีกไฟล์',
       );
     }
   });

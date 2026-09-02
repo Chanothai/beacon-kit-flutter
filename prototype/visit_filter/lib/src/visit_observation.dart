@@ -1,3 +1,5 @@
+import 'epoch_millis.dart';
+
 /// สิ่งที่ป้อนเข้า reducer
 ///
 /// ⚠️ **ทุกชนิดพก `at` มาเอง** — reducer ห้ามอ่านนาฬิกาเด็ดขาด เพราะฝั่ง Android
@@ -5,22 +7,24 @@
 /// หลักสิบมิลลิวินาที ไม่มี process ที่มีชีวิตให้ตั้ง `Timer` และไม่มีอะไร
 /// รับประกันว่านาฬิกาที่อ่านตอนนั้นเป็นนาฬิกาเดียวกับที่ event ถูกประทับเวลา
 sealed class VisitObservation {
-  const VisitObservation({required this.at});
+  const VisitObservation({required this.atMs});
 
   /// เวลาที่ผู้เรียกยืนยันว่าเป็น "ตอนนี้" ของ observation นี้
-  final DateTime at;
+  ///
+  /// **จำนวนเต็มมิลลิวินาทีนับจาก epoch (UTC)** — ดู [EpochMillis]
+  final EpochMillis atMs;
 }
 
 /// แพลตฟอร์มยืนยันว่า **ยังอยู่ในโซน** ณ เวลา [at]
 ///
 /// iOS = `didEnterRegion` · Android = ผลสแกนที่เข้ามาทาง `PendingIntent`
 final class RegionSeen extends VisitObservation {
-  const RegionSeen({required this.regionId, required super.at});
+  const RegionSeen({required this.regionId, required super.atMs});
 
   final String regionId;
 
   @override
-  String toString() => 'RegionSeen($regionId, $at)';
+  String toString() => 'RegionSeen($regionId, ${debugTime(atMs)})';
 }
 
 /// แพลตฟอร์มยืนยันว่า **ไม่อยู่ในโซนแล้ว** ณ เวลา [at]
@@ -31,12 +35,12 @@ final class RegionSeen extends VisitObservation {
 /// ก่อนประกาศ (iOS ~30 วินาทีที่วัดได้เอง ADR-11 · Android ขึ้นกับ `AlarmManager`
 /// ADR-15) reducer จึงเริ่มนับความเงียบจากเวลานี้ ไม่ใช่จากเวลาที่เห็นครั้งสุดท้าย
 final class RegionNotSeen extends VisitObservation {
-  const RegionNotSeen({required this.regionId, required super.at});
+  const RegionNotSeen({required this.regionId, required super.atMs});
 
   final String regionId;
 
   @override
-  String toString() => 'RegionNotSeen($regionId, $at)';
+  String toString() => 'RegionNotSeen($regionId, ${debugTime(atMs)})';
 }
 
 /// สาเหตุที่มองไม่เห็น — **เก็บไว้เป็นสัญญาณดิบ ไม่มีผลกับการตัดสินใจของ reducer**
@@ -73,12 +77,12 @@ enum SensingLossCause {
 /// ส่ง [SensingLost] ซ้ำระหว่างที่ตาบอดอยู่แล้วไม่เลื่อนจุดเริ่ม — จุดเริ่มของช่วง
 /// ตาบอดคืออันแรกเสมอ
 final class SensingLost extends VisitObservation {
-  const SensingLost({required super.at, required this.cause});
+  const SensingLost({required super.atMs, required this.cause});
 
   final SensingLossCause cause;
 
   @override
-  String toString() => 'SensingLost(${cause.name}, $at)';
+  String toString() => 'SensingLost(${cause.name}, ${debugTime(atMs)})';
 }
 
 /// **กลับมามองเห็นได้แล้ว** ตั้งแต่ [at] เป็นต้นไป
@@ -89,10 +93,10 @@ final class SensingLost extends VisitObservation {
 /// ⚠️ ถ้าช่วงตาบอดยาวเกิน `VisitFilter.blindnessCeiling` จะ **ไม่หัก** แต่ล้าง
 /// สถานะทิ้งทั้งหมดแทน — เพราะตาบอดนานขนาดนั้นแล้วอ้างความต่อเนื่องไม่ได้อีก
 final class SensingRestored extends VisitObservation {
-  const SensingRestored({required super.at});
+  const SensingRestored({required super.atMs});
 
   @override
-  String toString() => 'SensingRestored($at)';
+  String toString() => 'SensingRestored(${debugTime(atMs)})';
 }
 
 /// "เวลาเดินไปถึง [at] แล้ว แต่ไม่มีข้อมูลใหม่ว่าอยู่หรือไม่อยู่"
@@ -101,10 +105,10 @@ final class SensingRestored extends VisitObservation {
 /// การมาเยือนที่ค้างอยู่จะไม่มีวันถูกปิด · ผู้เรียกควรป้อนทุกครั้งที่ถูกปลุก
 /// ไม่ว่าจะด้วยสาเหตุใด (process เกิดใหม่ · แอปกลับมา foreground · นาฬิกาปลุกอื่น)
 final class TimeAdvanced extends VisitObservation {
-  const TimeAdvanced({required super.at});
+  const TimeAdvanced({required super.atMs});
 
   @override
-  String toString() => 'TimeAdvanced($at)';
+  String toString() => 'TimeAdvanced(${debugTime(atMs)})';
 }
 
 /// ไม่มี observation หลังจากนี้อีกแล้ว — **ปิดการมาเยือนที่ยังค้างที่ขอบข้อมูล**
@@ -115,8 +119,8 @@ final class TimeAdvanced extends VisitObservation {
 /// ⚠️ ห้ามทิ้งช่วงที่ยังเปิดค้าง — `docs/test-data/GROUND_TRUTH.md` ระบุว่าถ้าทิ้ง
 /// จะได้ 0 ช่วงจากทั้งสองไฟล์ ซึ่งผิดจากความจริงภาคสนาม
 final class ObservationsEnded extends VisitObservation {
-  const ObservationsEnded({required super.at});
+  const ObservationsEnded({required super.atMs});
 
   @override
-  String toString() => 'ObservationsEnded($at)';
+  String toString() => 'ObservationsEnded(${debugTime(atMs)})';
 }

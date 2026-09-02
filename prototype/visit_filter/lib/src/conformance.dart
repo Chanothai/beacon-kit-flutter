@@ -1,3 +1,4 @@
+import 'epoch_millis.dart';
 import 'visit_event.dart';
 import 'visit_filter.dart';
 import 'visit_filter_state.dart';
@@ -6,109 +7,93 @@ import 'visit_observation.dart';
 /// การเข้ารหัส **conformance vector** — สัญญากลางที่ทั้งสามภาษาต้องให้ผลตรงกัน
 ///
 /// ⚠️ **เวลาทั้งหมดเป็นจำนวนเต็มมิลลิวินาทีนับจาก epoch (Int64) เท่านั้น**
-/// ห้ามใช้ชนิดวันเวลาของแพลตฟอร์มในไฟล์ vector เด็ดขาด:
+/// ตั้งแต่ชั้นข้อมูลของ reducer ขึ้นมา (ดู [EpochMillis]) ไฟล์ vector จึงเขียนค่า
+/// ลงไปตรง ๆ **ไม่มีการแปลงชนิดตรงกลางให้พลาดได้**:
 ///
 /// - Swift `Date` เก็บเป็น `Double` วินาที — ค่ามิลลิวินาทีบางค่าแทนไม่ได้เป๊ะ
 ///   การเทียบเท่ากันจึงเป็นการเทียบทศนิยม
 /// - Swift `TimeInterval` และ `Duration` ของ Kotlin/Java คนละความละเอียดกัน
 /// - Dart `int` เป็น 64 บิตบน VM แต่ 53 บิตบน JS (epoch มิลลิวินาทียังพอดี)
 ///
-/// ตัวเลขจำนวนเต็มมิลลิวินาทีเป็นชนิดเดียวที่ทั้งสามภาษาแทนได้ตรงกันทุกค่า
-int encodeTime(DateTime time) {
-  if (time.microsecondsSinceEpoch % 1000 != 0) {
-    throw ArgumentError.value(
-      time,
-      'time',
-      'มีเศษต่ำกว่ามิลลิวินาที — vector ต้องเป็นจำนวนเต็มมิลลิวินาที '
-          'เพราะ Swift Date แทนค่านั้นไม่ได้เป๊ะ',
-    );
-  }
-  return time.millisecondsSinceEpoch;
-}
-
-DateTime decodeTime(int millisecondsSinceEpoch) =>
-    DateTime.fromMillisecondsSinceEpoch(millisecondsSinceEpoch, isUtc: true);
+/// enum เข้ารหัสด้วย **ชื่อค่าเป็นสตริง** ไม่ใช่ลำดับตัวเลข เพราะการเรียงลำดับ
+/// สมาชิก enum ต่างกันระหว่างสามภาษาได้ง่ายและจะเพี้ยนแบบเงียบสนิท
 
 Map<String, Object?> encodeObservation(VisitObservation observation) =>
     switch (observation) {
-      RegionSeen(:final regionId, :final at) => {
+      RegionSeen(:final regionId, :final atMs) => {
           'kind': 'regionSeen',
           'regionId': regionId,
-          'atMs': encodeTime(at),
+          'atMs': atMs,
         },
-      RegionNotSeen(:final regionId, :final at) => {
+      RegionNotSeen(:final regionId, :final atMs) => {
           'kind': 'regionNotSeen',
           'regionId': regionId,
-          'atMs': encodeTime(at),
+          'atMs': atMs,
         },
-      TimeAdvanced(:final at) => {
+      TimeAdvanced(:final atMs) => {
           'kind': 'timeAdvanced',
-          'atMs': encodeTime(at),
+          'atMs': atMs,
         },
-      SensingLost(:final at, :final cause) => {
+      SensingLost(:final atMs, :final cause) => {
           'kind': 'sensingLost',
-          'atMs': encodeTime(at),
+          'atMs': atMs,
           'cause': cause.name,
         },
-      SensingRestored(:final at) => {
+      SensingRestored(:final atMs) => {
           'kind': 'sensingRestored',
-          'atMs': encodeTime(at),
+          'atMs': atMs,
         },
-      ObservationsEnded(:final at) => {
+      ObservationsEnded(:final atMs) => {
           'kind': 'observationsEnded',
-          'atMs': encodeTime(at),
+          'atMs': atMs,
         },
     };
 
 VisitObservation decodeObservation(Map<String, Object?> json) {
-  final at = decodeTime(json['atMs']! as int);
+  final atMs = json['atMs']! as int;
   final regionId = json['regionId'] as String?;
   return switch (json['kind']! as String) {
-    'regionSeen' => RegionSeen(regionId: regionId!, at: at),
-    'regionNotSeen' => RegionNotSeen(regionId: regionId!, at: at),
-    'timeAdvanced' => TimeAdvanced(at: at),
+    'regionSeen' => RegionSeen(regionId: regionId!, atMs: atMs),
+    'regionNotSeen' => RegionNotSeen(regionId: regionId!, atMs: atMs),
+    'timeAdvanced' => TimeAdvanced(atMs: atMs),
     'sensingLost' => SensingLost(
-        at: at,
+        atMs: atMs,
         cause: SensingLossCause.values
             .firstWhere((c) => c.name == json['cause']),
       ),
-    'sensingRestored' => SensingRestored(at: at),
-    'observationsEnded' => ObservationsEnded(at: at),
+    'sensingRestored' => SensingRestored(atMs: atMs),
+    'observationsEnded' => ObservationsEnded(atMs: atMs),
     final unknown => throw FormatException('observation ชนิด "$unknown" ไม่รู้จัก'),
   };
 }
 
 Map<String, Object?> encodeEvent(VisitEvent event) => switch (event) {
-      VisitStarted(:final regionId, :final at, :final evidence) => {
+      VisitStarted(:final regionId, :final atMs, :final evidence) => {
           'kind': 'visitStarted',
           'regionId': regionId,
-          'atMs': encodeTime(at),
+          'atMs': atMs,
           'evidence': evidence.name,
         },
       VisitEnded(
         :final regionId,
-        :final startedAt,
-        :final endedAt,
+        :final startedAtMs,
+        :final endedAtMs,
         :final reason
       ) =>
         {
           'kind': 'visitEnded',
           'regionId': regionId,
-          'startedAtMs': encodeTime(startedAt),
-          'endedAtMs': encodeTime(endedAt),
+          'startedAtMs': startedAtMs,
+          'endedAtMs': endedAtMs,
           'reason': reason.name,
         },
     };
 
 /// state ตั้งต้นของหนึ่งเคส — เข้ารหัสเท่าที่ต้องใช้จริง
 Map<String, Object?> encodeState(VisitFilterState state) => {
-      'lastObservationAtMs': state.lastObservationAt == null
-          ? null
-          : encodeTime(state.lastObservationAt!),
+      'lastObservationAtMs': state.lastObservationAtMs,
       'sensing': state.sensing.name,
-      'sensingLostAtMs': state.sensingLostAt == null
-          ? null
-          : encodeTime(state.sensingLostAt!),
+      'sensingLostAtMs': state.sensingLostAtMs,
       // เรียง key เสมอ — Swift `Dictionary` ไม่รับประกันลำดับ และ JSON ที่ลำดับ
       // ไม่คงที่จะทำให้ diff ของไฟล์ vector อ่านไม่ได้
       'regions': {
@@ -119,53 +104,42 @@ Map<String, Object?> encodeState(VisitFilterState state) => {
 
 Map<String, Object?> _encodeRegion(RegionState region) => {
       'present': region.present,
-      'lastPresentAtMs': region.lastPresentAt == null
-          ? null
-          : encodeTime(region.lastPresentAt!),
-      'absentSinceMs':
-          region.absentSince == null ? null : encodeTime(region.absentSince!),
-      'silencePausedMs': region.silencePaused.inMilliseconds,
+      'lastPresentAtMs': region.lastPresentAtMs,
+      'absentSinceMs': region.absentSinceMs,
+      'silencePausedMs': region.silencePausedMs,
       'visit': region.visit == null
           ? null
           : {
-              'startedAtMs': encodeTime(region.visit!.startedAt),
+              'startedAtMs': region.visit!.startedAtMs,
               'evidence': region.visit!.evidence.name,
             },
     };
 
 VisitFilterState decodeState(Map<String, Object?> json) {
   final regionsJson = (json['regions'] ?? <String, Object?>{}) as Map<String, Object?>;
-  final lastObservationAtMs = json['lastObservationAtMs'] as int?;
-  final sensingLostAtMs = json['sensingLostAtMs'] as int?;
   return VisitFilterState(
     regions: {
       for (final entry in regionsJson.entries)
         entry.key: _decodeRegion(entry.value! as Map<String, Object?>),
     },
-    lastObservationAt:
-        lastObservationAtMs == null ? null : decodeTime(lastObservationAtMs),
+    lastObservationAtMs: json['lastObservationAtMs'] as int?,
     sensing: SensingStatus.values
         .firstWhere((s) => s.name == (json['sensing'] ?? 'available')),
-    sensingLostAt:
-        sensingLostAtMs == null ? null : decodeTime(sensingLostAtMs),
+    sensingLostAtMs: json['sensingLostAtMs'] as int?,
   );
 }
 
 RegionState _decodeRegion(Map<String, Object?> json) {
   final visitJson = json['visit'] as Map<String, Object?>?;
-  final lastPresentAtMs = json['lastPresentAtMs'] as int?;
-  final absentSinceMs = json['absentSinceMs'] as int?;
   return RegionState(
     present: json['present']! as bool,
-    lastPresentAt:
-        lastPresentAtMs == null ? null : decodeTime(lastPresentAtMs),
-    absentSince: absentSinceMs == null ? null : decodeTime(absentSinceMs),
-    silencePaused:
-        Duration(milliseconds: (json['silencePausedMs'] ?? 0) as int),
+    lastPresentAtMs: json['lastPresentAtMs'] as int?,
+    absentSinceMs: json['absentSinceMs'] as int?,
+    silencePausedMs: (json['silencePausedMs'] ?? 0) as int,
     visit: visitJson == null
         ? null
         : OpenVisit(
-            startedAt: decodeTime(visitJson['startedAtMs']! as int),
+            startedAtMs: visitJson['startedAtMs']! as int,
             evidence: VisitStartEvidence.values
                 .firstWhere((e) => e.name == visitJson['evidence']),
           ),
@@ -190,13 +164,15 @@ final class ConformanceRun {
 
 /// เล่นหนึ่งเคส — **ตรรกะเดียวกับที่ port ทั้งสองภาษาต้องทำ**
 ConformanceRun runConformanceCase({
-  required Duration cooldown,
-  required Duration blindnessCeiling,
+  required EpochMillis cooldownMs,
+  required EpochMillis blindnessCeilingMs,
   required VisitFilterState initialState,
   required List<VisitObservation> observations,
 }) {
-  final filter =
-      VisitFilter(cooldown: cooldown, blindnessCeiling: blindnessCeiling);
+  final filter = VisitFilter(
+    cooldownMs: cooldownMs,
+    blindnessCeilingMs: blindnessCeilingMs,
+  );
   var state = initialState;
   final events = <VisitEvent>[];
   final rejections = <Map<String, Object?>>[];

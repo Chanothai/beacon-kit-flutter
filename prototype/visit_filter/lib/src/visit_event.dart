@@ -1,3 +1,5 @@
+import 'epoch_millis.dart';
+
 /// หลักฐานที่ทำให้ [VisitStarted] ถูกยิง — **แยก "เห็นการมาถึง" ออกจาก "พบว่าอยู่แล้ว"**
 enum VisitStartEvidence {
   /// เห็นการเปลี่ยนจาก "ไม่อยู่" เป็น "อยู่" จริง — `at` คือเวลาที่มาถึง
@@ -8,7 +10,7 @@ enum VisitStartEvidence {
   /// เกิดได้สองทาง: ข้อมูลเริ่มตอนอยู่ในโซนอยู่แล้ว (ไฟล์ log ที่เริ่มกลางคัน)
   /// หรือกู้ state ที่บันทึกไว้ว่ากำลังอยู่ในโซนกลับมา
   ///
-  /// ⚠️ `at` ของ event นี้คือ **ขอบบนของเวลาที่มาถึง ไม่ใช่เวลาที่มาถึง** — การมาถึง
+  /// ⚠️ `atMs` ของ event นี้คือ **ขอบบนของเวลาที่มาถึง ไม่ใช่เวลาที่มาถึง** — การมาถึง
   /// จริงเกิดขึ้น ณ เวลานั้นหรือก่อนหน้า และ reducer ไม่มีทางรู้ว่าก่อนหน้าเท่าไร
   alreadyInsideAtFirstObservation,
 }
@@ -42,59 +44,60 @@ sealed class VisitEvent {
 final class VisitStarted extends VisitEvent {
   const VisitStarted({
     required super.regionId,
-    required this.at,
+    required this.atMs,
     required this.evidence,
   });
 
-  final DateTime at;
+  final EpochMillis atMs;
   final VisitStartEvidence evidence;
 
   @override
   bool operator ==(Object other) =>
       other is VisitStarted &&
       other.regionId == regionId &&
-      other.at == at &&
+      other.atMs == atMs &&
       other.evidence == evidence;
 
   @override
-  int get hashCode => Object.hash(regionId, at, evidence);
+  int get hashCode => Object.hash(regionId, atMs, evidence);
 
   @override
-  String toString() => 'VisitStarted($regionId, $at, ${evidence.name})';
+  String toString() =>
+      'VisitStarted($regionId, ${debugTime(atMs)}, ${evidence.name})';
 }
 
 /// จบการมาเยือน
 final class VisitEnded extends VisitEvent {
   const VisitEnded({
     required super.regionId,
-    required this.startedAt,
-    required this.endedAt,
+    required this.startedAtMs,
+    required this.endedAtMs,
     required this.reason,
   });
 
-  final DateTime startedAt;
+  final EpochMillis startedAtMs;
 
   /// หลักฐานสุดท้ายที่ยืนยันว่ายังอยู่ — **ไม่ใช่เวลาที่ reducer รู้ตัวว่าจบ**
   ///
   /// การรายงานเวลาที่รู้ตัวจะทำให้ทุกการมาเยือนยาวเกินจริงเท่ากับ cooldown
-  final DateTime endedAt;
+  final EpochMillis endedAtMs;
 
   final VisitEndReason reason;
 
-  Duration get duration => endedAt.difference(startedAt);
+  EpochMillis get durationMs => endedAtMs - startedAtMs;
 
   @override
   bool operator ==(Object other) =>
       other is VisitEnded &&
       other.regionId == regionId &&
-      other.startedAt == startedAt &&
-      other.endedAt == endedAt &&
+      other.startedAtMs == startedAtMs &&
+      other.endedAtMs == endedAtMs &&
       other.reason == reason;
 
   @override
-  int get hashCode => Object.hash(regionId, startedAt, endedAt, reason);
+  int get hashCode => Object.hash(regionId, startedAtMs, endedAtMs, reason);
 
   @override
-  String toString() =>
-      'VisitEnded($regionId, $startedAt → $endedAt, ${reason.name})';
+  String toString() => 'VisitEnded($regionId, ${debugTime(startedAtMs)} → '
+      '${debugTime(endedAtMs)}, ${reason.name})';
 }

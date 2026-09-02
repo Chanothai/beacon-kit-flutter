@@ -20,8 +20,8 @@ const List<String> files = [
 int visitCount(List<VisitObservation> observations, Duration cooldown) {
   // ไฟล์หลักฐานทั้งสองไม่มี observation ชนิด SensingLost เลย ค่านี้จึงไม่มีผล
   final filter = VisitFilter(
-    cooldown: cooldown,
-    blindnessCeiling: const Duration(minutes: 15),
+    cooldownMs: cooldown.inMilliseconds,
+    blindnessCeilingMs: const Duration(minutes: 15).inMilliseconds,
   );
   var state = VisitFilterState.initial;
   var count = 0;
@@ -39,15 +39,15 @@ int visitCount(List<VisitObservation> observations, Duration cooldown) {
 /// แพลตฟอร์มประกาศว่าไม่เห็น)
 List<Duration> silenceGaps(List<RegionLogEntry> entries) {
   final gaps = <Duration>[];
-  DateTime? absentSince;
+  int? absentSinceMs;
   for (final entry in entries) {
     switch (entry.event) {
       case 'exit':
-        absentSince ??= entry.instant;
+        absentSinceMs ??= entry.atMs;
       case 'enter':
-        if (absentSince != null) {
-          gaps.add(entry.instant.difference(absentSince));
-          absentSince = null;
+        if (absentSinceMs != null) {
+          gaps.add(Duration(milliseconds: entry.atMs - absentSinceMs));
+          absentSinceMs = null;
         }
     }
   }

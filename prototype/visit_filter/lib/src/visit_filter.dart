@@ -1,3 +1,4 @@
+import 'epoch_millis.dart';
 import 'visit_event.dart';
 import 'visit_filter_state.dart';
 import 'visit_observation.dart';
@@ -46,14 +47,14 @@ final class VisitFilter {
   /// release build ส่วน `require()` ของ Kotlin และ `precondition` ของ Swift ทำงาน
   /// เสมอ ถ้าใช้ `assert` พฤติกรรมของสามภาษาจะต่างกันเฉพาะใน release เท่านั้น
   /// ซึ่งเป็นความต่างที่หาไม่เจอที่สุด
-  VisitFilter({required this.cooldown, required this.blindnessCeiling}) {
-    if (cooldown <= Duration.zero) {
-      throw ArgumentError.value(cooldown, 'cooldown', 'ต้องมากกว่าศูนย์');
+  VisitFilter({required this.cooldownMs, required this.blindnessCeilingMs}) {
+    if (cooldownMs <= 0) {
+      throw ArgumentError.value(cooldownMs, 'cooldownMs', 'ต้องมากกว่าศูนย์');
     }
-    if (blindnessCeiling <= Duration.zero) {
+    if (blindnessCeilingMs <= 0) {
       throw ArgumentError.value(
-        blindnessCeiling,
-        'blindnessCeiling',
+        blindnessCeilingMs,
+        'blindnessCeilingMs',
         'ต้องมากกว่าศูนย์',
       );
     }
@@ -61,12 +62,12 @@ final class VisitFilter {
 
   /// เงียบนานเท่าไรจึงถือว่าการมาเยือนจบ
   ///
-  /// นับจาก **เวลาที่แพลตฟอร์มประกาศว่าไม่เห็น** ([RegionNotSeen.at]) ไม่ใช่จาก
+  /// นับจาก **เวลาที่แพลตฟอร์มประกาศว่าไม่เห็น** ([RegionNotSeen.atMs]) ไม่ใช่จาก
   /// เวลาที่เห็นครั้งสุดท้าย — เพราะระหว่างที่ยังอยู่ในโซน แพลตฟอร์มไม่ส่งอะไรมา
   /// เลย การนับจาก "เห็นครั้งสุดท้าย" จะปิดการมาเยือนของคนที่นั่งอยู่เฉย ๆ ทิ้ง
   ///
   /// ⚠️ **ไม่มีค่า default โดยตั้งใจ** — ผู้เรียกต้องเลือกเอง ดู README
-  final Duration cooldown;
+  final EpochMillis cooldownMs;
 
   /// ตาบอดได้นานที่สุดเท่าไรก่อนจะ **ล้างสถานะทิ้งทั้งหมด**
   ///
@@ -77,13 +78,13 @@ final class VisitFilter {
   ///
   /// ⚠️ **ไม่มีค่า default โดยตั้งใจ** — ยังไม่มีข้อมูลสนามสำหรับตั้งค่านี้เลย
   /// (log สองคืนที่มีไม่มีช่วงตาบอดที่ตรวจได้แม้แต่ช่วงเดียว)
-  final Duration blindnessCeiling;
+  final EpochMillis blindnessCeilingMs;
 
   /// รีดิวซ์หนึ่ง observation
   VisitReduction reduce(VisitFilterState state, VisitObservation observation) {
-    final now = observation.at;
-    final previous = state.lastObservationAt;
-    if (previous != null && now.isBefore(previous)) {
+    final nowMs = observation.atMs;
+    final previousMs = state.lastObservationAtMs;
+    if (previousMs != null && nowMs < previousMs) {
       return VisitReduction(
         state: state,
         rejection: ObservationRejection.timestampWentBackwards,
@@ -93,54 +94,54 @@ final class VisitFilter {
     final events = <VisitEvent>[];
     var regions = Map<String, RegionState>.of(state.regions);
     var sensing = state.sensing;
-    var sensingLostAt = state.sensingLostAt;
+    var sensingLostAtMs = state.sensingLostAtMs;
 
     // ── ตรวจเพดานการตาบอดก่อนเสมอ ──
     // ต้องมาก่อนทุกอย่าง รวมถึงก่อน `SensingRestored` — การกลับมามองเห็นหลังตาบอด
     // นานเกินเพดานคือการ "ล้างแล้วเริ่มใหม่" ไม่ใช่การ "หักเวลาที่หยุดไป"
     if (sensing == SensingStatus.lost &&
-        sensingLostAt != null &&
-        now.difference(sensingLostAt) >= blindnessCeiling) {
+        sensingLostAtMs != null &&
+        nowMs - sensingLostAtMs >= blindnessCeilingMs) {
       regions = _resetAfterBlindnessCeiling(regions, events);
       sensing = SensingStatus.lostBeyondCeiling;
     }
 
     switch (observation) {
       case RegionSeen(:final regionId):
-        regions = _settleOne(regions, regionId, now, events, sensing);
-        regions = _applySeen(regions, regionId, now, events);
+        regions = _settleOne(regions, regionId, nowMs, events, sensing);
+        regions = _applySeen(regions, regionId, nowMs, events);
       case RegionNotSeen(:final regionId):
-        regions = _settleOne(regions, regionId, now, events, sensing);
-        regions = _applyNotSeen(regions, regionId, now);
+        regions = _settleOne(regions, regionId, nowMs, events, sensing);
+        regions = _applyNotSeen(regions, regionId, nowMs);
       case TimeAdvanced():
-        regions = _settleAll(regions, now, events, sensing);
+        regions = _settleAll(regions, nowMs, events, sensing);
       case SensingLost():
         // ตาบอดซ้ำระหว่างที่ตาบอดอยู่แล้วไม่เลื่อนจุดเริ่ม — ด้วยเหตุผลเดียวกับ
         // `exit` ซ้ำ: ถ้าเลื่อนได้ เพดานจะไม่มีวันถึงเมื่อระบบยิงถี่กว่าเพดาน
         if (sensing == SensingStatus.available) {
           sensing = SensingStatus.lost;
-          sensingLostAt = now;
+          sensingLostAtMs = nowMs;
         }
       case SensingRestored():
-        if (sensing == SensingStatus.lost && sensingLostAt != null) {
-          regions = _creditPausedSilence(regions, sensingLostAt, now);
+        if (sensing == SensingStatus.lost && sensingLostAtMs != null) {
+          regions = _creditPausedSilence(regions, sensingLostAtMs, nowMs);
         }
         sensing = SensingStatus.available;
-        sensingLostAt = null;
+        sensingLostAtMs = null;
         // ตัดสินทันทีด้วยนาฬิกาที่เดินต่อแล้ว — การมาเยือนที่ครบ cooldown ไป
         // ตั้งแต่ก่อนตาบอดต้องปิดตรงนี้ ไม่ใช่รอ observation ตัวถัดไป
-        regions = _settleAll(regions, now, events, sensing);
+        regions = _settleAll(regions, nowMs, events, sensing);
       case ObservationsEnded():
-        regions = _settleAll(regions, now, events, sensing);
-        regions = _closeOpenVisitsAtEdge(regions, now, events);
+        regions = _settleAll(regions, nowMs, events, sensing);
+        regions = _closeOpenVisitsAtEdge(regions, nowMs, events);
     }
 
     return VisitReduction(
       state: VisitFilterState(
         regions: Map<String, RegionState>.unmodifiable(regions),
-        lastObservationAt: now,
+        lastObservationAtMs: nowMs,
         sensing: sensing,
-        sensingLostAt: sensingLostAt,
+        sensingLostAtMs: sensingLostAtMs,
       ),
       events: List<VisitEvent>.unmodifiable(events),
     );
@@ -154,19 +155,20 @@ final class VisitFilter {
   /// จะเงียบ ส่วนที่อยู่ก่อนหน้าความเงียบไม่ได้ถูกกินไปจากใครจึงไม่ต้องคืน
   Map<String, RegionState> _creditPausedSilence(
     Map<String, RegionState> regions,
-    DateTime blindSince,
-    DateTime restoredAt,
+    EpochMillis blindSinceMs,
+    EpochMillis restoredAtMs,
   ) {
     final result = Map<String, RegionState>.of(regions);
     for (final regionId in regions.keys.toList()..sort()) {
       final region = result[regionId]!;
-      final absentSince = region.absentSince;
-      if (region.present || absentSince == null) continue;
-      final overlapStart =
-          absentSince.isAfter(blindSince) ? absentSince : blindSince;
-      if (!restoredAt.isAfter(overlapStart)) continue;
+      final absentSinceMs = region.absentSinceMs;
+      if (region.present || absentSinceMs == null) continue;
+      final overlapStartMs =
+          absentSinceMs > blindSinceMs ? absentSinceMs : blindSinceMs;
+      if (restoredAtMs <= overlapStartMs) continue;
       result[regionId] = region.copyWith(
-        silencePaused: region.silencePaused + restoredAt.difference(overlapStart),
+        silencePausedMs:
+            region.silencePausedMs + (restoredAtMs - overlapStartMs),
       );
     }
     return result;
@@ -190,8 +192,8 @@ final class VisitFilter {
       events.add(
         VisitEnded(
           regionId: regionId,
-          startedAt: visit.startedAt,
-          endedAt: region.lastPresentAt ?? visit.startedAt,
+          startedAtMs: visit.startedAtMs,
+          endedAtMs: region.lastPresentAtMs ?? visit.startedAtMs,
           reason: VisitEndReason.sensingLostBeyondCeiling,
         ),
       );
@@ -213,7 +215,7 @@ final class VisitFilter {
   RegionState _settle(
     String regionId,
     RegionState region,
-    DateTime now,
+    EpochMillis nowMs,
     List<VisitEvent> events,
     SensingStatus sensing,
   ) {
@@ -227,9 +229,10 @@ final class VisitFilter {
 
     // ระหว่างที่ยังอยู่ในโซน แพลตฟอร์มไม่ส่งอะไรมาเลย — ช่วงเงียบจึงต้องนับจาก
     // เวลาที่ประกาศว่าไม่เห็น ไม่ใช่จากเวลาที่เห็นครั้งสุดท้าย
-    final silenceStart = region.present ? region.lastPresentAt : region.absentSince;
-    if (silenceStart == null) return region;
-    if (now.difference(silenceStart) - region.silencePaused < cooldown) {
+    final silenceStartMs =
+        region.present ? region.lastPresentAtMs : region.absentSinceMs;
+    if (silenceStartMs == null) return region;
+    if (nowMs - silenceStartMs - region.silencePausedMs < cooldownMs) {
       return region;
     }
 
@@ -247,8 +250,8 @@ final class VisitFilter {
     events.add(
       VisitEnded(
         regionId: regionId,
-        startedAt: visit.startedAt,
-        endedAt: region.lastPresentAt ?? visit.startedAt,
+        startedAtMs: visit.startedAtMs,
+        endedAtMs: region.lastPresentAtMs ?? visit.startedAtMs,
         reason: VisitEndReason.cooldownElapsed,
       ),
     );
@@ -258,13 +261,13 @@ final class VisitFilter {
   Map<String, RegionState> _settleOne(
     Map<String, RegionState> regions,
     String regionId,
-    DateTime now,
+    EpochMillis nowMs,
     List<VisitEvent> events,
     SensingStatus sensing,
   ) {
     final region = regions[regionId];
     if (region == null) return regions;
-    final settled = _settle(regionId, region, now, events, sensing);
+    final settled = _settle(regionId, region, nowMs, events, sensing);
     if (identical(settled, region)) return regions;
     return {...regions, regionId: settled};
   }
@@ -274,14 +277,14 @@ final class VisitFilter {
   /// แล้วได้ผลเหมือนกัน)
   Map<String, RegionState> _settleAll(
     Map<String, RegionState> regions,
-    DateTime now,
+    EpochMillis nowMs,
     List<VisitEvent> events,
     SensingStatus sensing,
   ) {
     final result = Map<String, RegionState>.of(regions);
     for (final regionId in regions.keys.toList()..sort()) {
       result[regionId] =
-          _settle(regionId, result[regionId]!, now, events, sensing);
+          _settle(regionId, result[regionId]!, nowMs, events, sensing);
     }
     return result;
   }
@@ -291,16 +294,16 @@ final class VisitFilter {
   Map<String, RegionState> _applySeen(
     Map<String, RegionState> regions,
     String regionId,
-    DateTime now,
+    EpochMillis nowMs,
     List<VisitEvent> events,
   ) {
     final previous = regions[regionId];
     final seen = (previous ?? RegionState.unknown).copyWith(
       present: true,
-      lastPresentAt: now,
+      lastPresentAtMs: nowMs,
       clearAbsentSince: true,
       // เห็นอีกครั้ง = ความเงียบช่วงเดิมจบแล้ว เวลาที่หยุดไว้ของช่วงนั้นหมดความหมาย
-      silencePaused: Duration.zero,
+      silencePausedMs: 0,
     );
 
     if (seen.visit != null) {
@@ -316,12 +319,12 @@ final class VisitFilter {
         : VisitStartEvidence.alreadyInsideAtFirstObservation;
 
     events.add(
-      VisitStarted(regionId: regionId, at: now, evidence: evidence),
+      VisitStarted(regionId: regionId, atMs: nowMs, evidence: evidence),
     );
     return {
       ...regions,
       regionId: seen.copyWith(
-        visit: OpenVisit(startedAt: now, evidence: evidence),
+        visit: OpenVisit(startedAtMs: nowMs, evidence: evidence),
       ),
     };
   }
@@ -329,22 +332,22 @@ final class VisitFilter {
   Map<String, RegionState> _applyNotSeen(
     Map<String, RegionState> regions,
     String regionId,
-    DateTime now,
+    EpochMillis nowMs,
   ) {
     final previous = regions[regionId] ?? RegionState.unknown;
     // `exit` ซ้ำ ๆ ติดกันต้องไม่เลื่อนจุดเริ่มความเงียบออกไป มิฉะนั้น cooldown
     // จะไม่มีวันครบถ้าแพลตฟอร์มยิง `exit` ถี่กว่า cooldown
-    final startsNewSilence = previous.present || previous.absentSince == null;
-    final absentSince = startsNewSilence ? now : previous.absentSince!;
+    final startsNewSilence = previous.present || previous.absentSinceMs == null;
+    final absentSinceMs = startsNewSilence ? nowMs : previous.absentSinceMs!;
     return {
       ...regions,
       regionId: previous.copyWith(
         present: false,
-        absentSince: absentSince,
+        absentSinceMs: absentSinceMs,
         // ความเงียบช่วงใหม่เริ่มนับศูนย์เสมอ · ถ้าเป็น `exit` ซ้ำของช่วงเดิม
         // ต้องคงเวลาที่หยุดไว้ ไม่งั้นการตาบอดที่ผ่านมาจะถูกลืม
-        silencePaused:
-            startsNewSilence ? Duration.zero : previous.silencePaused,
+        silencePausedMs:
+            startsNewSilence ? 0 : previous.silencePausedMs,
       ),
     };
   }
@@ -352,7 +355,7 @@ final class VisitFilter {
   /// ปิดการมาเยือนที่ยังเปิดค้างที่ **ขอบข้อมูล** — ห้ามทิ้ง
   Map<String, RegionState> _closeOpenVisitsAtEdge(
     Map<String, RegionState> regions,
-    DateTime now,
+    EpochMillis nowMs,
     List<VisitEvent> events,
   ) {
     final result = Map<String, RegionState>.of(regions);
@@ -363,11 +366,12 @@ final class VisitFilter {
       events.add(
         VisitEnded(
           regionId: regionId,
-          startedAt: visit.startedAt,
+          startedAtMs: visit.startedAtMs,
           // ยังอยู่ในโซนตอนข้อมูลหมด → ปิดที่ขอบข้อมูล
           // ไม่อยู่แล้วแต่ยังไม่ครบ cooldown → ปิดที่หลักฐานสุดท้ายที่มี
-          endedAt:
-              region.present ? now : (region.lastPresentAt ?? visit.startedAt),
+          endedAtMs: region.present
+              ? nowMs
+              : (region.lastPresentAtMs ?? visit.startedAtMs),
           reason: VisitEndReason.observationsEnded,
         ),
       );

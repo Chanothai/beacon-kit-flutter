@@ -1,23 +1,24 @@
+import 'epoch_millis.dart';
 import 'visit_event.dart';
 
 /// การมาเยือนที่เปิดค้างอยู่ของ region หนึ่ง
 final class OpenVisit {
-  const OpenVisit({required this.startedAt, required this.evidence});
+  const OpenVisit({required this.startedAtMs, required this.evidence});
 
-  final DateTime startedAt;
+  final EpochMillis startedAtMs;
   final VisitStartEvidence evidence;
 
   @override
   bool operator ==(Object other) =>
       other is OpenVisit &&
-      other.startedAt == startedAt &&
+      other.startedAtMs == startedAtMs &&
       other.evidence == evidence;
 
   @override
-  int get hashCode => Object.hash(startedAt, evidence);
+  int get hashCode => Object.hash(startedAtMs, evidence);
 
   @override
-  String toString() => 'OpenVisit($startedAt, ${evidence.name})';
+  String toString() => 'OpenVisit(${debugTime(startedAtMs)}, ${evidence.name})';
 }
 
 /// state ของ **region เดียว**
@@ -28,9 +29,9 @@ final class OpenVisit {
 final class RegionState {
   const RegionState({
     required this.present,
-    this.lastPresentAt,
-    this.absentSince,
-    this.silencePaused = Duration.zero,
+    this.lastPresentAtMs,
+    this.absentSinceMs,
+    this.silencePausedMs = 0,
     this.visit,
   });
 
@@ -38,13 +39,13 @@ final class RegionState {
   final bool present;
 
   /// หลักฐานล่าสุดที่ยืนยันว่า **อยู่** — `null` ถ้ายังไม่เคยเห็นเลย
-  final DateTime? lastPresentAt;
+  final EpochMillis? lastPresentAtMs;
 
   /// ความเงียบเริ่มเมื่อไร — `null` เมื่อ [present] เป็น `true`
   ///
   /// เก็บ **เวลาที่ประกาศว่าไม่เห็นครั้งแรกของช่วงนั้น** ไม่ใช่ครั้งล่าสุด —
   /// `exit` ซ้ำติดกันจึงไม่รีเซ็ต cooldown ให้ยาวออกไปเรื่อย ๆ
-  final DateTime? absentSince;
+  final EpochMillis? absentSinceMs;
 
   /// เวลาที่ **ถูกหักออก** จากความเงียบช่วงปัจจุบันเพราะเราตาบอด
   ///
@@ -52,10 +53,10 @@ final class RegionState {
   /// **รีเซ็ตเป็นศูนย์ทุกครั้งที่ความเงียบช่วงใหม่เริ่ม** (เห็น beacon อีกครั้ง
   /// หรือเปลี่ยนจากอยู่เป็นไม่อยู่)
   ///
-  /// เก็บแยกจาก [absentSince] โดยตั้งใจ — [absentSince] และ [lastPresentAt] เป็น
-  /// **ข้อเท็จจริงที่วัดได้** และถูกรายงานใน `VisitEnded.endedAt` การเลื่อนค่าพวกนั้น
+  /// เก็บแยกจาก [absentSinceMs] โดยตั้งใจ — [absentSinceMs] และ [lastPresentAtMs] เป็น
+  /// **ข้อเท็จจริงที่วัดได้** และถูกรายงานใน `VisitEnded.endedAtMs` การเลื่อนค่าพวกนั้น
   /// ให้ตรงกับนาฬิกาที่หยุดจะทำให้ไฟล์หลักฐานโกหก
-  final Duration silencePaused;
+  final EpochMillis silencePausedMs;
 
   final OpenVisit? visit;
 
@@ -64,25 +65,26 @@ final class RegionState {
 
   /// state ของ region ที่ **รู้ว่ากำลังอยู่ในโซน** ตั้งแต่ก่อน observation แรก
   ///
-  /// ใช้ตอนกู้ state กลับมาหลัง process ตาย (Android) — [seenAt] คือหลักฐาน
+  /// ใช้ตอนกู้ state กลับมาหลัง process ตาย (Android) — [seenAtMs] คือหลักฐาน
   /// ล่าสุดที่บันทึกไว้ ไม่ใช่เวลาที่กู้กลับมา
-  factory RegionState.insideSince(DateTime seenAt, {OpenVisit? visit}) =>
-      RegionState(present: true, lastPresentAt: seenAt, visit: visit);
+  factory RegionState.insideSince(EpochMillis seenAtMs, {OpenVisit? visit}) =>
+      RegionState(present: true, lastPresentAtMs: seenAtMs, visit: visit);
 
   RegionState copyWith({
     bool? present,
-    DateTime? lastPresentAt,
-    DateTime? absentSince,
+    EpochMillis? lastPresentAtMs,
+    EpochMillis? absentSinceMs,
     bool clearAbsentSince = false,
-    Duration? silencePaused,
+    EpochMillis? silencePausedMs,
     OpenVisit? visit,
     bool clearVisit = false,
   }) =>
       RegionState(
         present: present ?? this.present,
-        lastPresentAt: lastPresentAt ?? this.lastPresentAt,
-        absentSince: clearAbsentSince ? null : (absentSince ?? this.absentSince),
-        silencePaused: silencePaused ?? this.silencePaused,
+        lastPresentAtMs: lastPresentAtMs ?? this.lastPresentAtMs,
+        absentSinceMs:
+            clearAbsentSince ? null : (absentSinceMs ?? this.absentSinceMs),
+        silencePausedMs: silencePausedMs ?? this.silencePausedMs,
         visit: clearVisit ? null : (visit ?? this.visit),
       );
 
@@ -90,19 +92,19 @@ final class RegionState {
   bool operator ==(Object other) =>
       other is RegionState &&
       other.present == present &&
-      other.lastPresentAt == lastPresentAt &&
-      other.absentSince == absentSince &&
-      other.silencePaused == silencePaused &&
+      other.lastPresentAtMs == lastPresentAtMs &&
+      other.absentSinceMs == absentSinceMs &&
+      other.silencePausedMs == silencePausedMs &&
       other.visit == visit;
 
   @override
-  int get hashCode =>
-      Object.hash(present, lastPresentAt, absentSince, silencePaused, visit);
+  int get hashCode => Object.hash(
+      present, lastPresentAtMs, absentSinceMs, silencePausedMs, visit);
 
   @override
   String toString() => 'RegionState(present: $present, '
-      'lastPresentAt: $lastPresentAt, absentSince: $absentSince, '
-      'silencePaused: $silencePaused, visit: $visit)';
+      'lastPresentAtMs: $lastPresentAtMs, absentSinceMs: $absentSinceMs, '
+      'silencePausedMs: $silencePausedMs, visit: $visit)';
 }
 
 /// ความสามารถในการมองเห็นของเราตอนนี้ — **สถานะรวม ไม่แยกต่อ region**
@@ -127,28 +129,28 @@ enum SensingStatus {
 final class VisitFilterState {
   const VisitFilterState({
     required this.regions,
-    required this.lastObservationAt,
+    required this.lastObservationAtMs,
     this.sensing = SensingStatus.available,
-    this.sensingLostAt,
+    this.sensingLostAtMs,
   });
 
   /// state แยกต่อ region — key คือ region identifier
   final Map<String, RegionState> regions;
 
   /// เวลาของ observation ล่าสุดที่ **รับไว้** — ใช้ปฏิเสธเวลาที่เดินถอยหลัง
-  final DateTime? lastObservationAt;
+  final EpochMillis? lastObservationAtMs;
 
   /// มองเห็นอยู่หรือไม่ — **สถานะรวมของทั้งชั้นกรอง**
   final SensingStatus sensing;
 
   /// ช่วงตาบอดปัจจุบันเริ่มเมื่อไร — `null` เมื่อ [sensing] เป็น
   /// [SensingStatus.available]
-  final DateTime? sensingLostAt;
+  final EpochMillis? sensingLostAtMs;
 
   bool get isBlind => sensing != SensingStatus.available;
 
   static const VisitFilterState initial =
-      VisitFilterState(regions: {}, lastObservationAt: null);
+      VisitFilterState(regions: {}, lastObservationAtMs: null);
 
   RegionState regionState(String regionId) =>
       regions[regionId] ?? RegionState.unknown;
@@ -161,7 +163,8 @@ final class VisitFilterState {
       ..sort();
 
   @override
-  String toString() => 'VisitFilterState(lastObservationAt: $lastObservationAt, '
-      'sensing: ${sensing.name}, sensingLostAt: $sensingLostAt, '
+  String toString() =>
+      'VisitFilterState(lastObservationAtMs: $lastObservationAtMs, '
+      'sensing: ${sensing.name}, sensingLostAtMs: $sensingLostAtMs, '
       'regions: $regions)';
 }
