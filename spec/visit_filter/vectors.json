@@ -1,0 +1,1978 @@
+{
+  "formatVersion": 1,
+  "note": "สัญญากลางของชั้นกรอง visit — Dart / Kotlin / Swift ต้องให้ผลตรงกันทุกช่อง. เวลาทุกค่าเป็นจำนวนเต็มมิลลิวินาทีนับจาก epoch (UTC). สร้างด้วย `dart run bin/generate_vectors.dart` ห้ามแก้ด้วยมือ.",
+  "source": "prototype/visit_filter",
+  "cases": [
+    {
+      "name": "arrival-observed",
+      "why": "เห็นการเปลี่ยนจากไม่อยู่เป็นอยู่ → evidence ต้องเป็น arrivalObserved",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343210000
+        }
+      ],
+      "observationCount": 2,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343210000,
+          "evidence": "arrivalObserved"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343210000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343210000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": {
+              "startedAtMs": 1788343210000,
+              "evidence": "arrivalObserved"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "already-inside-at-first-observation",
+      "why": "observation แรกบอกว่าอยู่แล้ว → ตอบเวลาที่มาถึงไม่ได้ (เกิดจริงกับไฟล์ Android)",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        }
+      ],
+      "observationCount": 1,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343200000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": {
+              "startedAtMs": 1788343200000,
+              "evidence": "alreadyInsideAtFirstObservation"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "still-present-when-cooldown-elapses",
+      "why": "กับดักหลัก — ครบ cooldown ตอนยังเห็นอยู่ ห้ามปิดและห้ามยิงอะไร ไฟล์ iOS มีช่วงอยู่ในโซนต่อเนื่อง 3 ชม 10 น โดยไม่มี event เลย",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788357600000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788372000000
+        }
+      ],
+      "observationCount": 3,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788372000000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": {
+              "startedAtMs": 1788343200000,
+              "evidence": "alreadyInsideAtFirstObservation"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "absent-when-cooldown-elapses",
+      "why": "ครบ cooldown ตอนไม่เห็นแล้ว → ปิดที่หลักฐานสุดท้าย ไม่ใช่ที่เวลาที่รู้ตัว และห้ามยิง VisitStarted ตรงนั้น",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343320000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343380000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788375600000
+        }
+      ],
+      "observationCount": 4,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343320000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788375600000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343320000,
+            "absentSinceMs": 1788343380000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "rearm-then-emit-on-next-sighting",
+      "why": "ปิดแล้วครั้งหน้าที่เจอค่อยยิง · ลำดับ event ต้องเป็น started → ended → started",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343561000
+        }
+      ],
+      "observationCount": 3,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        },
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343561000,
+          "evidence": "arrivalObserved"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343561000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343561000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": {
+              "startedAtMs": 1788343561000,
+              "evidence": "arrivalObserved"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "repeated-exit-does-not-extend-silence",
+      "why": "exit ซ้ำติดกันต้องไม่เลื่อนจุดเริ่มความเงียบ มิฉะนั้น cooldown จะไม่มีวันครบถ้าแพลตฟอร์มยิง exit ถี่กว่า cooldown",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343320000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343380000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343561000
+        }
+      ],
+      "observationCount": 5,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343561000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343260000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "regions-are-independent",
+      "why": "ออกจาก A แล้วเข้า B ต้องไม่กลืนกัน · cooldown เดินแยกกันต่อ region",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "b",
+          "atMs": 1788343440000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "b",
+          "atMs": 1788343500000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343590000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788343800000
+        }
+      ],
+      "observationCount": 6,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitStarted",
+          "regionId": "b",
+          "atMs": 1788343440000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "b",
+          "startedAtMs": 1788343440000,
+          "endedAtMs": 1788343440000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343800000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343260000,
+            "silencePausedMs": 0,
+            "visit": null
+          },
+          "b": {
+            "present": false,
+            "lastPresentAtMs": 1788343440000,
+            "absentSinceMs": 1788343500000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "multi-region-settle-order",
+      "why": "หลาย region หมด cooldown พร้อมกัน → ลำดับ event เรียงตาม identifier **เคสนี้จับ Swift โดยเฉพาะ** เพราะ Dictionary ของ Swift ไม่มีลำดับ และลำดับเปลี่ยนได้ทุกครั้งที่รัน",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "zulu",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "alpha",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "mike",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "zulu",
+          "atMs": 1788343201000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "alpha",
+          "atMs": 1788343201000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "mike",
+          "atMs": 1788343201000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343560000
+        }
+      ],
+      "observationCount": 7,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "zulu",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitStarted",
+          "regionId": "alpha",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitStarted",
+          "regionId": "mike",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "alpha",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "mike",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "zulu",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343560000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "alpha": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343201000,
+            "silencePausedMs": 0,
+            "visit": null
+          },
+          "mike": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343201000,
+            "silencePausedMs": 0,
+            "visit": null
+          },
+          "zulu": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343201000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "open-visit-closed-at-data-edge",
+      "why": "ยังอยู่ในโซนตอนข้อมูลหมด → ปิดที่ขอบ ห้ามทิ้ง (GROUND_TRUTH.md: ถ้าทิ้งจะได้ 0 ช่วงจากทั้งสองไฟล์ ซึ่งผิด)",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788354000000
+        }
+      ],
+      "observationCount": 2,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788354000000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788354000000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "edge-close-while-absent-within-cooldown",
+      "why": "ไม่อยู่แล้วแต่ยังไม่ครบ cooldown ตอนข้อมูลหมด → ปิดที่หลักฐานสุดท้าย ไม่ใช่ที่ขอบ",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788343380000
+        }
+      ],
+      "observationCount": 3,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343380000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343260000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "timestamp-went-backwards-is-rejected",
+      "why": "เวลาเดินถอยหลัง → ปฏิเสธ state ไม่ถูกแก้ **ห้ามปรับเวลาให้เอง** เพราะการปรับคือการเดา",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343500000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343440000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343560000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788343620000
+        }
+      ],
+      "observationCount": 4,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343500000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343500000,
+          "endedAtMs": 1788343500000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [
+        {
+          "index": 1,
+          "reason": "timestampWentBackwards"
+        }
+      ],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343620000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343500000,
+            "absentSinceMs": 1788343560000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "identical-timestamps-are-accepted",
+      "why": "เวลาเท่ากันเป๊ะต้องรับได้ (ระบบคิว event แล้วส่งมาติดกัน) ผลขึ้นกับลำดับที่ป้อน — ล็อกลำดับที่ถือว่าถูกไว้ที่นี่",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788343320000
+        }
+      ],
+      "observationCount": 5,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "arrivalObserved"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343320000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343320000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343260000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "restored-state-with-open-visit",
+      "why": "กู้ state ที่บันทึกไว้กลับมา (Android process ตายแล้วเกิดใหม่) ต้องไม่เริ่มการมาเยือนซ้ำ",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": 1788343200000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": {
+              "startedAtMs": 1788343200000,
+              "evidence": "arrivalObserved"
+            }
+          }
+        }
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345000000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788345060000
+        }
+      ],
+      "observationCount": 2,
+      "expectedEvents": [
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788345060000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788345060000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788345000000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "flap-storm-collapses-to-one-visit",
+      "why": "เข้า-ออกทุก 30 วินาที 40 รอบ ภายใน cooldown → การมาเยือนเดียว",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343230000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343290000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343320000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343350000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343380000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343410000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343440000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343470000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343500000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343530000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343560000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343590000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343620000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343650000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343680000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343710000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343740000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343770000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343800000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343830000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343860000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343890000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343920000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343950000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343980000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344010000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344040000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344070000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344100000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344130000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344160000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344190000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344220000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344250000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344280000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344310000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344340000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344370000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344400000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344430000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344460000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344490000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344520000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344550000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344580000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344610000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344640000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344670000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344700000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344730000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344760000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344790000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344820000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344850000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344880000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344910000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788344940000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788344970000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345000000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345030000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345060000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345090000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345120000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345150000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345180000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345210000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345240000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345270000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345300000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345330000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345360000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345390000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345420000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345450000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345480000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345510000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345540000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788345570000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788345900000
+        }
+      ],
+      "observationCount": 82,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "arrivalObserved"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788345540000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788345900000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788345540000,
+            "absentSinceMs": 1788345570000,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "blindness-pauses-cooldown-below-ceiling",
+      "why": "บั๊กที่พบจริง — ปิด Bluetooth 10 นาทีขณะนั่งอยู่ที่เดิม เดิมได้ VisitStarted 2 ครั้ง = ลูกค้าได้แจ้งเตือนโปรโมชันซ้ำ ต้องเหลือ 1 ครั้ง",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343260000,
+          "cause": "bluetoothOff"
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788343860000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343860000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788343920000
+        }
+      ],
+      "observationCount": 6,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343920000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788343920000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788343860000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "blindness-beyond-ceiling-resets",
+      "why": "ตาบอดเกินเพดาน → ปิดการมาเยือนด้วย sensingLostBeyondCeiling และล้างสถานะทิ้ง · ครั้งหน้าที่เห็นต้องเป็น alreadyInsideAtFirstObservation เพราะเราไม่เคยเห็นการมาถึง",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343320000,
+          "cause": "bluetoothOff"
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788345000000
+        },
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788345060000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788345120000
+        }
+      ],
+      "observationCount": 6,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "sensingLostBeyondCeiling"
+        },
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788345060000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788345060000,
+          "endedAtMs": 1788345120000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788345120000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": true,
+            "lastPresentAtMs": 1788345060000,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "blindness-exactly-at-ceiling-resets",
+      "why": "ขอบเพดานพอดี — ใช้เกณฑ์ >= เหมือน cooldown · ล็อกไว้เพื่อให้ทั้งสามภาษาตัดสินขอบเหมือนกัน",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343320000,
+          "cause": "locationServicesOff"
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788344220000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788344280000
+        }
+      ],
+      "observationCount": 5,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "sensingLostBeyondCeiling"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788344280000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      }
+    },
+    {
+      "name": "blindness-one-millisecond-below-ceiling",
+      "why": "อีกฝั่งของเพดาน — ขาด 1 มิลลิวินาทีต้องยัง**หัก**เวลา ไม่ใช่ล้างทิ้ง",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343320000,
+          "cause": "permissionRevoked"
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788344219999
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788344280000
+        }
+      ],
+      "observationCount": 5,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788344280000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343260000,
+            "silencePausedMs": 899999,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "blindness-straddles-cooldown-expiry",
+      "why": "ตาบอดคาบเกี่ยวกับจังหวะที่ cooldown จะครบ — ห้ามปิดระหว่างตาบอด และหลังกลับมามองเห็นต้องนับเวลาที่เหลือต่อ ไม่ใช่เริ่มนับใหม่",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343320000,
+          "cause": "bluetoothOff"
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343740000
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788343800000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343920000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788344040000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788344100000
+        }
+      ],
+      "observationCount": 8,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788344100000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343260000,
+            "silencePausedMs": 480000,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "blindness-starts-while-still-present",
+      "why": "ตาบอดก่อนแล้วค่อยได้ exit — หักเฉพาะส่วนที่ทับกับความเงียบจริง ส่วนที่อยู่ก่อนความเงียบไม่ได้ถูกใครกินไปจึงไม่ต้องคืน",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343260000,
+          "cause": "scanRegistrationLost"
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343380000
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788343680000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343920000
+        },
+        {
+          "kind": "timeAdvanced",
+          "atMs": 1788343980000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788344040000
+        }
+      ],
+      "observationCount": 7,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "cooldownElapsed"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788344040000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "a": {
+            "present": false,
+            "lastPresentAtMs": 1788343200000,
+            "absentSinceMs": 1788343380000,
+            "silencePausedMs": 300000,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "repeated-sensing-lost-does-not-move-ceiling",
+      "why": "SensingLost ซ้ำระหว่างตาบอดต้องไม่เลื่อนจุดเริ่ม ไม่งั้นเพดานจะไม่มีวันถึงถ้าระบบยิงถี่กว่าเพดาน (หลักการเดียวกับ exit ซ้ำ)",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343260000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343320000,
+          "cause": "bluetoothOff"
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343680000,
+          "cause": "bluetoothOff"
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788344040000,
+          "cause": "unknown"
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788344280000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788344340000
+        }
+      ],
+      "observationCount": 7,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "a",
+          "atMs": 1788343200000,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "a",
+          "startedAtMs": 1788343200000,
+          "endedAtMs": 1788343200000,
+          "reason": "sensingLostBeyondCeiling"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788344340000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      }
+    },
+    {
+      "name": "blindness-with-no-open-visit-emits-nothing",
+      "why": "ตาบอดตอนไม่มีการมาเยือนเปิดค้าง — ต้องเงียบสนิท รวมถึงตอนเกินเพดานด้วย",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "observations": [
+        {
+          "kind": "regionNotSeen",
+          "regionId": "a",
+          "atMs": 1788343200000
+        },
+        {
+          "kind": "sensingLost",
+          "atMs": 1788343260000,
+          "cause": "bluetoothOff"
+        },
+        {
+          "kind": "sensingRestored",
+          "atMs": 1788345600000
+        },
+        {
+          "kind": "observationsEnded",
+          "atMs": 1788345660000
+        }
+      ],
+      "observationCount": 4,
+      "expectedEvents": [],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788345660000,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      }
+    },
+    {
+      "name": "real-log-ios-2026-08-30",
+      "why": "เกณฑ์รับจาก GROUND_TRUTH.md — enter ดิบ 86 ครั้ง ความจริงคือมาเยือน 1 ครั้ง",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "logFile": "docs/test-data/2026-08-30_overnight_region_flapping.log",
+      "observationCount": 177,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "k9p-default",
+          "atMs": 1788089687313,
+          "evidence": "arrivalObserved"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "k9p-default",
+          "startedAtMs": 1788089687313,
+          "endedAtMs": 1788140467768,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788140467768,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "k9p-default": {
+            "present": true,
+            "lastPresentAtMs": 1788135317577,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    },
+    {
+      "name": "real-log-android-2026-09-01",
+      "why": "เกณฑ์รับจาก GROUND_TRUTH.md — enter ดิบ 63 ครั้ง ความจริงคือมาเยือน 1 ครั้ง ต้องผ่านด้วย cooldown ค่าเดียวกับไฟล์ iOS",
+      "cooldownMs": 300000,
+      "blindnessCeilingMs": 900000,
+      "initialState": {
+        "lastObservationAtMs": null,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {}
+      },
+      "logFile": "docs/test-data/2026-09-01_android_overnight_region_flapping.log",
+      "observationCount": 220,
+      "expectedEvents": [
+        {
+          "kind": "visitStarted",
+          "regionId": "k9p-default",
+          "atMs": 1788252611073,
+          "evidence": "alreadyInsideAtFirstObservation"
+        },
+        {
+          "kind": "visitEnded",
+          "regionId": "k9p-default",
+          "startedAtMs": 1788252611073,
+          "endedAtMs": 1788313714516,
+          "reason": "observationsEnded"
+        }
+      ],
+      "expectedRejections": [],
+      "expectedFinalState": {
+        "lastObservationAtMs": 1788313714516,
+        "sensing": "available",
+        "sensingLostAtMs": null,
+        "regions": {
+          "k9p-default": {
+            "present": true,
+            "lastPresentAtMs": 1788308443185,
+            "absentSinceMs": null,
+            "silencePausedMs": 0,
+            "visit": null
+          }
+        }
+      }
+    }
+  ]
+}

@@ -190,6 +190,82 @@ dispatch* ที่เอกสารระบุ ไม่ใช่การร
 
 ---
 
+## 9. `BluetoothAdapter.ACTION_STATE_CHANGED` ประกาศใน manifest **แล้วไม่ได้รับ** บน API 26+ — ✅ ยืนยันแล้ว
+
+*(ค้นเพิ่ม 2 กันยายน 2026 — คำถามที่ `prototype/visit_filter/SENSING.md` ค้างไว้ก่อนเริ่ม port)*
+
+**คำถาม:** ถ้าประกาศ `<receiver>` ที่กรอง `android.bluetooth.adapter.action.STATE_CHANGED`
+ไว้ใน manifest จะได้รับ broadcast ตอนผู้ใช้เปิด/ปิด Bluetooth หรือไม่ — เพราะถ้าได้
+เราจะรู้ **เวลาที่เริ่มตาบอดจริง** แทนที่จะต้องเดาจากการ poll ตอนถูกปลุก
+
+**คำตอบ: ไม่ได้รับ**
+
+ข้อจำกัดของ Android 8.0:
+
+> "Apps that target Android 8.0 or higher can no longer register broadcast receivers
+> for implicit broadcasts in their manifest unless the broadcast is restricted to that
+> app specifically. An *implicit broadcast* is a broadcast that does not target a
+> specific component within an app."
+> — https://developer.android.com/about/versions/oreo/background
+
+หน้ารายการข้อยกเว้นระบุขอบเขตของตัวเองไว้ว่า:
+
+> "As part of the Android 8.0 (API level 26) background execution limits, apps that
+> target the API level 26 or higher can't register broadcast receivers for implicit
+> broadcasts in their manifest unless the broadcast is sent specifically to them.
+> However, several broadcasts are exempted from these limitations. **Apps can continue
+> to register listeners for the following broadcasts, no matter what API level the apps
+> target.**"
+> — https://developer.android.com/develop/background-work/background-tasks/broadcasts/broadcast-exceptions
+
+**ดึงรายการข้อยกเว้นทั้งหน้ามาไล่ดูทีละข้อแล้ว — Bluetooth มีอยู่แค่สี่ตัวนี้:**
+
+> "`BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED`,
+> `BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED`, `ACTION_ACL_CONNECTED`,
+> `ACTION_ACL_DISCONNECTED` — User experience is not likely to suffer if apps receive
+> broadcasts for these Bluetooth events."
+
+**`android.bluetooth.adapter.action.STATE_CHANGED` ไม่ปรากฏในหน้ารายการข้อยกเว้นเลย**
+มันจึงเป็น implicit broadcast ธรรมดาที่ตกอยู่ใต้ข้อจำกัด → **ตัวรับที่ประกาศใน
+manifest จะไม่ถูกเรียก**
+
+ทางเลือกเดียวที่เอกสารให้ไว้คือลงทะเบียนตอนรัน:
+
+> "Apps can use `Context.registerReceiver()` at runtime to register a receiver for any
+> broadcast, whether implicit or explicit."
+> — https://developer.android.com/about/versions/oreo/background
+
+⚠️ **ซึ่งใช้กับเคสของเราไม่ได้** — `registerReceiver()` ผูกกับ `Context` ที่มีชีวิต
+ตัวรับหายไปพร้อม process และ ADR-14 ทั้งฉบับตั้งอยู่บนข้อเท็จจริงว่าเราไม่มี process
+ที่มีชีวิตอยู่แล้ว
+
+**`targetSdk` ของ example app มาจาก `flutter.targetSdkVersion`**
+(`packages/beacon_kit/example/android/app/build.gradle.kts:23`) ซึ่งเป็นค่าที่สูงกว่า
+26 มากอยู่แล้ว และ Play Store ก็บังคับค่าขั้นต่ำที่สูงกว่านั้น — **ไม่มีทางหลบข้อจำกัด
+นี้ด้วยการลด targetSdk**
+
+### ผลพลอยได้: ยืนยันสมมติฐานเดิมของ ADR-14 ที่ยังไม่เคยตรวจ
+
+ตัวรับที่ `AndroidManifest.xml:83-91` ประกาศไว้แล้วสามตัว — หน้าเดียวกันนี้ยืนยันว่า
+**ใช้ได้จริงทั้งสามตัว**:
+
+> "`ACTION_LOCKED_BOOT_COMPLETED`, `ACTION_BOOT_COMPLETED` — Exempted because these
+> broadcasts are sent only once, at first boot, and many apps need to receive these
+> broadcasts, such as to schedule jobs and alarms."
+
+และ `MY_PACKAGE_REPLACED` ไม่ได้อยู่ในรายการข้อยกเว้น แต่ได้รับด้วยเหตุผลคนละอย่าง:
+
+> "`ACTION_MY_PACKAGE_REPLACED` is also an implicit broadcast, but since it is sent
+> only to the app whose package was replaced it will be delivered to manifest-registered
+> receivers."
+> — https://developer.android.com/about/versions/oreo/background
+
+*(หมายเหตุ: `LOCKED_BOOT_COMPLETED` ได้รับการยกเว้นจากข้อจำกัด implicit broadcast ก็จริง
+แต่ยัง **ไม่ถูกส่งมา** เพราะตัวรับของเราไม่ได้ประกาศ `directBootAware` — คนละข้อจำกัดกัน
+ดูข้อ 6 และ runbook §5)*
+
+---
+
 ## หาแหล่งอ้างอิงไม่ได้ / ยังไม่ยืนยัน
 
 รายการนี้ **ไม่ใช่** ข้ออ้างที่เราใช้อยู่ แต่เป็นสิ่งที่ถูกถามถึงบ่อยและยังไม่มีเอกสารทางการรองรับ — บันทึกไว้เพื่อไม่ให้มีใครเติมเข้ามาโดยคิดว่าเคยตรวจแล้ว
@@ -200,3 +276,6 @@ dispatch* ที่เอกสารระบุ ไม่ใช่การร
 - **`importance` ที่ระบบจัดให้ process ขณะที่ `BroadcastReceiver.onReceive()` กำลังทำงาน** — เอกสารของ `ActivityManager.RunningAppProcessInfo` อธิบาย `IMPORTANCE_SERVICE` ว่า "This process contains **services** that should remain running" และ `IMPORTANCE_FOREGROUND` ว่า "This process is running the foreground UI" — **ไม่มีค่าคงที่ตัวไหนที่เอกสารระบุว่าใช้กับ broadcast receiver** จึง **หาแหล่งอ้างอิงไม่ได้** ว่า process ที่ถูกสร้างมาเพื่อ `onReceive` จะได้ค่าอะไร → **ห้ามใช้ `importance=` เป็นเกณฑ์ผ่าน/ไม่ผ่าน** เก็บเป็นสัญญาณดิบเท่านั้น (https://developer.android.com/reference/android/app/ActivityManager.RunningAppProcessInfo)
 - **เครื่องทดสอบใช้ file-based encryption หรือไม่** — ยังไม่ได้ตรวจ ดูข้อ 5
 - **`PendingIntent` scan รอดข้ามการรีบูตหรือไม่** — เอกสาร `BluetoothLeScanner` ไม่ระบุ ข้อสรุปที่ ADR-14 ใช้ ("ไม่รอด") มาจากการทดสอบบนเครื่องจริง ไม่ใช่จากเอกสาร
+- **ข้อความคำต่อคำของ `BluetoothAdapter.ACTION_STATE_CHANGED` และ `isEnabled()`** — พยายามดึงหน้า `https://developer.android.com/reference/android/bluetooth/BluetoothAdapter` (ทั้งรุ่น Java และ Kotlin) แล้ว **ได้แต่หน้าสารบัญ ไม่ได้เนื้อหาของสมาชิกคลาส** จึง **ยังไม่ได้ยืนยันคำต่อคำ** · ข้อสรุปในข้อ 9 ไม่ได้พึ่งข้อความจากหน้านี้เลย (พึ่งหน้ารายการข้อยกเว้นกับหน้า background execution limits) แต่ถ้าจะอ้างรายละเอียดของ constant นี้ต้องไปดึงมาก่อน
+- **`LocationManager.isLocationEnabled()` มีตั้งแต่ API ไหน และต้องมีสิทธิ์อะไร** — `SENSING.md` เสนอให้ใช้ตรวจว่า location service ปิดอยู่หรือไม่ **ยังไม่ได้ยืนยันกับเอกสาร**
+- **เมื่อ Bluetooth ถูกปิด ระบบยกเลิกการลงทะเบียน `startScan(..., PendingIntent)` ทิ้งหรือแค่หยุดส่งผล** — ต่างกันมากสำหรับเรา (ถ้ายกเลิกทิ้ง ต้องลงทะเบียนใหม่เองตอน Bluetooth กลับมา ไม่ใช่แค่รอ) **หาแหล่งอ้างอิงไม่ได้**
