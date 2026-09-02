@@ -19,7 +19,7 @@ Flutter SDK กลางของ BigC สำหรับรับข้อม�
 | **ปลุกแอปหลังผู้ใช้ปัดแอปทิ้งเอง (B5)** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว — **เฉพาะเคส force-quit** | ทดสอบ 2 รอบด้วย release/profile build หลังลบแอปติดตั้งใหม่: iOS ปลุก process ที่ตายแล้วขึ้นมาส่ง event จริง (exit 55/30 วิ · enter 5/3 วิ) **ยังไม่ได้ทดสอบกรณีระบบฆ่าแอปเองจากหน่วยความจำ ซึ่งเกิดบ่อยกว่ามากในการใช้งานจริง** |
 | **GATT connect / auth / config / OTA** | ❌ **ยังไม่ implement** | ไม่มีโค้ดส่วนนี้อยู่เลย `connect()` throw `UnsupportedError` ทันที |
 | **อ่านประวัติ sensor ย้อนหลัง** | ❌ **ยังไม่ implement** | มีแต่ interface ว่าง ๆ ไม่มี implementation |
-| **Android — สแกนตอนแอปเปิดอยู่** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | เห็น K9P จริงบนเครื่อง Xiaomi (MIUI 13.0.2.0 SJOMIXM · Android 12) — มี event `enter` เข้ามาจริงและ `lastSeenElapsed` เดินต่อเนื่อง · **ยังไม่ได้วัดความแม่นของ RSSI/proximity บน Android** เหมือนที่วัดบน iOS |
+| **Android — สแกนตอนแอปเปิดอยู่** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | (แพ็กเกจ `beacon_kit_android` — Kotlin) เห็น K9P จริงบนเครื่อง Xiaomi (MIUI 13.0.2.0 SJOMIXM · Android 12) — มี event `enter` เข้ามาจริงและ `lastSeenElapsed` เดินต่อเนื่อง · **ยังไม่ได้วัดความแม่นของ RSSI/proximity บน Android** เหมือนที่วัดบน iOS |
 | **Android — ทำงานเบื้องหลัง** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | รันต่อเนื่อง **14 ชม. 45 นาที** ใช้แบต **0.35%** (~0.6%/วัน) ไม่มีข้อมูลสูญหาย · พิสูจน์ซ้ำ 3 รอบว่า **ระบบสร้าง process ที่ถูกฆ่าแล้วขึ้นมาใหม่เพื่อส่ง event** (`importance=service`, process อายุ 35–87 ms) · ผ่านทั้งตอน Autostart ปิด และตอนตั้ง "Restrict background apps" ซึ่งเข้มที่สุด — **ผู้ใช้ไม่ต้องตั้งค่าอะไรเพิ่ม** · ⚠️ ยังไม่ทดสอบ: รีบูต · ปิด-เปิด Bluetooth · ยี่ห้ออื่น · Android 13+ |
 | **Android — iBeacon region monitoring / สิทธิ์แบบ Always** | ❌ **ยังไม่มี** | เมธอดกลุ่มนี้อยู่ที่ `beacon_kit_ios` เท่านั้นโดยตั้งใจ (ADR-13) |
 | **ความเสถียรของสัญญาณ enter/exit** | 🔴 **ปัญหาที่รู้แล้ว ยังไม่แก้** | คืนเดียวเกิด **exit ปลอม 58 ครั้ง** แต่ละครั้งตามด้วย enter ทันที (หลายคู่ห่างกัน 1–2 วินาที) · **เกิดทั้ง Android และ iOS** · สาเหตุยืนยันด้วยการวัดตรงแล้วว่าเป็น **ความล่าช้าในการส่งผลสแกนของ OS ไม่ใช่ beacon หาย** — วัดได้ 22.5 วิ · 22.5 วิ · และ **4 นาที 11 วินาที ขณะที่ `doze=false`** · แก้ด้วยการตั้งค่าไม่ได้ เป็นข้อจำกัดของแพลตฟอร์ม · 🛑 **ห้ามต่อการแจ้งเตือนเข้ากับ event ดิบโดยไม่มีชั้นกรอง** ลูกค้าจะได้ 58 ครั้งต่อคืน ไม่ใช่ 1 |
@@ -272,13 +272,24 @@ packages/
     example/                      # แอปตัวอย่าง หน้าจอเดียว แสดง beacon แบบ realtime
   beacon_kit_platform_interface/  # entity + parser + usecase (pure Dart ทดสอบได้ไม่ต้องมีอุปกรณ์)
   beacon_kit_ios/                 # implementation ฝั่ง iOS (Swift)
+  beacon_kit_android/             # implementation ฝั่ง Android (Kotlin) — `BluetoothLeScanner`
+                                  # ตอนแอปเปิดอยู่ + `PendingIntent`/นาฬิกาปลุกตอนเบื้องหลัง
 docs/
   sources/                        # ผลการค้นคว้าโปรโตคอลรายยี่ห้อ + BigC provisioning
   fixtures/                       # ข้อมูลทดสอบ parser/usecase
   test-checklists/                # เช็คลิสต์ที่ต้องทำกับอุปกรณ์จริง
-ARCHITECTURE.md                   # การตัดสินใจเชิงสถาปัตยกรรมทั้งหมด (ADR-1 ถึง ADR-7)
+  test-data/                      # log ดิบจากอุปกรณ์จริง + GROUND_TRUTH ที่ใช้เป็นเกณฑ์รับ
+ARCHITECTURE.md                   # การตัดสินใจเชิงสถาปัตยกรรมทั้งหมด (ADR-1 ถึง ADR-15)
+                                  # Android เบื้องหลัง = ADR-14 (+ ADR-15 ร่าง เรื่อง exitTimeoutSeconds)
 SPRINT.md                         # ขอบเขตสปรินต์ปัจจุบัน + กติกาการรายงานสถานะ
 CONTRIBUTING.md                   # กติกาที่ต้องผ่านก่อนเปิด PR
+PIPELINE.md                       # ขั้นตอนการทำงานของทีมและ agent ในรีโปนี้
+prototype/
+  visit_filter/                   # ต้นแบบชั้นกรอง visit (Dart ล้วน) — ยังไม่ต่อเข้า SDK
+spec/
+  visit_filter/                   # สัญญากลางของชั้นกรอง (vectors.json) ที่ทุกภาษาต้องให้ผลตรงกัน
+tool/
+  analyze_region_log.dart         # วิเคราะห์ log จาก docs/test-data/ ซ้ำได้ด้วยวิธีเดียวกันทุกรอบ
 ```
 
 ## เอกสารที่ควรอ่านต่อ
