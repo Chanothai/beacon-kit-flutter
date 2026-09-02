@@ -21,7 +21,8 @@ void main() {
     expect(
       const JsonEncoder.withIndent('  ').convert(regenerated),
       const JsonEncoder.withIndent('  ').convert(committed),
-      reason: 'พฤติกรรมเปลี่ยนแต่ไฟล์ vector ยังเป็นของเดิม — '
+      reason:
+          'พฤติกรรมเปลี่ยนแต่ไฟล์ vector ยังเป็นของเดิม — '
           'รัน `dart run bin/generate_vectors.dart` แล้ว commit ไฟล์ที่ได้ '
           'พร้อมกับตามแก้ port ฝั่ง Kotlin และ Swift ใน PR เดียวกัน',
     );
@@ -50,15 +51,15 @@ void main() {
       final run = runConformanceCase(
         cooldownMs: caseJson['cooldownMs']! as int,
         blindnessCeilingMs: caseJson['blindnessCeilingMs']! as int,
-        initialState:
-            decodeState(caseJson['initialState']! as Map<String, Object?>),
+        initialState: decodeState(
+          caseJson['initialState']! as Map<String, Object?>,
+        ),
         observations: observationsForCase(caseJson, repoRoot: repoRoot),
       );
 
-      expect(
-        [for (final event in run.events) encodeEvent(event)],
-        caseJson['expectedEvents'],
-      );
+      expect([
+        for (final event in run.events) encodeEvent(event),
+      ], caseJson['expectedEvents']);
       expect(run.rejections, caseJson['expectedRejections']);
       expect(encodeState(run.finalState), caseJson['expectedFinalState']);
     });

@@ -41,8 +41,10 @@ final class RegionLogEntry {
 /// เป็นหนึ่งในสองที่ที่ `DateTime` ยังปรากฏ — **ขอบของระบบ** ตรรกะของชั้นกรอง
 /// ไม่แตะชนิดนี้เลย
 String formatWithOffset(EpochMillis atMs, EpochMillis utcOffsetMs) {
-  final wall =
-      DateTime.fromMillisecondsSinceEpoch(atMs + utcOffsetMs, isUtc: true);
+  final wall = DateTime.fromMillisecondsSinceEpoch(
+    atMs + utcOffsetMs,
+    isUtc: true,
+  );
   final sign = utcOffsetMs.isNegative ? '-' : '+';
   final absolute = utcOffsetMs.abs();
   final hh = (absolute ~/ 3600000).toString().padLeft(2, '0');
@@ -57,8 +59,10 @@ final RegExp _offsetPattern = RegExp(r'(?:Z|([+-])(\d{2}):(\d{2}))$');
 EpochMillis _parseUtcOffsetMs(String timestamp) {
   final match = _offsetPattern.firstMatch(timestamp);
   if (match == null) {
-    throw FormatException('ไม่มี UTC offset ในเวลา "$timestamp" — '
-        'ไฟล์หลักฐานต้องมี offset เสมอ');
+    throw FormatException(
+      'ไม่มี UTC offset ในเวลา "$timestamp" — '
+      'ไฟล์หลักฐานต้องมี offset เสมอ',
+    );
   }
   if (match.group(1) == null) return 0;
   final sign = match.group(1) == '-' ? -1 : 1;

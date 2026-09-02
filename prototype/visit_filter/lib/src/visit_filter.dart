@@ -163,8 +163,9 @@ final class VisitFilter {
       final region = result[regionId]!;
       final absentSinceMs = region.absentSinceMs;
       if (region.present || absentSinceMs == null) continue;
-      final overlapStartMs =
-          absentSinceMs > blindSinceMs ? absentSinceMs : blindSinceMs;
+      final overlapStartMs = absentSinceMs > blindSinceMs
+          ? absentSinceMs
+          : blindSinceMs;
       if (restoredAtMs <= overlapStartMs) continue;
       result[regionId] = region.copyWith(
         silencePausedMs:
@@ -229,8 +230,9 @@ final class VisitFilter {
 
     // ระหว่างที่ยังอยู่ในโซน แพลตฟอร์มไม่ส่งอะไรมาเลย — ช่วงเงียบจึงต้องนับจาก
     // เวลาที่ประกาศว่าไม่เห็น ไม่ใช่จากเวลาที่เห็นครั้งสุดท้าย
-    final silenceStartMs =
-        region.present ? region.lastPresentAtMs : region.absentSinceMs;
+    final silenceStartMs = region.present
+        ? region.lastPresentAtMs
+        : region.absentSinceMs;
     if (silenceStartMs == null) return region;
     if (nowMs - silenceStartMs - region.silencePausedMs < cooldownMs) {
       return region;
@@ -283,8 +285,13 @@ final class VisitFilter {
   ) {
     final result = Map<String, RegionState>.of(regions);
     for (final regionId in regions.keys.toList()..sort()) {
-      result[regionId] =
-          _settle(regionId, result[regionId]!, nowMs, events, sensing);
+      result[regionId] = _settle(
+        regionId,
+        result[regionId]!,
+        nowMs,
+        events,
+        sensing,
+      );
     }
     return result;
   }
@@ -346,8 +353,7 @@ final class VisitFilter {
         absentSinceMs: absentSinceMs,
         // ความเงียบช่วงใหม่เริ่มนับศูนย์เสมอ · ถ้าเป็น `exit` ซ้ำของช่วงเดิม
         // ต้องคงเวลาที่หยุดไว้ ไม่งั้นการตาบอดที่ผ่านมาจะถูกลืม
-        silencePausedMs:
-            startsNewSilence ? 0 : previous.silencePausedMs,
+        silencePausedMs: startsNewSilence ? 0 : previous.silencePausedMs,
       ),
     };
   }

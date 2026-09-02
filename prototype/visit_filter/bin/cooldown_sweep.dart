@@ -65,7 +65,10 @@ String human(Duration d) {
 }
 
 /// ค่า cooldown ต่ำที่สุด (ความละเอียด 1 มิลลิวินาที) ที่ยังได้ visit 1 ครั้ง
-Duration lowestPassing(List<VisitObservation> observations, {required int ceilingMs}) {
+Duration lowestPassing(
+  List<VisitObservation> observations, {
+  required int ceilingMs,
+}) {
   var low = 1;
   var high = ceilingMs;
   if (visitCount(observations, Duration(milliseconds: high)) != 1) {
@@ -93,31 +96,46 @@ void main() {
 
   const int ceilingMs = 60 * 60 * 1000;
   stdout.writeln('=' * 70);
-  stdout.writeln('cooldown ต่ำสุดที่ยังได้ VisitStarted = 1 (ความละเอียด 1 ms)');
+  stdout.writeln(
+    'cooldown ต่ำสุดที่ยังได้ VisitStarted = 1 (ความละเอียด 1 ms)',
+  );
   stdout.writeln('=' * 70);
 
   var combined = Duration.zero;
   for (final file in files) {
-    final lowest = lowestPassing(observationsByFile[file]!, ceilingMs: ceilingMs);
+    final lowest = lowestPassing(
+      observationsByFile[file]!,
+      ceilingMs: ceilingMs,
+    );
     final gaps = gapsByFile[file]!;
     if (lowest > combined) combined = lowest;
     stdout.writeln(file);
-    stdout.writeln('  ต่ำสุดที่ผ่าน   : ${lowest.inMilliseconds} ms = ${human(lowest)}');
-    stdout.writeln('  ช่วงเงียบยาวสุด : ${gaps.last.inMilliseconds} ms = ${human(gaps.last)}');
-    stdout.writeln('  ยาวเป็นอันดับ 2 : ${gaps[gaps.length - 2].inMilliseconds} ms = '
-        '${human(gaps[gaps.length - 2])}');
+    stdout.writeln(
+      '  ต่ำสุดที่ผ่าน   : ${lowest.inMilliseconds} ms = ${human(lowest)}',
+    );
+    stdout.writeln(
+      '  ช่วงเงียบยาวสุด : ${gaps.last.inMilliseconds} ms = ${human(gaps.last)}',
+    );
+    stdout.writeln(
+      '  ยาวเป็นอันดับ 2 : ${gaps[gaps.length - 2].inMilliseconds} ms = '
+      '${human(gaps[gaps.length - 2])}',
+    );
     stdout.writeln('  จำนวนช่วงเงียบ  : ${gaps.length}');
     stdout.writeln('');
   }
 
   stdout.writeln('-' * 70);
-  stdout.writeln('ค่าที่ใช้ได้กับ **ทั้งสองไฟล์**: ${combined.inMilliseconds} ms '
-      '= ${human(combined)}');
+  stdout.writeln(
+    'ค่าที่ใช้ได้กับ **ทั้งสองไฟล์**: ${combined.inMilliseconds} ms '
+    '= ${human(combined)}',
+  );
   for (final file in files) {
     final worst = gapsByFile[file]!.last;
     final margin = combined - worst;
-    stdout.writeln('  ระยะห่างจากช่วงเงียบยาวสุดของ $file: '
-        '${margin.inMilliseconds} ms');
+    stdout.writeln(
+      '  ระยะห่างจากช่วงเงียบยาวสุดของ $file: '
+      '${margin.inMilliseconds} ms',
+    );
   }
   stdout.writeln('');
 
@@ -136,16 +154,21 @@ void main() {
     Duration(minutes: 10),
     Duration(minutes: 30),
   ];
-  stdout.writeln('cooldown'.padRight(24) + files.map((f) => f.split('_').first).join('   '));
+  stdout.writeln(
+    'cooldown'.padRight(24) + files.map((f) => f.split('_').first).join('   '),
+  );
   for (final probe in probes) {
-    final counts = files.map((f) =>
-        visitCount(observationsByFile[f]!, probe).toString().padLeft(10));
+    final counts = files.map(
+      (f) => visitCount(observationsByFile[f]!, probe).toString().padLeft(10),
+    );
     stdout.writeln(human(probe).padRight(24) + counts.join('   '));
   }
   stdout.writeln('');
 
   stdout.writeln('-' * 70);
-  stdout.writeln('ระยะห่างจากขอบเมื่อเลือกค่าต่าง ๆ (ค่า − ช่วงเงียบยาวสุดที่ยังต่ำกว่าค่านั้น)');
+  stdout.writeln(
+    'ระยะห่างจากขอบเมื่อเลือกค่าต่าง ๆ (ค่า − ช่วงเงียบยาวสุดที่ยังต่ำกว่าค่านั้น)',
+  );
   stdout.writeln('-' * 70);
   for (final probe in probes.where((p) => p >= combined)) {
     for (final file in files) {
@@ -156,8 +179,10 @@ void main() {
       final headroom = below.last.inMilliseconds == 0
           ? '—'
           : '${(margin.inMilliseconds / below.last.inMilliseconds * 100).toStringAsFixed(1)}%';
-      stdout.writeln('${human(probe).padRight(24)}${file.split('_').first.padRight(12)}'
-          'เผื่อ ${human(margin).padRight(26)}($headroom เหนือช่วงที่แย่ที่สุด)');
+      stdout.writeln(
+        '${human(probe).padRight(24)}${file.split('_').first.padRight(12)}'
+        'เผื่อ ${human(margin).padRight(26)}($headroom เหนือช่วงที่แย่ที่สุด)',
+      );
     }
   }
 }

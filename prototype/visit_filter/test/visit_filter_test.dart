@@ -58,8 +58,10 @@ void main() {
     test('observation แรกบอกว่าอยู่แล้ว → alreadyInsideAtFirstObservation', () {
       final result = run([RegionSeen(regionId: 'a', atMs: at(Duration.zero))]);
 
-      expect(startsIn(result.events).single.evidence,
-          VisitStartEvidence.alreadyInsideAtFirstObservation);
+      expect(
+        startsIn(result.events).single.evidence,
+        VisitStartEvidence.alreadyInsideAtFirstObservation,
+      );
     });
 
     test('กู้ state ที่บันทึกไว้ว่ากำลังอยู่ในโซน → ไม่เริ่มการมาเยือนซ้ำ', () {
@@ -76,13 +78,15 @@ void main() {
         lastObservationAtMs: at(Duration.zero),
       );
 
-      final result = run(
-        [RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 30)))],
-        from: restored,
-      );
+      final result = run([
+        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 30))),
+      ], from: restored);
 
-      expect(startsIn(result.events), isEmpty,
-          reason: 'การมาเยือนเดิมยังเปิดอยู่ ไม่ควรมี VisitStarted ใหม่');
+      expect(
+        startsIn(result.events),
+        isEmpty,
+        reason: 'การมาเยือนเดิมยังเปิดอยู่ ไม่ควรมี VisitStarted ใหม่',
+      );
     });
 
     test('กู้ state ว่าอยู่ในโซนแต่ยังไม่มีการมาเยือนเปิด → alreadyInside', () {
@@ -91,13 +95,14 @@ void main() {
         lastObservationAtMs: at(Duration.zero),
       );
 
-      final result = run(
-        [RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 1)))],
-        from: restored,
-      );
+      final result = run([
+        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
+      ], from: restored);
 
-      expect(startsIn(result.events).single.evidence,
-          VisitStartEvidence.alreadyInsideAtFirstObservation);
+      expect(
+        startsIn(result.events).single.evidence,
+        VisitStartEvidence.alreadyInsideAtFirstObservation,
+      );
     });
   });
 
@@ -117,38 +122,49 @@ void main() {
       expect(result.state.regionState('a').visit, isNotNull);
     });
 
-    test('ครบ cooldown ตอนไม่เห็นแล้ว → ปิดการมาเยือน แต่ไม่ยิง VisitStarted', () {
-      final result = run([
-        RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
-        RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
-        TimeAdvanced(atMs: at(const Duration(minutes: 6, seconds: 1))),
-      ]);
+    test(
+      'ครบ cooldown ตอนไม่เห็นแล้ว → ปิดการมาเยือน แต่ไม่ยิง VisitStarted',
+      () {
+        final result = run([
+          RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
+          RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
+          TimeAdvanced(atMs: at(const Duration(minutes: 6, seconds: 1))),
+        ]);
 
-      expect(startsIn(result.events), hasLength(1));
-      expect(endsIn(result.events), [
-        VisitEnded(
-          regionId: 'a',
-          startedAtMs: at(Duration.zero),
-          endedAtMs: at(Duration.zero),
-          reason: VisitEndReason.cooldownElapsed,
-        ),
-      ]);
-      expect(result.state.regionState('a').visit, isNull);
-    });
+        expect(startsIn(result.events), hasLength(1));
+        expect(endsIn(result.events), [
+          VisitEnded(
+            regionId: 'a',
+            startedAtMs: at(Duration.zero),
+            endedAtMs: at(Duration.zero),
+            reason: VisitEndReason.cooldownElapsed,
+          ),
+        ]);
+        expect(result.state.regionState('a').visit, isNull);
+      },
+    );
 
     test('ปิดแล้วครั้งหน้าที่เจอค่อยยิง VisitStarted ใหม่', () {
       final result = run([
         RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
         RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
-        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 6, seconds: 1))),
+        RegionSeen(
+          regionId: 'a',
+          atMs: at(const Duration(minutes: 6, seconds: 1)),
+        ),
       ]);
 
       expect(startsIn(result.events), hasLength(2));
-      expect(startsIn(result.events).last.evidence,
-          VisitStartEvidence.arrivalObserved);
+      expect(
+        startsIn(result.events).last.evidence,
+        VisitStartEvidence.arrivalObserved,
+      );
       // ปิดของเก่าก่อน แล้วค่อยเปิดของใหม่ — ลำดับนี้สำคัญกับผู้บริโภค event
-      expect(result.events.map((e) => e.runtimeType.toString()),
-          ['VisitStarted', 'VisitEnded', 'VisitStarted']);
+      expect(result.events.map((e) => e.runtimeType.toString()), [
+        'VisitStarted',
+        'VisitEnded',
+        'VisitStarted',
+      ]);
     });
 
     test('ปิดที่หลักฐานสุดท้ายที่เห็น ไม่ใช่ตอนที่รู้ตัวว่าครบ cooldown', () {
@@ -159,7 +175,10 @@ void main() {
         TimeAdvanced(atMs: at(const Duration(hours: 9))),
       ]);
 
-      expect(endsIn(result.events).single.endedAtMs, at(const Duration(minutes: 2)));
+      expect(
+        endsIn(result.events).single.endedAtMs,
+        at(const Duration(minutes: 2)),
+      );
     });
   });
 
@@ -171,11 +190,16 @@ void main() {
       // 40 รอบ เข้า 30 วินาที ออก 30 วินาที — รูปแบบเดียวกับที่วัดได้จริง
       for (var i = 0; i < 40; i++) {
         observations.add(
-          RegionSeen(regionId: 'a', atMs: at(Duration(minutes: i))),
+          RegionSeen(
+            regionId: 'a',
+            atMs: at(Duration(minutes: i)),
+          ),
         );
         observations.add(
           RegionNotSeen(
-              regionId: 'a', atMs: at(Duration(minutes: i, seconds: 30))),
+            regionId: 'a',
+            atMs: at(Duration(minutes: i, seconds: 30)),
+          ),
         );
       }
 
@@ -192,8 +216,11 @@ void main() {
         TimeAdvanced(atMs: at(const Duration(minutes: 6, seconds: 1))),
       ]);
 
-      expect(endsIn(result.events), hasLength(1),
-          reason: 'ความเงียบต้องนับจาก exit ตัวแรก (นาทีที่ 1) ไม่ใช่ตัวล่าสุด');
+      expect(
+        endsIn(result.events),
+        hasLength(1),
+        reason: 'ความเงียบต้องนับจาก exit ตัวแรก (นาทีที่ 1) ไม่ใช่ตัวล่าสุด',
+      );
     });
   });
 
@@ -226,17 +253,23 @@ void main() {
       expect(result.state.regionsWithOpenVisit, ['b']);
     });
 
-    test('หลาย region หมด cooldown พร้อมกัน → ลำดับ event เรียงตาม identifier', () {
-      final result = run([
-        RegionSeen(regionId: 'zulu', atMs: at(Duration.zero)),
-        RegionSeen(regionId: 'alpha', atMs: at(Duration.zero)),
-        RegionNotSeen(regionId: 'zulu', atMs: at(const Duration(seconds: 1))),
-        RegionNotSeen(regionId: 'alpha', atMs: at(const Duration(seconds: 1))),
-        TimeAdvanced(atMs: at(const Duration(minutes: 6))),
-      ]);
+    test(
+      'หลาย region หมด cooldown พร้อมกัน → ลำดับ event เรียงตาม identifier',
+      () {
+        final result = run([
+          RegionSeen(regionId: 'zulu', atMs: at(Duration.zero)),
+          RegionSeen(regionId: 'alpha', atMs: at(Duration.zero)),
+          RegionNotSeen(regionId: 'zulu', atMs: at(const Duration(seconds: 1))),
+          RegionNotSeen(
+            regionId: 'alpha',
+            atMs: at(const Duration(seconds: 1)),
+          ),
+          TimeAdvanced(atMs: at(const Duration(minutes: 6))),
+        ]);
 
-      expect(endsIn(result.events).map((e) => e.regionId), ['alpha', 'zulu']);
-    });
+        expect(endsIn(result.events).map((e) => e.regionId), ['alpha', 'zulu']);
+      },
+    );
   });
 
   group('ขอบข้อมูล', () {
@@ -279,29 +312,36 @@ void main() {
   });
 
   group('ตาบอด — นาฬิกา cooldown หยุด', () {
-    test('บั๊กที่พบจริง: ปิด Bluetooth 10 นาทีขณะอยู่ที่เดิม → การมาเยือนเดียว', () {
-      final withoutBlindness = run([
-        RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
-        RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
-        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 11))),
-      ]);
-      expect(startsIn(withoutBlindness.events), hasLength(2),
-          reason: 'ป้อนสภาพตาบอดเป็น RegionNotSeen = บั๊กเดิม '
-              'ลูกค้าได้แจ้งเตือนซ้ำทั้งที่ไม่ได้ไปไหน');
+    test(
+      'บั๊กที่พบจริง: ปิด Bluetooth 10 นาทีขณะอยู่ที่เดิม → การมาเยือนเดียว',
+      () {
+        final withoutBlindness = run([
+          RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
+          RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
+          RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 11))),
+        ]);
+        expect(
+          startsIn(withoutBlindness.events),
+          hasLength(2),
+          reason:
+              'ป้อนสภาพตาบอดเป็น RegionNotSeen = บั๊กเดิม '
+              'ลูกค้าได้แจ้งเตือนซ้ำทั้งที่ไม่ได้ไปไหน',
+        );
 
-      final withBlindness = run([
-        RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
-        RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
-        SensingLost(
-          atMs: at(const Duration(minutes: 1)),
-          cause: SensingLossCause.bluetoothOff,
-        ),
-        SensingRestored(atMs: at(const Duration(minutes: 11))),
-        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 11))),
-      ]);
-      expect(startsIn(withBlindness.events), hasLength(1));
-      expect(endsIn(withBlindness.events), isEmpty);
-    });
+        final withBlindness = run([
+          RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
+          RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
+          SensingLost(
+            atMs: at(const Duration(minutes: 1)),
+            cause: SensingLossCause.bluetoothOff,
+          ),
+          SensingRestored(atMs: at(const Duration(minutes: 11))),
+          RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 11))),
+        ]);
+        expect(startsIn(withBlindness.events), hasLength(1));
+        expect(endsIn(withBlindness.events), isEmpty);
+      },
+    );
 
     test('ห้ามปิดการมาเยือนระหว่างตาบอด แม้ cooldown จะครบไปแล้ว', () {
       final result = run([
@@ -332,19 +372,23 @@ void main() {
 
       // เงียบจริง 11 นาที หัก 8 นาทีที่ตาบอด = 3 นาที → ยังไม่ครบ
       expect(
-        endsIn(run([
-          ...observations,
-          TimeAdvanced(atMs: at(const Duration(minutes: 12))),
-        ]).events),
+        endsIn(
+          run([
+            ...observations,
+            TimeAdvanced(atMs: at(const Duration(minutes: 12))),
+          ]).events,
+        ),
         isEmpty,
       );
 
       // เงียบจริง 13 นาที หัก 8 = 5 นาที → ครบพอดี
       expect(
-        endsIn(run([
-          ...observations,
-          TimeAdvanced(atMs: at(const Duration(minutes: 14))),
-        ]).events).single.reason,
+        endsIn(
+          run([
+            ...observations,
+            TimeAdvanced(atMs: at(const Duration(minutes: 14))),
+          ]).events,
+        ).single.reason,
         VisitEndReason.cooldownElapsed,
       );
     });
@@ -363,18 +407,22 @@ void main() {
 
       // เงียบจริง 9 นาที หัก 5 = 4 นาที → ยังไม่ครบ
       expect(
-        endsIn(run([
-          ...observations,
-          TimeAdvanced(atMs: at(const Duration(minutes: 12))),
-        ]).events),
+        endsIn(
+          run([
+            ...observations,
+            TimeAdvanced(atMs: at(const Duration(minutes: 12))),
+          ]).events,
+        ),
         isEmpty,
       );
       // เงียบจริง 10 นาที หัก 5 = 5 นาที → ครบ
       expect(
-        endsIn(run([
-          ...observations,
-          TimeAdvanced(atMs: at(const Duration(minutes: 13))),
-        ]).events),
+        endsIn(
+          run([
+            ...observations,
+            TimeAdvanced(atMs: at(const Duration(minutes: 13))),
+          ]).events,
+        ),
         hasLength(1),
       );
     });
@@ -392,71 +440,93 @@ void main() {
         SensingRestored(atMs: at(const Duration(minutes: 30))),
       ]);
 
-      expect(endsIn(result.events).single.reason,
-          VisitEndReason.sensingLostBeyondCeiling);
-      expect(endsIn(result.events).single.endedAtMs, at(Duration.zero),
-          reason: 'ปิดที่หลักฐานสุดท้ายที่เห็น ไม่ใช่เวลาที่รู้ตัว');
-      expect(result.state.regions, isEmpty,
-          reason: 'ตาบอดนานขนาดนั้นแล้วอ้างอะไรไม่ได้ ต้องล้างทิ้ง');
+      expect(
+        endsIn(result.events).single.reason,
+        VisitEndReason.sensingLostBeyondCeiling,
+      );
+      expect(
+        endsIn(result.events).single.endedAtMs,
+        at(Duration.zero),
+        reason: 'ปิดที่หลักฐานสุดท้ายที่เห็น ไม่ใช่เวลาที่รู้ตัว',
+      );
+      expect(
+        result.state.regions,
+        isEmpty,
+        reason: 'ตาบอดนานขนาดนั้นแล้วอ้างอะไรไม่ได้ ต้องล้างทิ้ง',
+      );
     });
 
-    test('หลังล้าง ครั้งหน้าที่เห็นเป็น alreadyInside ไม่ใช่ arrivalObserved', () {
-      final result = run([
+    test(
+      'หลังล้าง ครั้งหน้าที่เห็นเป็น alreadyInside ไม่ใช่ arrivalObserved',
+      () {
+        final result = run([
+          RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
+          RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
+          SensingLost(
+            atMs: at(const Duration(minutes: 2)),
+            cause: SensingLossCause.bluetoothOff,
+          ),
+          SensingRestored(atMs: at(const Duration(minutes: 30))),
+          RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 31))),
+        ]);
+
+        expect(
+          startsIn(result.events).last.evidence,
+          VisitStartEvidence.alreadyInsideAtFirstObservation,
+          reason:
+              'เราไม่เคยเห็นการมาถึง — ตอบไม่ได้ว่าเขาออกไปแล้วกลับมาหรือไม่',
+        );
+      },
+    );
+
+    test('ขอบเพดาน: ครบพอดีล้าง · ขาด 1 มิลลิวินาทีไม่ล้าง', () {
+      List<VisitEvent> eventsForBlindness(Duration blindFor) => run([
         RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
         RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
         SensingLost(
           atMs: at(const Duration(minutes: 2)),
           cause: SensingLossCause.bluetoothOff,
         ),
-        SensingRestored(atMs: at(const Duration(minutes: 30))),
-        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 31))),
-      ]);
-
-      expect(startsIn(result.events).last.evidence,
-          VisitStartEvidence.alreadyInsideAtFirstObservation,
-          reason: 'เราไม่เคยเห็นการมาถึง — ตอบไม่ได้ว่าเขาออกไปแล้วกลับมาหรือไม่');
-    });
-
-    test('ขอบเพดาน: ครบพอดีล้าง · ขาด 1 มิลลิวินาทีไม่ล้าง', () {
-      List<VisitEvent> eventsForBlindness(Duration blindFor) => run([
-            RegionSeen(regionId: 'a', atMs: at(Duration.zero)),
-            RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 1))),
-            SensingLost(
-              atMs: at(const Duration(minutes: 2)),
-              cause: SensingLossCause.bluetoothOff,
-            ),
-            SensingRestored(atMs: at(const Duration(minutes: 2) + blindFor)),
-          ]).events;
+        SensingRestored(atMs: at(const Duration(minutes: 2) + blindFor)),
+      ]).events;
 
       expect(
         endsIn(eventsForBlindness(blindnessCeiling)).single.reason,
         VisitEndReason.sensingLostBeyondCeiling,
       );
       expect(
-        endsIn(eventsForBlindness(
-          blindnessCeiling - const Duration(milliseconds: 1),
-        )),
+        endsIn(
+          eventsForBlindness(
+            blindnessCeiling - const Duration(milliseconds: 1),
+          ),
+        ),
         isEmpty,
       );
     });
 
-    test('ล้างครั้งเดียวต่อหนึ่งช่วงตาบอด — การมาเยือนใหม่ต้องไม่ถูกล้างซ้ำ', () {
-      final result = run([
-        SensingLost(
-          atMs: at(Duration.zero),
-          cause: SensingLossCause.bluetoothOff,
-        ),
-        // เลยเพดานแล้ว แต่ยังตาบอดอยู่ · ผลสแกนที่ค้างอยู่เข้ามา
-        RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 20))),
-        TimeAdvanced(atMs: at(const Duration(minutes: 25))),
-        TimeAdvanced(atMs: at(const Duration(minutes: 40))),
-      ]);
+    test(
+      'ล้างครั้งเดียวต่อหนึ่งช่วงตาบอด — การมาเยือนใหม่ต้องไม่ถูกล้างซ้ำ',
+      () {
+        final result = run([
+          SensingLost(
+            atMs: at(Duration.zero),
+            cause: SensingLossCause.bluetoothOff,
+          ),
+          // เลยเพดานแล้ว แต่ยังตาบอดอยู่ · ผลสแกนที่ค้างอยู่เข้ามา
+          RegionSeen(regionId: 'a', atMs: at(const Duration(minutes: 20))),
+          TimeAdvanced(atMs: at(const Duration(minutes: 25))),
+          TimeAdvanced(atMs: at(const Duration(minutes: 40))),
+        ]);
 
-      expect(startsIn(result.events), hasLength(1));
-      expect(endsIn(result.events), isEmpty,
-          reason: 'ช่วงตาบอดนี้ล้างไปแล้วครั้งหนึ่ง ห้ามล้างซ้ำ');
-      expect(result.state.regionsWithOpenVisit, ['a']);
-    });
+        expect(startsIn(result.events), hasLength(1));
+        expect(
+          endsIn(result.events),
+          isEmpty,
+          reason: 'ช่วงตาบอดนี้ล้างไปแล้วครั้งหนึ่ง ห้ามล้างซ้ำ',
+        );
+        expect(result.state.regionsWithOpenVisit, ['a']);
+      },
+    );
 
     test('SensingLost ซ้ำไม่เลื่อนเพดาน', () {
       final result = run([
@@ -473,10 +543,13 @@ void main() {
         TimeAdvanced(atMs: at(const Duration(minutes: 17))),
       ]);
 
-      expect(endsIn(result.events).single.reason,
-          VisitEndReason.sensingLostBeyondCeiling,
-          reason: 'เพดานต้องนับจาก SensingLost ตัวแรก (นาทีที่ 2) '
-              'ไม่ใช่ตัวล่าสุด');
+      expect(
+        endsIn(result.events).single.reason,
+        VisitEndReason.sensingLostBeyondCeiling,
+        reason:
+            'เพดานต้องนับจาก SensingLost ตัวแรก (นาทีที่ 2) '
+            'ไม่ใช่ตัวล่าสุด',
+      );
     });
 
     test('ตาบอดตอนไม่มีการมาเยือนเปิดค้าง → เงียบสนิท', () {
@@ -531,8 +604,10 @@ void main() {
       ]).state;
       final snapshot = seeded.toString();
 
-      final observation =
-          RegionNotSeen(regionId: 'a', atMs: at(const Duration(minutes: 2)));
+      final observation = RegionNotSeen(
+        regionId: 'a',
+        atMs: at(const Duration(minutes: 2)),
+      );
       final first = filter.reduce(seeded, observation);
       final second = filter.reduce(seeded, observation);
 

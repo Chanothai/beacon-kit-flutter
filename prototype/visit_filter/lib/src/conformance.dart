@@ -21,32 +21,26 @@ import 'visit_observation.dart';
 Map<String, Object?> encodeObservation(VisitObservation observation) =>
     switch (observation) {
       RegionSeen(:final regionId, :final atMs) => {
-          'kind': 'regionSeen',
-          'regionId': regionId,
-          'atMs': atMs,
-        },
+        'kind': 'regionSeen',
+        'regionId': regionId,
+        'atMs': atMs,
+      },
       RegionNotSeen(:final regionId, :final atMs) => {
-          'kind': 'regionNotSeen',
-          'regionId': regionId,
-          'atMs': atMs,
-        },
-      TimeAdvanced(:final atMs) => {
-          'kind': 'timeAdvanced',
-          'atMs': atMs,
-        },
+        'kind': 'regionNotSeen',
+        'regionId': regionId,
+        'atMs': atMs,
+      },
+      TimeAdvanced(:final atMs) => {'kind': 'timeAdvanced', 'atMs': atMs},
       SensingLost(:final atMs, :final cause) => {
-          'kind': 'sensingLost',
-          'atMs': atMs,
-          'cause': cause.name,
-        },
-      SensingRestored(:final atMs) => {
-          'kind': 'sensingRestored',
-          'atMs': atMs,
-        },
+        'kind': 'sensingLost',
+        'atMs': atMs,
+        'cause': cause.name,
+      },
+      SensingRestored(:final atMs) => {'kind': 'sensingRestored', 'atMs': atMs},
       ObservationsEnded(:final atMs) => {
-          'kind': 'observationsEnded',
-          'atMs': atMs,
-        },
+        'kind': 'observationsEnded',
+        'atMs': atMs,
+      },
     };
 
 VisitObservation decodeObservation(Map<String, Object?> json) {
@@ -57,74 +51,77 @@ VisitObservation decodeObservation(Map<String, Object?> json) {
     'regionNotSeen' => RegionNotSeen(regionId: regionId!, atMs: atMs),
     'timeAdvanced' => TimeAdvanced(atMs: atMs),
     'sensingLost' => SensingLost(
-        atMs: atMs,
-        cause: SensingLossCause.values
-            .firstWhere((c) => c.name == json['cause']),
-      ),
+      atMs: atMs,
+      cause: SensingLossCause.values.firstWhere((c) => c.name == json['cause']),
+    ),
     'sensingRestored' => SensingRestored(atMs: atMs),
     'observationsEnded' => ObservationsEnded(atMs: atMs),
-    final unknown => throw FormatException('observation ชนิด "$unknown" ไม่รู้จัก'),
+    final unknown => throw FormatException(
+      'observation ชนิด "$unknown" ไม่รู้จัก',
+    ),
   };
 }
 
 Map<String, Object?> encodeEvent(VisitEvent event) => switch (event) {
-      VisitStarted(:final regionId, :final atMs, :final evidence) => {
-          'kind': 'visitStarted',
-          'regionId': regionId,
-          'atMs': atMs,
-          'evidence': evidence.name,
-        },
-      VisitEnded(
-        :final regionId,
-        :final startedAtMs,
-        :final endedAtMs,
-        :final reason
-      ) =>
-        {
-          'kind': 'visitEnded',
-          'regionId': regionId,
-          'startedAtMs': startedAtMs,
-          'endedAtMs': endedAtMs,
-          'reason': reason.name,
-        },
-    };
+  VisitStarted(:final regionId, :final atMs, :final evidence) => {
+    'kind': 'visitStarted',
+    'regionId': regionId,
+    'atMs': atMs,
+    'evidence': evidence.name,
+  },
+  VisitEnded(
+    :final regionId,
+    :final startedAtMs,
+    :final endedAtMs,
+    :final reason,
+  ) =>
+    {
+      'kind': 'visitEnded',
+      'regionId': regionId,
+      'startedAtMs': startedAtMs,
+      'endedAtMs': endedAtMs,
+      'reason': reason.name,
+    },
+};
 
 /// state ตั้งต้นของหนึ่งเคส — เข้ารหัสเท่าที่ต้องใช้จริง
 Map<String, Object?> encodeState(VisitFilterState state) => {
-      'lastObservationAtMs': state.lastObservationAtMs,
-      'sensing': state.sensing.name,
-      'sensingLostAtMs': state.sensingLostAtMs,
-      // เรียง key เสมอ — Swift `Dictionary` ไม่รับประกันลำดับ และ JSON ที่ลำดับ
-      // ไม่คงที่จะทำให้ diff ของไฟล์ vector อ่านไม่ได้
-      'regions': {
-        for (final regionId in state.regions.keys.toList()..sort())
-          regionId: _encodeRegion(state.regions[regionId]!),
-      },
-    };
+  'lastObservationAtMs': state.lastObservationAtMs,
+  'sensing': state.sensing.name,
+  'sensingLostAtMs': state.sensingLostAtMs,
+  // เรียง key เสมอ — Swift `Dictionary` ไม่รับประกันลำดับ และ JSON ที่ลำดับ
+  // ไม่คงที่จะทำให้ diff ของไฟล์ vector อ่านไม่ได้
+  'regions': {
+    for (final regionId in state.regions.keys.toList()..sort())
+      regionId: _encodeRegion(state.regions[regionId]!),
+  },
+};
 
 Map<String, Object?> _encodeRegion(RegionState region) => {
-      'present': region.present,
-      'lastPresentAtMs': region.lastPresentAtMs,
-      'absentSinceMs': region.absentSinceMs,
-      'silencePausedMs': region.silencePausedMs,
-      'visit': region.visit == null
-          ? null
-          : {
-              'startedAtMs': region.visit!.startedAtMs,
-              'evidence': region.visit!.evidence.name,
-            },
-    };
+  'present': region.present,
+  'lastPresentAtMs': region.lastPresentAtMs,
+  'absentSinceMs': region.absentSinceMs,
+  'silencePausedMs': region.silencePausedMs,
+  'visit': region.visit == null
+      ? null
+      : {
+          'startedAtMs': region.visit!.startedAtMs,
+          'evidence': region.visit!.evidence.name,
+        },
+};
 
 VisitFilterState decodeState(Map<String, Object?> json) {
-  final regionsJson = (json['regions'] ?? <String, Object?>{}) as Map<String, Object?>;
+  final regionsJson =
+      (json['regions'] ?? <String, Object?>{}) as Map<String, Object?>;
   return VisitFilterState(
     regions: {
       for (final entry in regionsJson.entries)
         entry.key: _decodeRegion(entry.value! as Map<String, Object?>),
     },
     lastObservationAtMs: json['lastObservationAtMs'] as int?,
-    sensing: SensingStatus.values
-        .firstWhere((s) => s.name == (json['sensing'] ?? 'available')),
+    sensing: SensingStatus.values.firstWhere(
+      (s) => s.name == (json['sensing'] ?? 'available'),
+    ),
     sensingLostAtMs: json['sensingLostAtMs'] as int?,
   );
 }
@@ -140,8 +137,9 @@ RegionState _decodeRegion(Map<String, Object?> json) {
         ? null
         : OpenVisit(
             startedAtMs: visitJson['startedAtMs']! as int,
-            evidence: VisitStartEvidence.values
-                .firstWhere((e) => e.name == visitJson['evidence']),
+            evidence: VisitStartEvidence.values.firstWhere(
+              (e) => e.name == visitJson['evidence'],
+            ),
           ),
   );
 }

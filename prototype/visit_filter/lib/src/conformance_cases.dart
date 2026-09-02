@@ -60,7 +60,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'already-inside-at-first-observation',
-    why: 'observation แรกบอกว่าอยู่แล้ว → ตอบเวลาที่มาถึงไม่ได้ '
+    why:
+        'observation แรกบอกว่าอยู่แล้ว → ตอบเวลาที่มาถึงไม่ได้ '
         '(เกิดจริงกับไฟล์ Android)',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -68,7 +69,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'still-present-when-cooldown-elapses',
-    why: 'กับดักหลัก — ครบ cooldown ตอนยังเห็นอยู่ ห้ามปิดและห้ามยิงอะไร '
+    why:
+        'กับดักหลัก — ครบ cooldown ตอนยังเห็นอยู่ ห้ามปิดและห้ามยิงอะไร '
         'ไฟล์ iOS มีช่วงอยู่ในโซนต่อเนื่อง 3 ชม 10 น โดยไม่มี event เลย',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -80,7 +82,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'absent-when-cooldown-elapses',
-    why: 'ครบ cooldown ตอนไม่เห็นแล้ว → ปิดที่หลักฐานสุดท้าย '
+    why:
+        'ครบ cooldown ตอนไม่เห็นแล้ว → ปิดที่หลักฐานสุดท้าย '
         'ไม่ใช่ที่เวลาที่รู้ตัว และห้ามยิง VisitStarted ตรงนั้น',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -93,19 +96,24 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'rearm-then-emit-on-next-sighting',
-    why: 'ปิดแล้วครั้งหน้าที่เจอค่อยยิง · ลำดับ event ต้องเป็น '
+    why:
+        'ปิดแล้วครั้งหน้าที่เจอค่อยยิง · ลำดับ event ต้องเป็น '
         'started → ended → started',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
     observations: [
       RegionSeen(regionId: 'a', atMs: _at(Duration.zero)),
       RegionNotSeen(regionId: 'a', atMs: _at(const Duration(minutes: 1))),
-      RegionSeen(regionId: 'a', atMs: _at(const Duration(minutes: 6, seconds: 1))),
+      RegionSeen(
+        regionId: 'a',
+        atMs: _at(const Duration(minutes: 6, seconds: 1)),
+      ),
     ],
   ),
   ConformanceCase(
     name: 'repeated-exit-does-not-extend-silence',
-    why: 'exit ซ้ำติดกันต้องไม่เลื่อนจุดเริ่มความเงียบ '
+    why:
+        'exit ซ้ำติดกันต้องไม่เลื่อนจุดเริ่มความเงียบ '
         'มิฉะนั้น cooldown จะไม่มีวันครบถ้าแพลตฟอร์มยิง exit ถี่กว่า cooldown',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -133,7 +141,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'multi-region-settle-order',
-    why: 'หลาย region หมด cooldown พร้อมกัน → ลำดับ event เรียงตาม identifier '
+    why:
+        'หลาย region หมด cooldown พร้อมกัน → ลำดับ event เรียงตาม identifier '
         '**เคสนี้จับ Swift โดยเฉพาะ** เพราะ Dictionary ของ Swift ไม่มีลำดับ '
         'และลำดับเปลี่ยนได้ทุกครั้งที่รัน',
     cooldown: _fiveMinutes,
@@ -150,7 +159,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'open-visit-closed-at-data-edge',
-    why: 'ยังอยู่ในโซนตอนข้อมูลหมด → ปิดที่ขอบ ห้ามทิ้ง '
+    why:
+        'ยังอยู่ในโซนตอนข้อมูลหมด → ปิดที่ขอบ ห้ามทิ้ง '
         '(GROUND_TRUTH.md: ถ้าทิ้งจะได้ 0 ช่วงจากทั้งสองไฟล์ ซึ่งผิด)',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -161,7 +171,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'edge-close-while-absent-within-cooldown',
-    why: 'ไม่อยู่แล้วแต่ยังไม่ครบ cooldown ตอนข้อมูลหมด → '
+    why:
+        'ไม่อยู่แล้วแต่ยังไม่ครบ cooldown ตอนข้อมูลหมด → '
         'ปิดที่หลักฐานสุดท้าย ไม่ใช่ที่ขอบ',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -173,7 +184,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'timestamp-went-backwards-is-rejected',
-    why: 'เวลาเดินถอยหลัง → ปฏิเสธ state ไม่ถูกแก้ '
+    why:
+        'เวลาเดินถอยหลัง → ปฏิเสธ state ไม่ถูกแก้ '
         '**ห้ามปรับเวลาให้เอง** เพราะการปรับคือการเดา',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -186,7 +198,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'identical-timestamps-are-accepted',
-    why: 'เวลาเท่ากันเป๊ะต้องรับได้ (ระบบคิว event แล้วส่งมาติดกัน) '
+    why:
+        'เวลาเท่ากันเป๊ะต้องรับได้ (ระบบคิว event แล้วส่งมาติดกัน) '
         'ผลขึ้นกับลำดับที่ป้อน — ล็อกลำดับที่ถือว่าถูกไว้ที่นี่',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -200,7 +213,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'restored-state-with-open-visit',
-    why: 'กู้ state ที่บันทึกไว้กลับมา (Android process ตายแล้วเกิดใหม่) '
+    why:
+        'กู้ state ที่บันทึกไว้กลับมา (Android process ตายแล้วเกิดใหม่) '
         'ต้องไม่เริ่มการมาเยือนซ้ำ',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -230,8 +244,14 @@ final List<ConformanceCase> conformanceCases = [
     observations: [
       RegionNotSeen(regionId: 'a', atMs: _at(Duration.zero)),
       for (var i = 0; i < 40; i++) ...[
-        RegionSeen(regionId: 'a', atMs: _at(Duration(minutes: i))),
-        RegionNotSeen(regionId: 'a', atMs: _at(Duration(minutes: i, seconds: 30))),
+        RegionSeen(
+          regionId: 'a',
+          atMs: _at(Duration(minutes: i)),
+        ),
+        RegionNotSeen(
+          regionId: 'a',
+          atMs: _at(Duration(minutes: i, seconds: 30)),
+        ),
       ],
       ObservationsEnded(atMs: _at(const Duration(minutes: 45))),
     ],
@@ -239,7 +259,8 @@ final List<ConformanceCase> conformanceCases = [
   // ── ตาบอด ────────────────────────────────────────────────────────────────
   ConformanceCase(
     name: 'blindness-pauses-cooldown-below-ceiling',
-    why: 'บั๊กที่พบจริง — ปิด Bluetooth 10 นาทีขณะนั่งอยู่ที่เดิม '
+    why:
+        'บั๊กที่พบจริง — ปิด Bluetooth 10 นาทีขณะนั่งอยู่ที่เดิม '
         'เดิมได้ VisitStarted 2 ครั้ง = ลูกค้าได้แจ้งเตือนโปรโมชันซ้ำ '
         'ต้องเหลือ 1 ครั้ง',
     cooldown: _fiveMinutes,
@@ -258,7 +279,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'blindness-beyond-ceiling-resets',
-    why: 'ตาบอดเกินเพดาน → ปิดการมาเยือนด้วย sensingLostBeyondCeiling '
+    why:
+        'ตาบอดเกินเพดาน → ปิดการมาเยือนด้วย sensingLostBeyondCeiling '
         'และล้างสถานะทิ้ง · ครั้งหน้าที่เห็นต้องเป็น '
         'alreadyInsideAtFirstObservation เพราะเราไม่เคยเห็นการมาถึง',
     cooldown: _fiveMinutes,
@@ -277,7 +299,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'blindness-exactly-at-ceiling-resets',
-    why: 'ขอบเพดานพอดี — ใช้เกณฑ์ >= เหมือน cooldown · '
+    why:
+        'ขอบเพดานพอดี — ใช้เกณฑ์ >= เหมือน cooldown · '
         'ล็อกไว้เพื่อให้ทั้งสามภาษาตัดสินขอบเหมือนกัน',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -304,15 +327,14 @@ final List<ConformanceCase> conformanceCases = [
         atMs: _at(const Duration(minutes: 2)),
         cause: SensingLossCause.permissionRevoked,
       ),
-      SensingRestored(
-        atMs: _at(const Duration(minutes: 17, milliseconds: -1)),
-      ),
+      SensingRestored(atMs: _at(const Duration(minutes: 17, milliseconds: -1))),
       ObservationsEnded(atMs: _at(const Duration(minutes: 18))),
     ],
   ),
   ConformanceCase(
     name: 'blindness-straddles-cooldown-expiry',
-    why: 'ตาบอดคาบเกี่ยวกับจังหวะที่ cooldown จะครบ — '
+    why:
+        'ตาบอดคาบเกี่ยวกับจังหวะที่ cooldown จะครบ — '
         'ห้ามปิดระหว่างตาบอด และหลังกลับมามองเห็นต้องนับเวลาที่เหลือต่อ '
         'ไม่ใช่เริ่มนับใหม่',
     cooldown: _fiveMinutes,
@@ -336,7 +358,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'blindness-starts-while-still-present',
-    why: 'ตาบอดก่อนแล้วค่อยได้ exit — หักเฉพาะส่วนที่ทับกับความเงียบจริง '
+    why:
+        'ตาบอดก่อนแล้วค่อยได้ exit — หักเฉพาะส่วนที่ทับกับความเงียบจริง '
         'ส่วนที่อยู่ก่อนความเงียบไม่ได้ถูกใครกินไปจึงไม่ต้องคืน',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -356,7 +379,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'repeated-sensing-lost-does-not-move-ceiling',
-    why: 'SensingLost ซ้ำระหว่างตาบอดต้องไม่เลื่อนจุดเริ่ม '
+    why:
+        'SensingLost ซ้ำระหว่างตาบอดต้องไม่เลื่อนจุดเริ่ม '
         'ไม่งั้นเพดานจะไม่มีวันถึงถ้าระบบยิงถี่กว่าเพดาน '
         '(หลักการเดียวกับ exit ซ้ำ)',
     cooldown: _fiveMinutes,
@@ -382,7 +406,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   ConformanceCase(
     name: 'blindness-with-no-open-visit-emits-nothing',
-    why: 'ตาบอดตอนไม่มีการมาเยือนเปิดค้าง — ต้องเงียบสนิท '
+    why:
+        'ตาบอดตอนไม่มีการมาเยือนเปิดค้าง — ต้องเงียบสนิท '
         'รวมถึงตอนเกินเพดานด้วย',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,
@@ -405,7 +430,8 @@ final List<ConformanceCase> conformanceCases = [
   ),
   const ConformanceCase(
     name: 'real-log-android-2026-09-01',
-    why: 'เกณฑ์รับจาก GROUND_TRUTH.md — enter ดิบ 63 ครั้ง ความจริงคือมาเยือน 1 ครั้ง '
+    why:
+        'เกณฑ์รับจาก GROUND_TRUTH.md — enter ดิบ 63 ครั้ง ความจริงคือมาเยือน 1 ครั้ง '
         'ต้องผ่านด้วย cooldown ค่าเดียวกับไฟล์ iOS',
     cooldown: _fiveMinutes,
     blindnessCeiling: _blindnessCeiling,

@@ -20,5 +20,4 @@ typedef EpochMillis = int;
 ///
 /// ⚠️ ไม่ใช่ส่วนหนึ่งของสัญญา และไม่มีอะไรเทียบค่านี้ — port ไม่ต้องทำให้เหมือน
 String debugTime(EpochMillis millis) =>
-    DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true)
-        .toIso8601String();
+    DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true).toIso8601String();

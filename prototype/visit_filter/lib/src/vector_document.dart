@@ -45,7 +45,8 @@ Map<String, Object?> buildVectorDocument({required String repoRoot}) {
 
   return {
     'formatVersion': vectorFormatVersion,
-    'note': 'สัญญากลางของชั้นกรอง visit — Dart / Kotlin / Swift ต้องให้ผลตรงกันทุกช่อง. '
+    'note':
+        'สัญญากลางของชั้นกรอง visit — Dart / Kotlin / Swift ต้องให้ผลตรงกันทุกช่อง. '
         'เวลาทุกค่าเป็นจำนวนเต็มมิลลิวินาทีนับจาก epoch (UTC). '
         'สร้างด้วย `dart run bin/generate_vectors.dart` ห้ามแก้ด้วยมือ.',
     'source': 'prototype/visit_filter',

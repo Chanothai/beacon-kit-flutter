@@ -72,7 +72,8 @@ const List<Expectation> expectations = [
   List<VisitEvent> events,
   List<ObservationRejection> rejections,
   VisitFilterState state,
-}) runLog(String path) {
+})
+runLog(String path) {
   final entries = parseRegionLog(path);
   var state = VisitFilterState.initial;
   final events = <VisitEvent>[];
@@ -98,8 +99,14 @@ void main() {
       final ends = result.events.whereType<VisitEnded>().toList();
 
       test('จำนวน event ดิบในไฟล์ตรงกับ GROUND_TRUTH.md', () {
-        expect(entries.where((e) => e.event == 'enter'), hasLength(expected.rawEnter));
-        expect(entries.where((e) => e.event == 'exit'), hasLength(expected.rawExit));
+        expect(
+          entries.where((e) => e.event == 'enter'),
+          hasLength(expected.rawEnter),
+        );
+        expect(
+          entries.where((e) => e.event == 'exit'),
+          hasLength(expected.rawExit),
+        );
       });
 
       test('ทุก observation ถูกรับไว้ — ไม่มีอันไหนที่ reducer รับไม่ได้', () {
@@ -110,7 +117,8 @@ void main() {
         expect(
           starts,
           hasLength(1),
-          reason: 'enter ดิบ ${expected.rawEnter} ครั้ง · '
+          reason:
+              'enter ดิบ ${expected.rawEnter} ครั้ง · '
               'ความจริงภาคสนามคือมาเยือน 1 ครั้ง',
         );
       });
@@ -128,9 +136,15 @@ void main() {
 
       test('ช่วงที่เปิดค้างถูกปิดที่ขอบข้อมูล ไม่ใช่ถูกทิ้ง', () {
         expect(ends, hasLength(1));
-        expect(ends.single.reason, VisitEndReason.observationsEnded,
-            reason: 'ไฟล์จบขณะยังอยู่ในโซน');
-        expect(formatWithOffset(ends.single.endedAtMs, offsetMs), expected.visitEndsAt);
+        expect(
+          ends.single.reason,
+          VisitEndReason.observationsEnded,
+          reason: 'ไฟล์จบขณะยังอยู่ในโซน',
+        );
+        expect(
+          formatWithOffset(ends.single.endedAtMs, offsetMs),
+          expected.visitEndsAt,
+        );
         expect(result.state.regionsWithOpenVisit, isEmpty);
       });
 
@@ -157,7 +171,8 @@ void main() {
       expect(
         result.events.whereType<VisitStarted>(),
         hasLength(1),
-        reason: '${expected.file} ต้องผ่านด้วย cooldown '
+        reason:
+            '${expected.file} ต้องผ่านด้วย cooldown '
             '${filter.cooldownMs} ms ตัวเดียวกับอีกไฟล์',
       );
     }

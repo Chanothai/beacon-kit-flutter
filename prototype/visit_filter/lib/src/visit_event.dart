@@ -98,6 +98,7 @@ final class VisitEnded extends VisitEvent {
   int get hashCode => Object.hash(regionId, startedAtMs, endedAtMs, reason);
 
   @override
-  String toString() => 'VisitEnded($regionId, ${debugTime(startedAtMs)} → '
+  String toString() =>
+      'VisitEnded($regionId, ${debugTime(startedAtMs)} → '
       '${debugTime(endedAtMs)}, ${reason.name})';
 }

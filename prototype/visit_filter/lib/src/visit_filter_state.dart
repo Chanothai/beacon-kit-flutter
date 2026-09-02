@@ -78,15 +78,15 @@ final class RegionState {
     EpochMillis? silencePausedMs,
     OpenVisit? visit,
     bool clearVisit = false,
-  }) =>
-      RegionState(
-        present: present ?? this.present,
-        lastPresentAtMs: lastPresentAtMs ?? this.lastPresentAtMs,
-        absentSinceMs:
-            clearAbsentSince ? null : (absentSinceMs ?? this.absentSinceMs),
-        silencePausedMs: silencePausedMs ?? this.silencePausedMs,
-        visit: clearVisit ? null : (visit ?? this.visit),
-      );
+  }) => RegionState(
+    present: present ?? this.present,
+    lastPresentAtMs: lastPresentAtMs ?? this.lastPresentAtMs,
+    absentSinceMs: clearAbsentSince
+        ? null
+        : (absentSinceMs ?? this.absentSinceMs),
+    silencePausedMs: silencePausedMs ?? this.silencePausedMs,
+    visit: clearVisit ? null : (visit ?? this.visit),
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -99,10 +99,16 @@ final class RegionState {
 
   @override
   int get hashCode => Object.hash(
-      present, lastPresentAtMs, absentSinceMs, silencePausedMs, visit);
+    present,
+    lastPresentAtMs,
+    absentSinceMs,
+    silencePausedMs,
+    visit,
+  );
 
   @override
-  String toString() => 'RegionState(present: $present, '
+  String toString() =>
+      'RegionState(present: $present, '
       'lastPresentAtMs: $lastPresentAtMs, absentSinceMs: $absentSinceMs, '
       'silencePausedMs: $silencePausedMs, visit: $visit)';
 }
@@ -149,18 +155,21 @@ final class VisitFilterState {
 
   bool get isBlind => sensing != SensingStatus.available;
 
-  static const VisitFilterState initial =
-      VisitFilterState(regions: {}, lastObservationAtMs: null);
+  static const VisitFilterState initial = VisitFilterState(
+    regions: {},
+    lastObservationAtMs: null,
+  );
 
   RegionState regionState(String regionId) =>
       regions[regionId] ?? RegionState.unknown;
 
   /// region ที่มีการมาเยือนเปิดค้างอยู่ตอนนี้ (เรียงตาม identifier)
-  List<String> get regionsWithOpenVisit => (regions.entries
-          .where((e) => e.value.visit != null)
-          .map((e) => e.key)
-          .toList())
-      ..sort();
+  List<String> get regionsWithOpenVisit =>
+      (regions.entries
+            .where((e) => e.value.visit != null)
+            .map((e) => e.key)
+            .toList())
+        ..sort();
 
   @override
   String toString() =>
