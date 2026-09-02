@@ -19,3 +19,7 @@ build/
 # ไม่เดินเข้าไปข้างในเลย ทำให้ `!` ข้างล่างไม่มีผล (ไฟล์จะยัง commit ไม่ได้)
 .vscode/*
 !.vscode/launch.json
+
+# เครื่องมือภายในของ agent (subagent / hook / skill) — ไม่ใช่ส่วนหนึ่งของ SDK
+# ไม่ขึ้น repo ของบริษัท
+.claude/
