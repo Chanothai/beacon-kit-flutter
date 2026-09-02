@@ -144,6 +144,163 @@ class BackgroundEvidenceLogTest {
         assertEquals(6, line.split("\t").size)
     }
 
+    /**
+     * **ตัวระบุ process ต้องอยู่ครบทั้งสี่ค่า เรียงเหมือนฝั่ง iOS**
+     *
+     * คู่แฝดของ `testProcessMarkerHasAllFourKeysInOrder` ใน RunnerTests.swift —
+     * ถ้าลำดับหรือชื่อ key ต่างกันแม้แค่ตัวเดียว การ `grep` ไฟล์ของสองแพลตฟอร์ม
+     * ด้วยคำสั่งเดียวกันจะได้ผลไม่เท่ากัน ซึ่งทำให้ "เทียบ Android กับ iOS"
+     * กลายเป็นการเทียบสิ่งที่วัดคนละวิธี
+     */
+    @Test
+    fun `ตัวระบุ process มีครบสี่ค่าและเรียงตรงกับฝั่ง iOS`() {
+        // ตรึง processId/pid ไว้ ไม่อ่านค่าจริง — `android.os.Process.myPid()` เป็น
+        // stub ที่โยน `RuntimeException("Stub!")` บน JVM ของ unit test
+        val marker = BackgroundEvidenceLog.processMarker(
+            uptimeMillis = 1234L,
+            receiverEntry = true,
+            processId = "a1b2c3d4",
+            pid = 4242,
+        )
+
+        assertEquals(
+            "procUuid=a1b2c3d4 pid=4242 uptimeMs=1234 receiverEntry=true",
+            marker,
+        )
+    }
+
+    /**
+     * `uptimeMs` ต้องเป็น **จำนวนเต็มมิลลิวินาที** ไม่ใช่วินาทีทศนิยม
+     *
+     * ช่วงที่ต้องแยกให้ออกคือหลักร้อยมิลลิวินาที: event ที่มาถึงทันทีหลัง process
+     * เกิดคือหลักฐานว่า process ถูกสร้างขึ้นมาเพื่อ event นั้น ถ้าปัดเป็น `0.4s`
+     * เหมือนรูปแบบเดิม ความต่างระหว่าง 350 ms กับ 449 ms จะหายไป
+     */
+    @Test
+    fun `uptimeMs เป็นจำนวนเต็มมิลลิวินาที ไม่ใช่วินาทีทศนิยม`() {
+        val marker = BackgroundEvidenceLog.processMarker(
+            uptimeMillis = 350L,
+            receiverEntry = false,
+            processId = "a1b2c3d4",
+            pid = 4242,
+        )
+
+        assertTrue(
+            Regex(" uptimeMs=350 ").containsMatchIn(marker),
+            "ต้องเป็น uptimeMs=350 ไม่ใช่ 0.4s หรือ 350.0 ได้ $marker",
+        )
+        assertTrue(
+            marker.endsWith("receiverEntry=false"),
+            "receiverEntry ต้องเป็นค่าสุดท้ายเหมือนฝั่ง iOS ได้ $marker",
+        )
+    }
+
+    /**
+     * `procUuid` ในสัญญาณดิบต้อง **เป็นค่าเดียวกับคอลัมน์ที่ 2 เสมอ**
+     *
+     * ทั้งสองที่ตั้งใจให้ซ้ำกัน (คอลัมน์ที่ 2 ไว้ให้คนอ่าน / key ไว้ให้เครื่องอ่าน
+     * คู่กับ pid+uptimeMs) — แต่ "ซ้ำกัน" มีค่าก็ต่อเมื่อ **ขัดแย้งกันไม่ได้**
+     * ถ้าวันหนึ่งสองที่มาจากคนละแหล่ง ไฟล์หลักฐานจะมีสองคำตอบสำหรับคำถามเดียว
+     */
+    @Test
+    fun `procUuid ในสัญญาณดิบตรงกับคอลัมน์ที่ 2 เสมอ`() {
+        val line = BackgroundEvidenceLog.line(
+            timestampMillis = 0L,
+            event = "enter",
+            regionIdentifier = "k9p-default",
+            conclusion = "relaunchedFromTerminated",
+            rawSignals = BackgroundEvidenceLog.processMarker(
+                uptimeMillis = 0L,
+                receiverEntry = true,
+                pid = 4242,
+            ),
+        )
+
+        val columns = line.split("\t")
+        val fromRawSignals = Regex("procUuid=([0-9a-f]{8})").find(columns[5])?.groupValues?.get(1)
+
+        assertEquals(columns[1], fromRawSignals)
+    }
+
+    /**
+     * บรรทัด `exit` ต้องบอกได้เองว่า "30 วินาทีที่ขอไป กลายเป็นเท่าไรจริง"
+     *
+     * ล็อกชื่อ key และลำดับไว้ เพราะผู้ทดสอบอ่านค่าพวกนี้ด้วยตาบนหน้าจอมือถือ
+     * ระหว่างเก็บข้อมูล และ `grep` จากไฟล์ดิบทีหลัง
+     */
+    @Test
+    fun `บรรทัด exit มีเวลาของนาฬิกาปลุกครบสามค่าเรียงตามที่ตกลง`() {
+        val field = BackgroundEvidenceLog.exitTimingField(
+            sinceLastSeenMillis = 30_412L,
+            scheduledAtElapsedMillis = 1_788_153L,
+            firedAtElapsedMillis = 1_790_935L,
+        )
+
+        assertEquals(
+            "sinceLastSeenMs=30412 scheduledAtElapsed=1788153 firedAtElapsed=1790935",
+            field,
+        )
+    }
+
+    /**
+     * **`n/a` ห้ามกลายเป็น `0`** — สาขาที่เทียบเวลาข้ามรอบบูตไม่ได้ส่ง `null` มา
+     * ถ้าเรนเดอร์เป็น 0 บรรทัดนั้นจะอ่านได้ว่า "นาฬิกาปลุกดังตรงเวลาเป๊ะและเพิ่ง
+     * เห็น beacon เมื่อ 0 ms ที่แล้ว" ซึ่งเป็นตัวเลขที่ดูสมเหตุสมผลแต่ไม่จริงเลย
+     * — อันตรายกว่าช่องว่าง เพราะไม่มีอะไรฟ้อง
+     */
+    @Test
+    fun `ค่าที่ไม่มีถูกเขียนเป็น n over a ไม่ใช่ศูนย์`() {
+        val field = BackgroundEvidenceLog.exitTimingField(
+            sinceLastSeenMillis = null,
+            scheduledAtElapsedMillis = null,
+            firedAtElapsedMillis = null,
+        )
+
+        assertEquals(
+            "sinceLastSeenMs=n/a scheduledAtElapsed=n/a firedAtElapsed=n/a",
+            field,
+        )
+        assertTrue("0" !in field, "ห้ามมีเลขศูนย์ปลอมในฟิลด์ที่ไม่มีค่า ได้ $field")
+    }
+
+    /** `0` ที่เป็นค่าจริงต้องเขียนเป็น `0` ไม่ใช่ `n/a` — คนละความหมายกัน */
+    @Test
+    fun `ศูนย์ที่เป็นค่าจริงไม่ถูกกลืนเป็น n over a`() {
+        val field = BackgroundEvidenceLog.exitTimingField(
+            sinceLastSeenMillis = 0L,
+            scheduledAtElapsedMillis = 0L,
+            firedAtElapsedMillis = 0L,
+        )
+
+        assertEquals(
+            "sinceLastSeenMs=0 scheduledAtElapsed=0 firedAtElapsed=0",
+            field,
+        )
+    }
+
+    /**
+     * ฟิลด์นี้ถูกต่อท้ายคอลัมน์สัญญาณดิบ จึงต้องไม่ทำให้จำนวนคอลัมน์เปลี่ยน
+     */
+    @Test
+    fun `ฟิลด์เวลาของนาฬิกาปลุกไม่ทำให้คอลัมน์เลื่อน`() {
+        val line = BackgroundEvidenceLog.line(
+            timestampMillis = 0L,
+            processId = "a1b2c3d4",
+            event = "exit",
+            regionIdentifier = "k9p-default",
+            conclusion = "relaunchedFromTerminated",
+            rawSignals = "everForeground=false " + BackgroundEvidenceLog.exitTimingField(
+                sinceLastSeenMillis = 30_412L,
+                scheduledAtElapsedMillis = 1_788_153L,
+                firedAtElapsedMillis = 1_790_935L,
+            ),
+        )
+
+        val columns = line.split("\t")
+        assertEquals(6, columns.size)
+        assertTrue(columns[5].endsWith("firedAtElapsed=1790935"), "ได้ ${columns[5]}")
+    }
+
     @Test
     fun `ค่า default ของ processId ถูกใช้เมื่อผู้เรียกไม่ส่งมา`() {
         val line = BackgroundEvidenceLog.line(
@@ -155,5 +312,44 @@ class BackgroundEvidenceLogTest {
         )
 
         assertEquals(BackgroundEvidenceLog.processId, line.split("\t")[1])
+    }
+
+    /**
+     * `restoredRegions=[]` ต้องแปลว่า **"อ่านได้และว่าง"** เท่านั้น
+     *
+     * ถ้าความล้มเหลวของฝั่งอ่านหลุดออกมาเป็น `[]` ได้ ตารางแปลผลใน
+     * `docs/test-checklists/android_background_runbook.md` จะชี้ไปที่สาเหตุเดียว
+     * ("มีโค้ดล้างสถานะทิ้ง") ทั้งที่สาเหตุจริงอาจเป็นค่าที่เก็บไว้เสียหาย —
+     * แก้คนละทางโดยสิ้นเชิง และเป็นความล้มเหลวเงียบที่กินเวลาไปทั้งรอบทดสอบ
+     */
+    @Test
+    fun `restoredRegions ว่างกับอ่านไม่ได้ ต้องเขียนออกมาคนละแบบ`() {
+        assertEquals(
+            "restoredRegions=[k9p-default]",
+            BackgroundEvidenceLog.restoredRegionsField(listOf("k9p-default"), readError = null),
+        )
+        assertEquals(
+            "restoredRegions=[]",
+            BackgroundEvidenceLog.restoredRegionsField(emptyList(), readError = null),
+        )
+        assertEquals(
+            "restoredRegions=<read-failed:invalid-json>",
+            BackgroundEvidenceLog.restoredRegionsField(emptyList(), readError = "invalid-json"),
+        )
+    }
+
+    /**
+     * เหตุผลที่มีช่องว่าง (ข้อความของข้อยกเว้น) ต้องไม่ทำให้คอลัมน์สัญญาณดิบ
+     * กลายเป็นหลาย key — ตัวอ่านคั่นค่าด้วยช่องว่าง
+     */
+    @Test
+    fun `เหตุผลของ read-failed ไม่มีช่องว่างปน`() {
+        val field = BackgroundEvidenceLog.restoredRegionsField(
+            identifiers = emptyList(),
+            readError = "IOException: Permission denied",
+        )
+
+        assertEquals("restoredRegions=<read-failed:IOException:_Permission_denied>", field)
+        assertTrue(!field.substringAfter('=').contains(' '))
     }
 }

@@ -44,19 +44,55 @@ data class BeaconRegionSpec(
             )
         }
 
-        fun listFromJson(raw: String): List<BeaconRegionSpec> {
-            val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
-            return (0 until array.length()).mapNotNull { index ->
-                val obj = array.optJSONObject(index) ?: return@mapNotNull null
-                val uuid = runCatching { UUID.fromString(obj.optString("uuid")) }.getOrNull()
-                    ?: return@mapNotNull null
-                BeaconRegionSpec(
-                    identifier = obj.optString("identifier"),
-                    uuid = uuid,
-                    major = if (obj.has("major")) obj.optInt("major") else null,
-                    minor = if (obj.has("minor")) obj.optInt("minor") else null,
+        fun listFromJson(raw: String): List<BeaconRegionSpec> =
+            listFromJsonReporting(raw).regions
+
+        /**
+         * อ่านรายการ region พร้อม **เหตุผลเมื่ออ่านไม่สำเร็จ**
+         *
+         * [listFromJson] คืน list ว่างทั้งกรณี "ไม่มี region เก็บไว้จริง ๆ" และกรณี
+         * "มีค่าเก็บไว้แต่อ่านไม่ออก" — สองกรณีนี้มีวิธีแก้คนละทางโดยสิ้นเชิง แต่
+         * ให้อาการเดียวกันเป๊ะคือ `restoredRegions=[]` ในไฟล์หลักฐาน ซึ่งเป็นความ
+         * ล้มเหลวเงียบชนิดที่ทำให้ตีความผลทดสอบเบื้องหลังผิดทั้งรอบ (สงสัยว่ามีโค้ด
+         * ล้างสถานะทิ้ง ทั้งที่จริงคือ JSON เสีย หรือกลับกัน)
+         *
+         * `dropped` นับ element ที่อ่านไม่ได้ทีละอัน (ไม่มี identifier / uuid ผิด
+         * รูปแบบ) — เดิมถูกทิ้งเงียบ ๆ ด้วย `mapNotNull` + `filter`
+         */
+        fun listFromJsonReporting(raw: String): ParsedRegionList {
+            val array = runCatching { JSONArray(raw) }.getOrNull()
+                ?: return ParsedRegionList(emptyList(), "invalid-json")
+
+            val regions = mutableListOf<BeaconRegionSpec>()
+            var dropped = 0
+            for (index in 0 until array.length()) {
+                val obj = array.optJSONObject(index)
+                val uuid = obj?.let {
+                    runCatching { UUID.fromString(it.optString("uuid")) }.getOrNull()
+                }
+                val identifier = obj?.optString("identifier").orEmpty()
+                if (obj == null || uuid == null || identifier.isEmpty()) {
+                    dropped++
+                    continue
+                }
+                regions.add(
+                    BeaconRegionSpec(
+                        identifier = identifier,
+                        uuid = uuid,
+                        major = if (obj.has("major")) obj.optInt("major") else null,
+                        minor = if (obj.has("minor")) obj.optInt("minor") else null,
+                    ),
                 )
-            }.filter { it.identifier.isNotEmpty() }
+            }
+
+            return ParsedRegionList(
+                regions = regions,
+                readError = if (dropped > 0) {
+                    "unreadable-entries=$dropped/${array.length()}"
+                } else {
+                    null
+                },
+            )
         }
 
         fun listToJson(regions: List<BeaconRegionSpec>): String {
@@ -171,3 +207,17 @@ data class BeaconRegionSpec(
         return bytes
     }
 }
+
+/**
+ * ผลการอ่านรายการ region ที่เก็บไว้ — **แยก "ว่าง" ออกจาก "อ่านไม่สำเร็จ"**
+ *
+ * ผู้เรียกที่เขียนไฟล์หลักฐานต้องรายงานสองกรณีนี้ด้วยข้อความคนละแบบ ไม่ใช่ `[]`
+ * เหมือนกันทั้งคู่ (ดู `BeaconRegionSpec.listFromJsonReporting`)
+ *
+ * @param readError `null` = อ่านค่าที่เก็บไว้ได้ครบ · ไม่ `null` = อ่านไม่สำเร็จ
+ *   และ [regions] เป็นเพียงส่วนที่อ่านได้เท่านั้น **ห้ามอ่านว่าเป็นรายการที่ครบ**
+ */
+data class ParsedRegionList(
+    val regions: List<BeaconRegionSpec>,
+    val readError: String?,
+)

@@ -159,9 +159,21 @@ object BackgroundRegionMonitor {
         return registerScans(appContext, store.regions)
     }
 
-    /** identifier ของ region ที่ **เราเอง** เก็บไว้ว่ากำลังเฝ้าอยู่ */
+    /**
+     * identifier ของ region ที่ **เราเอง** เก็บไว้ว่ากำลังเฝ้าอยู่
+     *
+     * ⚠️ **ห้ามใช้ตัวนี้เขียนไฟล์หลักฐาน** — list ว่างที่คืนมาไม่ได้บอกว่า "ไม่มี
+     * region" หรือ "อ่านค่าที่เก็บไว้ไม่ได้" ใช้ [restoredRegions] แทน
+     */
     fun restoredRegionIdentifiers(context: Context): List<String> =
         BackgroundRegionStore(context.applicationContext).regions.map { it.identifier }
+
+    /**
+     * region ที่เราจำไว้ **พร้อมเหตุผลถ้าอ่านไม่สำเร็จ** — สำหรับเส้นทางที่เขียน
+     * หลักฐาน ซึ่งต้องรายงาน "ว่าง" กับ "อ่านไม่ออก" ด้วยข้อความคนละแบบ
+     */
+    fun restoredRegions(context: Context): ParsedRegionList =
+        BackgroundRegionStore(context.applicationContext).readRegions()
 
     fun isActive(context: Context): Boolean =
         BackgroundRegionStore(context.applicationContext).isActive
@@ -429,6 +441,9 @@ object BackgroundRegionMonitor {
 
         val timeoutMillis = store.exitTimeoutSeconds * 1000L
         val now = SystemClock.elapsedRealtime()
+        // อ่าน**ก่อน** `markOutside()` เสมอ — เมธอดนั้นลบคีย์ `alarmAtElapsed.*` ทิ้ง
+        // (BackgroundRegionStore.markOutside) ถ้าอ่านทีหลังจะได้ 0 ทุกครั้ง
+        val scheduledAt = store.scheduledExitAlarmElapsedMillis(regionIdentifier)
 
         if (!store.storedElapsedTimesAreFromThisBoot()) {
             // เทียบเวลาข้ามรอบบูตไม่ได้ — ประกาศ exit เพราะการลงทะเบียนสแกนหายไป
@@ -441,6 +456,11 @@ object BackgroundRegionMonitor {
                     state = "exit",
                     timestampMillis = System.currentTimeMillis(),
                     fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                    // **ไม่ส่งค่าเวลาเลยในสาขานี้ โดยตั้งใจ** — `scheduledAt` และ
+                    // `lastSeenElapsed` ที่เก็บไว้มาจากคนละรอบบูตกับ `now` การลบ
+                    // กันจึงให้ตัวเลขที่ดูสมเหตุสมผลแต่ไม่มีความหมาย ซึ่งอันตราย
+                    // กว่าการไม่มีค่า · บรรทัด exit ที่ทั้งสามฟิลด์เป็น `n/a`
+                    // จึงอ่านได้ว่า "มาจากสาขานี้" — เป็นสาขาเดียวที่ให้ผลแบบนั้น
                 ),
             )
             return
@@ -463,6 +483,12 @@ object BackgroundRegionMonitor {
                 state = "exit",
                 timestampMillis = System.currentTimeMillis(),
                 fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                // สามค่านี้ทำให้บรรทัด exit อธิบายตัวเองได้โดยไม่ต้องเดา:
+                // `sinceLastSeen` = หน้าต่างที่ **ได้จริง** (เทียบกับ 30 วิที่ขอไป)
+                // `scheduledAt`/`now` = ระยะที่ระบบเลื่อนนาฬิกาปลุกออกไป
+                exitSinceLastSeenMillis = sinceLastSeen,
+                exitScheduledAtElapsedMillis = scheduledAt,
+                exitFiredAtElapsedMillis = now,
             ),
         )
     }

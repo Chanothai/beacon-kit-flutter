@@ -2,6 +2,7 @@ package com.beaconkit.example
 
 import android.app.Application
 import com.bigc.beacon_kit_android.BackgroundRegionMonitor
+import com.bigc.beacon_kit_android.BackgroundRegionStateEvent
 
 /**
  * `Application` ของ **example app เท่านั้น** — โค้ดในไฟล์นี้จงใจไม่อยู่ใน
@@ -56,17 +57,50 @@ class ExampleApplication : Application() {
                     event = event.state,
                     regionIdentifier = event.regionIdentifier,
                     conclusion = processState.conclusion,
-                    rawSignals = BackgroundEvidenceLog.rawSignals(this, processState),
+                    // receiverEntry = true เป็น **ข้อเท็จจริงของเส้นทางเรียก ไม่ใช่
+                    // การเดา**: `BackgroundRegionMonitor.emit()` (จุดเดียวที่เรียก
+                    // observer ตัวนี้) ถูกเรียกจาก `onSighting`/`onExitAlarm`
+                    // เท่านั้น และสองเมธอดนั้นมีผู้เรียกแค่ `BeaconScanReceiver`
+                    // กับ `RegionExitAlarmReceiver` — ทั้งคู่คือ `onReceive`
+                    //
+                    // ถ้าวันหนึ่งมีเส้นทางที่ยิง event จากที่อื่น (เช่นตอน
+                    // foreground โดยตรง) **ต้องแยกค่าตรงนี้** ไม่ใช่ปล่อยให้
+                    // บรรทัดนั้นอ้างว่ามาจาก receiver
+                    rawSignals = BackgroundEvidenceLog.rawSignals(
+                        context = this,
+                        state = processState,
+                        receiverEntry = true,
+                    ) + exitTimingSuffix(event),
                 ),
             )
             ExampleNotifications.post(
                 context = this,
                 title = "Region ${event.state}: ${event.regionIdentifier}",
-                body = "สถานะแอป: ${processState.conclusion} · pid=${BackgroundEvidenceLog.processId}",
+                // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ [BackgroundEvidenceLog.processId]
+                // ไม่ใช่ pid ของ Linux การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat`
+                // หาไม่เจอแล้วสรุปว่า process ไม่ตรงกัน
+                body = "สถานะแอป: ${processState.conclusion} · " +
+                    "procUuid=${BackgroundEvidenceLog.processId}",
             )
         }
 
         logLaunch()
+    }
+
+    /**
+     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุก **เฉพาะบรรทัด `exit`**
+     *
+     * บรรทัด `enter` ไม่มีนาฬิกาปลุกให้พูดถึง การใส่ `n/a` สามช่องทุกบรรทัดจะ
+     * ทำให้คอลัมน์สัญญาณดิบยาวขึ้นโดยไม่ได้ข้อมูลเพิ่ม และทำให้ `n/a` เสีย
+     * ความหมาย — ค่านั้นถูกใช้แยกสาขา `bootMismatch` ของ exit อยู่
+     */
+    private fun exitTimingSuffix(event: BackgroundRegionStateEvent): String {
+        if (event.state != "exit") return ""
+        return " " + BackgroundEvidenceLog.exitTimingField(
+            sinceLastSeenMillis = event.exitSinceLastSeenMillis,
+            scheduledAtElapsedMillis = event.exitScheduledAtElapsedMillis,
+            firedAtElapsedMillis = event.exitFiredAtElapsedMillis,
+        )
     }
 
     /**
@@ -83,11 +117,31 @@ class ExampleApplication : Application() {
      * กำลังเฝ้าอะไรอยู่จริง** ส่วนค่านี้มาจากไฟล์ของเราเอง = **เราเคยสั่งให้เฝ้า
      * อะไรไว้** ตั้งชื่อคนละคำโดยตั้งใจ (ADR-14) เพื่อไม่ให้ใครอ่าน log แล้ว
      * เข้าใจว่าสองแพลตฟอร์มได้ค่านี้มาจากแหล่งเดียวกัน
+     *
+     * ## `[]` กับ `<read-failed:…>` ไม่ใช่สิ่งเดียวกัน
+     *
+     * `[]` = อ่านไฟล์สถานะได้ และไม่มี region อยู่ในนั้นจริง ๆ
+     * `<read-failed:เหตุผล>` = **อ่านไม่สำเร็จ** จึงตอบไม่ได้ว่ามีหรือไม่มี
+     *
+     * เดิมทั้งสองกรณีเขียนออกมาเป็น `[]` เหมือนกัน ซึ่งเป็นความล้มเหลวเงียบ:
+     * ตารางแปลผลใน runbook ชี้ไปที่ "มีโค้ดล้างสถานะทิ้ง" ทางเดียว ทั้งที่อาจเป็น
+     * ค่าที่เก็บไว้เสียหายหรือเปิดไฟล์ไม่ได้ ซึ่งแก้คนละทางโดยสิ้นเชิง
      */
     private fun logLaunch() {
-        val restored = runCatching {
-            BackgroundRegionMonitor.restoredRegionIdentifiers(this)
-        }.getOrDefault(emptyList())
+        val restoredField = runCatching {
+            val parsed = BackgroundRegionMonitor.restoredRegions(this)
+            BackgroundEvidenceLog.restoredRegionsField(
+                identifiers = parsed.regions.map { it.identifier },
+                readError = parsed.readError,
+            )
+        }.getOrElse { error ->
+            // ข้อยกเว้นตรงนี้เดิมกลายเป็น `[]` เงียบ ๆ — บรรทัดที่ตามมาจะดูเหมือน
+            // "ไฟล์สถานะว่าง" ทั้งที่ยังไม่เคยอ่านสำเร็จเลยสักครั้ง
+            BackgroundEvidenceLog.restoredRegionsField(
+                identifiers = emptyList(),
+                readError = "${error.javaClass.simpleName}: ${error.message}",
+            )
+        }
 
         BackgroundEvidenceLog.append(
             this,
@@ -96,8 +150,27 @@ class ExampleApplication : Application() {
                 event = "launch",
                 regionIdentifier = "-",
                 conclusion = processState.conclusion,
-                rawSignals = BackgroundEvidenceLog.rawSignals(this, processState) +
-                    " restoredRegions=[${restored.joinToString(",")}]",
+                // receiverEntry = false เสมอ **แม้ process นี้จะเกิดขึ้นเพราะ
+                // broadcast ก็ตาม** — ระบบเรียก `Application.onCreate()` ให้จบ
+                // ก่อนแล้วจึงเรียก `onReceive()` บรรทัดนี้จึงถูกเขียนนอก
+                // `onReceive` จริง ๆ
+                //
+                // ⚠️ `conclusion` ของบรรทัด `launch` **ไม่ใช่หลักฐาน** — เมธอดนี้
+                // ถูกเรียกจาก `Application.onCreate()` ซึ่งเกิดก่อน `Activity` ตัว
+                // แรกเสมอ ณ จุดนั้น `resumedActivityCount == 0` และ
+                // `hasEverBeenForeground == false` ทุกครั้ง ค่าจึงเป็น
+                // `relaunchedFromTerminated` **เสมอ** แม้ผู้ใช้จะกดไอคอนเปิดแอปเอง
+                //
+                // สิ่งที่พิสูจน์ว่า process นี้เป็นตัวใหม่คือ **`procUuid` ที่ไม่
+                // เคยปรากฏในไฟล์มาก่อน** เท่านั้น ส่วนบริบทว่าแอปถูกปลุกโดยไม่มี UI
+                // จริงหรือไม่ ต้องอ่านจากบรรทัด `enter`/`exit` ที่มี
+                // `receiverEntry=true` และ `procUuid` เดียวกัน ซึ่งคำนวณ
+                // `conclusion` ตอนที่ `ProcessState` มีข้อมูลจริงแล้ว
+                rawSignals = BackgroundEvidenceLog.rawSignals(
+                    context = this,
+                    state = processState,
+                    receiverEntry = false,
+                ) + " " + restoredField,
             ),
         )
     }

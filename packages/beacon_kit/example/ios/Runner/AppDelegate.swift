@@ -98,8 +98,17 @@ import beacon_kit_ios
         event: "launch",
         regionIdentifier: "-",
         conclusion: currentRunContext(),
+        // receiverEntry = false เสมอ **แม้ process นี้จะถูก iOS ปลุกขึ้นมาเพื่อส่ง
+        // location event ก็ตาม** — บรรทัดนี้เขียนใน
+        // `didFinishLaunchingWithOptions` ซึ่งจบก่อน CoreLocation จะเรียก delegate
+        //
+        // อ่านคู่กับคอลัมน์ `conclusion`: บรรทัด launch ที่เป็น
+        // `relaunchedFromTerminated` แล้วตามด้วยบรรทัดที่มี `receiverEntry=true`
+        // และ `procUuid` เดียวกัน = iOS สร้าง process ขึ้นมาเพื่อส่ง event นั้น
+        // โดยเฉพาะ ซึ่งคือสิ่งที่ B5 ต้องพิสูจน์
         rawSignals:
-          "\(rawSignalSummary()) monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))]"
+          "\(rawSignalSummary(receiverEntry: false)) "
+          + "monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))]"
       )
     )
   }
@@ -117,7 +126,15 @@ import beacon_kit_ios
         event: event.state,
         regionIdentifier: event.regionIdentifier,
         conclusion: currentRunContext(),
-        rawSignals: rawSignalSummary()
+        // receiverEntry = true เป็น **ข้อเท็จจริงของเส้นทางเรียก ไม่ใช่การเดา**:
+        // hook นี้ถูกเรียกจาก `IBeaconRangingManager.emitRegionStateIfChanged`
+        // จุดเดียว และเมธอดนั้นมีผู้เรียกแค่สามตัว ซึ่งทั้งสามเป็น
+        // `CLLocationManagerDelegate` ที่ระบบเรียกเข้ามาทั้งหมด:
+        // `didEnterRegion` / `didExitRegion` / `didDetermineState`
+        //
+        // ถ้าวันหนึ่งมีเส้นทางที่ยิง event จากที่อื่น **ต้องแยกค่าตรงนี้**
+        // ไม่ใช่ปล่อยให้บรรทัดนั้นอ้างว่ามาจาก callback ของระบบ
+        rawSignals: rawSignalSummary(receiverEntry: true)
       )
     )
 
@@ -149,14 +166,29 @@ import beacon_kit_ios
   /// สัญญาณดิบชุดเดียวกับที่ `getLaunchDiagnostics` คืนให้ Dart — เก็บลง log ด้วย
   /// เพื่อให้ตรวจย้อนกลับได้ว่าข้อสรุปข้างต้นมาจากอะไร ถ้าวันหนึ่งพบว่าวิธีสรุป
   /// ของเราผิด ข้อมูลดิบยังอยู่
-  private func rawSignalSummary() -> String {
-    let uptime = Date().timeIntervalSince(processStartedAt)
-    // ไม่ใส่ processId ตรงนี้ — มันมีคอลัมน์ของตัวเองแล้ว (คอลัมน์ที่ 2) การใส่ซ้ำ
-    // จะทำให้ตัวอ่านที่ค้นด้วย regex เจอสองที่แล้วเลือกผิดตัวได้
+  ///
+  /// ขึ้นต้นด้วย `BackgroundEvidenceLog.processMarker` เสมอ (รูปแบบเดียวกับฝั่ง
+  /// Android เป๊ะ) ตามด้วยสัญญาณที่มีเฉพาะฝั่ง iOS
+  ///
+  /// [receiverEntry] ไม่มีค่า default **โดยตั้งใจ** — ผู้เรียกต้องตอบทุกครั้งว่า
+  /// บรรทัดนี้เขียนจาก callback ที่ระบบเรียกเข้ามาหรือไม่ ถ้าให้ default ไว้
+  /// บรรทัดที่ผู้เรียกใหม่ลืมส่งจะได้ค่าที่ดู "ปกติ" แต่ไม่จริง ซึ่งแย่กว่า
+  /// คอมไพล์ไม่ผ่าน
+  ///
+  /// ⚠️ `uptimeMs` ฝั่งนี้วัดด้วย **นาฬิกาเวลาจริง** (`Date`) ต่างจากฝั่ง Android
+  /// ที่ใช้ `SystemClock.elapsedRealtime()` ซึ่งไม่กระโดด — ถ้าเครื่องซิงก์เวลา
+  /// กับเครือข่ายกลางรอบทดสอบ ค่านี้ฝั่ง iOS จะกระโดดตาม เก็บรูปแบบเดิมไว้เพราะ
+  /// ทางเลือกฝั่ง iOS (`ProcessInfo.systemUptime`) **ไม่นับเวลาที่เครื่องหลับ**
+  /// ซึ่งเพี้ยนหนักกว่ามากในรอบทดสอบข้ามคืนที่เครื่องหลับเป็นส่วนใหญ่
+  private func rawSignalSummary(receiverEntry: Bool) -> String {
+    let uptimeMillis = Int(Date().timeIntervalSince(processStartedAt) * 1000)
     return
-      "launchKey=\(launchedByLocationKey) everActive=\(hasEverBecomeActive) "
-      + "state=\(Self.stateString(UIApplication.shared.applicationState)) "
-      + "uptime=\(String(format: "%.1f", uptime))s"
+      BackgroundEvidenceLog.processMarker(
+        uptimeMillis: uptimeMillis,
+        receiverEntry: receiverEntry
+      )
+      + " launchKey=\(launchedByLocationKey) everActive=\(hasEverBecomeActive) "
+      + "state=\(Self.stateString(UIApplication.shared.applicationState))"
   }
 
   private func postNotification(title: String, body: String) {
@@ -321,11 +353,81 @@ import beacon_kit_ios
       // ใน log" แบบไม่มีคำอธิบาย ซึ่งแยกไม่ออกจากการที่แอปไม่ถูกปลุกเลย
       result(BackgroundEvidenceLog.shared.lastError)
 
+    case "runEvidenceLogSelfTest":
+      result(evidenceLogSelfTest())
+
     default:
       result(FlutterMethodNotImplemented)
     }
   }
 
+
+  // MARK: - self-test ของเครื่องมือวัด
+
+  /// **พิสูจน์ว่าเครื่องมือวัดทำงานได้ โดยไม่ต้องพึ่ง beacon เลย**
+  ///
+  /// คู่แฝดของ `MainActivity.evidenceLogSelfTest()` ฝั่ง Android — คืน key ชุด
+  /// เดียวกันเป๊ะ เพื่อให้หน้าจอฝั่ง Dart ตัวเดียวแสดงผลได้ทั้งสองแพลตฟอร์ม
+  ///
+  /// เขียนหนึ่งบรรทัดผ่าน `BackgroundEvidenceLog.shared.append` **ตัวเดียวกับที่
+  /// เส้นทางเบื้องหลังใช้** แล้วอ่านไฟล์กลับขึ้นมาจริง ๆ เทียบว่าลงดิสก์แล้ว
+  ///
+  /// **ทำไมต้องมี:** `append` ห้าม throw (ตอนถูกปลุกเบื้องหลังไม่มีใครดู error)
+  /// มันจึงเก็บ error ไว้ใน `lastError` เงียบ ๆ ผลคือ "เขียนไฟล์ไม่ได้" กับ
+  /// "ระบบไม่เคยส่ง event" **จบที่อาการเดียวกันเป๊ะ: ไฟล์ log ว่าง**
+  ///
+  /// **ทำไมต้องอ่าน `lastError` ก่อนเขียน:** `append` ที่สำเร็จจะตั้งค่ากลับเป็น
+  /// `nil` — ถ้าอ่านหลังเขียนอย่างเดียว error ที่สะสมมาจากรอบเบื้องหลังจะถูกลบ
+  /// ทิ้งพร้อมกับหลักฐานว่ามันเคยเกิด
+  ///
+  /// ⚠️ **ฝั่งนี้มีโหมดล้มเหลวที่ Android ไม่มี:** ถ้าเครื่องรีบูตแล้วยังไม่เคย
+  /// ปลดล็อก ไฟล์ระดับ `completeUntilFirstUserAuthentication` จะอ่าน/เขียนไม่ได้
+  /// — จะโผล่ที่ `errorAfterWrite`/`readError` ซึ่งเป็นผลที่**ถูกต้อง** ไม่ใช่บั๊ก
+  private func evidenceLogSelfTest() -> [String: Any] {
+    // ต้องอ่าน**ก่อน** append เสมอ — ดูเหตุผลข้างบน
+    let errorBeforeWrite = BackgroundEvidenceLog.shared.lastError
+
+    let line = BackgroundEvidenceLog.line(
+      timestamp: Date(),
+      event: "selftest",
+      regionIdentifier: "-",
+      conclusion: currentRunContext(),
+      // receiverEntry = false — บรรทัดนี้เขียนจากปุ่มบน UI ไม่ใช่จาก callback
+      // ของ CoreLocation การใส่ true จะเป็นการโกหกในไฟล์หลักฐาน
+      rawSignals: rawSignalSummary(receiverEntry: false)
+    )
+    BackgroundEvidenceLog.shared.append(line: line)
+    let errorAfterWrite = BackgroundEvidenceLog.shared.lastError
+
+    var path = ""
+    var readError: String?
+    var lines: [String] = []
+    do {
+      path = try BackgroundEvidenceLog.prepareLogFile(named: BackgroundEvidenceLog.fileName)
+      let contents = try String(contentsOfFile: path, encoding: .utf8)
+      lines = contents.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+    } catch {
+      // อ่านไม่ได้เป็นคนละความล้มเหลวกับเขียนไม่ได้ — ต้องรายงานแยกกัน
+      readError = error.localizedDescription
+    }
+
+    let fm = FileManager.default
+    let exists = !path.isEmpty && fm.fileExists(atPath: path)
+    let size = (try? fm.attributesOfItem(atPath: path)[.size] as? NSNumber)??.intValue ?? 0
+
+    return [
+      "path": path,
+      "errorBeforeWrite": errorBeforeWrite ?? NSNull(),
+      "writtenLine": line,
+      "errorAfterWrite": errorAfterWrite ?? NSNull(),
+      "fileExists": exists,
+      "fileSizeBytes": size,
+      "lineCount": lines.count,
+      "readBackLine": lines.last ?? NSNull(),
+      "readBackMatches": lines.last == line,
+      "readError": readError ?? NSNull(),
+    ]
+  }
 
   // MARK: - Log file + Data Protection
 

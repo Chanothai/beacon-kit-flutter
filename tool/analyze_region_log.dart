@@ -52,8 +52,22 @@ class LogEntry {
   final String rawSignals;
   final int lineNumber;
 
-  /// `uptime=1234.5s` จากคอลัมน์สัญญาณดิบ — `null` ถ้าอ่านไม่ได้
+  /// อายุ process ณ ตอนเขียนบรรทัด — `null` ถ้าอ่านไม่ได้
+  ///
+  /// **อ่านสองรูปแบบ และต้องอ่านได้ทั้งคู่ตลอดไป:**
+  /// - `uptimeMs=1234` — รูปแบบปัจจุบัน (มิลลิวินาทีจำนวนเต็ม) อยู่ในตัวระบุ
+  ///   process ที่ native เขียนไว้ต้นคอลัมน์สัญญาณดิบทั้งสองแพลตฟอร์ม
+  /// - `uptime=1234.5s` — รูปแบบเดิม ยังต้องอ่านได้เพราะไฟล์หลักฐานจากรอบทดสอบ
+  ///   ก่อนหน้า (เช่น `docs/test-data/2026-08-30_overnight_region_flapping.log`)
+  ///   ใช้รูปแบบนั้น และ **ห้ามแก้ไฟล์เก่าให้เข้ารูปแบบใหม่**
+  ///
+  /// ลอง `uptimeMs` ก่อนเสมอ — ค่ามิลลิวินาทีละเอียดกว่าและเป็นค่าที่บรรทัดใหม่มี
   double? get uptimeSeconds {
+    final millis = RegExp(r'uptimeMs=(\d+)').firstMatch(rawSignals);
+    if (millis != null) {
+      final parsed = int.tryParse(millis.group(1)!);
+      if (parsed != null) return parsed / 1000.0;
+    }
     final match = RegExp(r'uptime=([0-9.]+)s').firstMatch(rawSignals);
     if (match == null) return null;
     return double.tryParse(match.group(1)!);
@@ -269,7 +283,7 @@ void _printProcessLifetimes(List<LogEntry> entries) {
     print(
       'launch #${i + 1} ${_wall(launch.timestamp)} '
       '· ${launch.conclusion} '
-      '· อายุที่บันทึกได้สูงสุด ${_humanDuration(Duration(seconds: maxUptime.round()))} '
+      '· อายุที่บันทึกได้สูงสุด ${_humanDuration(Duration(milliseconds: (maxUptime * 1000).round()))} '
       '· ${_launchRegions(launch)}',
     );
   }
@@ -310,16 +324,23 @@ void _printProcessLifetimesById(List<LogEntry> entries) {
         .join(' ');
 
     print(
-      'process #${i + 1} pid=$id '
+      // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือคอลัมน์ที่ 2 (ตัวระบุที่เราสร้างเอง)
+      // ไม่ใช่ pid ของระบบปฏิบัติการ ป้ายเดิมทำให้คนที่เอาไปเทียบกับ `logcat`
+      // หาไม่เจอแล้วสรุปว่า process ไม่ตรงกัน — pid จริงอยู่ในคอลัมน์สัญญาณดิบ
+      'process #${i + 1} procUuid=$id '
       '${_wall(owned.first.timestamp)} → ${_wall(owned.last.timestamp)}',
     );
     print(
-      '   บริบทตอนเริ่ม : '
+      // ⚠️ `conclusion` ของบรรทัด `launch` **ไม่ใช่หลักฐาน** ทั้งสองแพลตฟอร์ม:
+      // มันถูกคำนวณใน `Application.onCreate()` / `didFinishLaunchingWithOptions`
+      // ซึ่งเกิดก่อนที่แอปจะมี UI ได้เสมอ ค่าจึงเป็น `relaunchedFromTerminated`
+      // ทุกครั้งแม้ผู้ใช้จะกดไอคอนเปิดแอปเอง — พิมพ์ไว้เป็นสัญญาณดิบเท่านั้น
+      '   บริบทตอนเริ่ม (ไม่ใช่หลักฐาน ดูหมายเหตุท้ายรายงาน) : '
       '${launch?.conclusion ?? "ไม่มีบรรทัด launch — process นี้เริ่มก่อนล้าง log"}',
     );
     print(
       '   อายุสูงสุดที่บันทึกได้ : '
-      '${_humanDuration(Duration(seconds: maxUptime.round()))}',
+      '${_humanDuration(Duration(milliseconds: (maxUptime * 1000).round()))}',
     );
     print('   event : $breakdown');
     if (launch != null) {
@@ -329,21 +350,35 @@ void _printProcessLifetimesById(List<LogEntry> entries) {
   }
 
   // สิ่งที่รอบทดสอบต้องการตอบให้ได้: มี process ที่ระบบสร้างขึ้นมาเองไหม
+  //
+  // **นับจากบรรทัด `enter`/`exit` เท่านั้น ไม่ใช่บรรทัด `launch`** — บรรทัด
+  // `launch` ถูกเขียนใน `Application.onCreate()` (Android) /
+  // `didFinishLaunchingWithOptions` (iOS) ซึ่งจบก่อนที่ Activity/scene ตัวแรกจะ
+  // ขึ้นมาเสมอ ณ จุดนั้นแอปยัง "ไม่เคย foreground" ทุกครั้ง ค่า `conclusion` ของ
+  // บรรทัดนั้นจึงเป็น `relaunchedFromTerminated` เสมอ **แม้ผู้ใช้กดไอคอนเปิดเอง**
+  // การนับจากบรรทัดนั้นคือการนับ process ทั้งหมด ไม่ใช่การนับหลักฐาน
   final relaunched = order
       .where(
         (id) => byProcess[id]!.any(
           (e) =>
-              e.event == 'launch' && e.conclusion == 'relaunchedFromTerminated',
+              (e.event == 'enter' || e.event == 'exit') &&
+              e.conclusion == 'relaunchedFromTerminated',
         ),
       )
       .toList();
   print(
-    'process ที่ขึ้นมาโดยผู้ใช้ไม่ได้เปิดแอปเอง (launch + relaunchedFromTerminated) : '
+    'process ที่ได้ event ตอนยังไม่เคยมี UI (enter/exit + relaunchedFromTerminated) : '
     '${relaunched.length} จาก ${order.length}',
   );
   if (relaunched.isNotEmpty) {
     print('   ${relaunched.join(", ")}');
   }
+  print('');
+  print(
+    'หมายเหตุ: สิ่งที่พิสูจน์ว่าเป็น process ใหม่คือ **procUuid ที่ไม่เคยปรากฏ '
+    'มาก่อนในไฟล์เดียวกัน** เท่านั้น · `conclusion` ของบรรทัด `launch` เป็น '
+    '`relaunchedFromTerminated` เสมอโดยโครงสร้างของโค้ด จึงห้ามอ้างเป็นหลักฐาน',
+  );
 }
 
 /// region ที่ระบบยังเก็บไว้ให้ตอน launch — ชื่อ key ต่างกันตามแพลตฟอร์ม
@@ -352,8 +387,17 @@ void _printProcessLifetimesById(List<LogEntry> entries) {
 /// ส่วน Android เขียน `restoredRegions=[...]` (มาจากไฟล์ที่เราเก็บเอง เพราะ
 /// Android ไม่มีชุด region ระดับ OS ให้ถาม — ดู ADR-14) **ตั้งใจใช้คนละชื่อ**
 /// เพื่อไม่ให้ใครอ่าน log แล้วเข้าใจว่าสองแพลตฟอร์มได้ค่านี้มาจากที่เดียวกัน
+/// `restoredRegions=<read-failed:เหตุผล>` ฝั่ง Android **ไม่ใช่รายการว่าง** แต่คือ
+/// "อ่านไฟล์สถานะไม่สำเร็จ จึงตอบไม่ได้ว่ามีอะไรอยู่" — สองอย่างนี้เคยเขียนออกมา
+/// เป็น `[]` เหมือนกัน ซึ่งทำให้ตีความผลผิดไปคนละทาง
 String _launchRegions(LogEntry launch) {
   for (final key in const ['monitoredRegions', 'restoredRegions']) {
+    final failed = RegExp('$key=<read-failed:([^>]*)>')
+        .firstMatch(launch.rawSignals);
+    if (failed != null) {
+      return '$key: อ่านไม่สำเร็จ (${failed.group(1)}) — '
+          '**ไม่ใช่** "ไม่มี region เก็บไว้"';
+    }
     final match = RegExp('$key=\\[([^\\]]*)\\]').firstMatch(launch.rawSignals);
     if (match != null) return '$key=[${match.group(1)}]';
   }

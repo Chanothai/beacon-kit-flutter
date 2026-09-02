@@ -333,6 +333,65 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(columns[5], "launchKey=true everActive=false state=background uptime=0.4s")
   }
 
+  /// **ตัวระบุ process ต้องอยู่ครบทั้งสี่ค่า เรียงเหมือนฝั่ง Android**
+  ///
+  /// คู่แฝดของ `ตัวระบุ process มีครบสี่ค่าและเรียงตรงกับฝั่ง iOS` ใน
+  /// `BackgroundEvidenceLogTest.kt` — ถ้าลำดับหรือชื่อ key ต่างกันแม้แค่ตัวเดียว
+  /// การ `grep` ไฟล์ของสองแพลตฟอร์มด้วยคำสั่งเดียวกันจะได้ผลไม่เท่ากัน ซึ่งทำให้
+  /// "เทียบ iOS กับ Android" กลายเป็นการเทียบสิ่งที่วัดคนละวิธี
+  func testProcessMarkerHasAllFourKeysInOrder() {
+    let marker = BackgroundEvidenceLog.processMarker(
+      uptimeMillis: 1234,
+      receiverEntry: true,
+      processId: "a1b2c3d4",
+      pid: 4242
+    )
+
+    XCTAssertEqual(marker, "procUuid=a1b2c3d4 pid=4242 uptimeMs=1234 receiverEntry=true")
+  }
+
+  /// `uptimeMs` ต้องเป็น **จำนวนเต็มมิลลิวินาที** ไม่ใช่วินาทีทศนิยมแบบเดิม
+  ///
+  /// ช่วงที่ต้องแยกให้ออกคือหลักร้อยมิลลิวินาที: event ที่มาถึงทันทีหลัง process
+  /// เกิดคือหลักฐานว่า iOS สร้าง process ขึ้นมาเพื่อ event นั้น ถ้าปัดเป็น `0.4s`
+  /// ความต่างระหว่าง 350 ms กับ 449 ms จะหายไป
+  func testProcessMarkerUsesIntegerMilliseconds() {
+    let marker = BackgroundEvidenceLog.processMarker(
+      uptimeMillis: 350,
+      receiverEntry: false,
+      processId: "a1b2c3d4",
+      pid: 4242
+    )
+
+    XCTAssertTrue(marker.contains(" uptimeMs=350 "), "ได้ \(marker)")
+    XCTAssertTrue(marker.hasSuffix("receiverEntry=false"), "ได้ \(marker)")
+  }
+
+  /// `procUuid` ในสัญญาณดิบต้อง **เป็นค่าเดียวกับคอลัมน์ที่ 2 เสมอ**
+  ///
+  /// ทั้งสองที่ตั้งใจให้ซ้ำกัน (คอลัมน์ที่ 2 ไว้ให้คนอ่าน / key ไว้ให้เครื่องอ่าน
+  /// คู่กับ pid+uptimeMs) — แต่ "ซ้ำกัน" มีค่าก็ต่อเมื่อ **ขัดแย้งกันไม่ได้**
+  /// ถ้าวันหนึ่งสองที่มาจากคนละแหล่ง ไฟล์หลักฐานจะมีสองคำตอบสำหรับคำถามเดียว
+  func testProcMarkerUuidMatchesSecondColumn() {
+    let line = BackgroundEvidenceLog.line(
+      timestamp: Date(timeIntervalSince1970: 0),
+      event: "enter",
+      regionIdentifier: "bigc-fleet-wide",
+      conclusion: "relaunchedFromTerminated",
+      rawSignals: BackgroundEvidenceLog.processMarker(
+        uptimeMillis: 0,
+        receiverEntry: true,
+        pid: 4242
+      )
+    )
+
+    let columns = line.components(separatedBy: "\t")
+    XCTAssertTrue(
+      columns[5].hasPrefix("procUuid=\(columns[1]) "),
+      "procUuid ในสัญญาณดิบต้องตรงกับคอลัมน์ที่ 2 ได้ \(columns[5])"
+    )
+  }
+
   /// `processId` ต้องเป็นค่าที่**อ่านได้ด้วยตาบนหน้าจอมือถือ** และคงที่ตลอดอายุ
   /// process เดียวกัน — ถ้ามันเปลี่ยนระหว่าง process การแยก "process ใหม่" ออกจาก
   /// "process เดิม" จะพังทันที ซึ่งเป็นเหตุผลเดียวที่คอลัมน์นี้มีอยู่

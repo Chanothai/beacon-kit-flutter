@@ -135,6 +135,68 @@ adb exec-out run-as com.beaconkit.example cat files/region_events.log \
 dart run tool/analyze_region_log.dart /tmp/android_region_events.log
 ```
 
+> ⚠️ **ชื่อไฟล์คือ `region_events.log` เท่านั้น** (ค่าคงที่
+> `BackgroundEvidenceLog.FILE_NAME`) อยู่ที่ `filesDir` ตรง ๆ ไม่มี subdirectory
+> — พิมพ์ชื่ออื่น `cat` จะตอบ `No such file or directory` **ซึ่งหน้าตาเหมือนกับ
+> "แอปเขียนไฟล์ไม่ได้" เป๊ะ** ก่อนสรุปว่าเครื่องมือวัดพัง ให้ `ls` ก่อนเสมอ:
+>
+> ```bash
+> adb exec-out run-as com.beaconkit.example ls -l files/
+> ```
+
+### อ่านบรรทัด `exit` ที่มาช้า — ตอบได้จากบรรทัดเดียว
+
+**ปัญหาที่เจอจริง 1 ก.ย. 2026:** exit หน่วง **22 วินาที** รอบหนึ่ง และ **3 นาที 15
+วินาที** อีกรอบ ทั้งที่ `exitTimeoutSeconds=30` เท่ากัน — แยกไม่ออกว่าเป็นเพราะอะไร
+
+| ที่เห็นในบรรทัด `exit` | แปลว่า |
+|---|---|
+| `sinceLastSeenMs` ≈ 30000 (เท่ากับที่ขอ) แต่ `firedAtElapsed − scheduledAtElapsed` โต | **ระบบเลื่อนนาฬิกาปลุก** — ไม่ใช่บั๊กของเรา ดู `docs/sources/android_background_ble.md` หัวข้อ 8 |
+| `sinceLastSeenMs` โตกว่า 30000 มาก | **มีผลสแกนเข้ามาระหว่างทางแล้วเลื่อนหน้าต่างออกไป** — ยืนยันซ้ำด้วย `sightingCount` (ข้างล่าง) |
+| ทั้งสามช่องเป็น `n/a` | มาจากสาขา **เทียบเวลาข้ามรอบบูตไม่ได้** — **ไม่ใช่หลักฐานว่า beacon หายไป** ดู §5 |
+
+> ⚠️ **`exitTimeoutSeconds` คือค่าขั้นต่ำ ไม่ใช่ค่าที่รับประกัน**
+> นาฬิกาปลุกใช้ `setAndAllowWhileIdle` ซึ่งเอกสารระบุว่าเวลาที่ส่งเข้าไปเป็น
+> **inexact**: "the alarm will not be delivered before this time, **but may be
+> deferred and delivered some time later**" และ "it will not dispatch these alarms
+> more than about every minute... when in low-power idle modes this duration may be
+> significantly longer, **such as 15 minutes**"
+> (https://developer.android.com/reference/android/app/AlarmManager)
+>
+> **ห้ามรายงานว่า "exit ช้ากว่าที่ตั้งไว้ = บั๊ก"** — ต้องดู `firedAtElapsed −
+> scheduledAtElapsed` ก่อนเสมอ
+
+### วัดอัตราที่ระบบส่งผลสแกนมาให้จริง — `sightingCount`
+
+ไฟล์ log บันทึกเฉพาะตอน**สถานะเปลี่ยน** ผลสแกนที่เข้ามาระหว่างที่ยังอยู่ในโซนไม่ทิ้ง
+ร่องรอยเลย · ตัวนับใน `shared_prefs` เติมช่องว่างนั้น:
+
+```bash
+adb exec-out run-as com.beaconkit.example \
+  cat shared_prefs/beacon_kit_android.background.xml | grep sightingCount
+# รออีก 10 นาที แล้วรันซ้ำ — ส่วนต่าง ÷ 600 วินาที = อัตราที่ระบบส่งผลมาให้จริง
+```
+
+⚠️ **ไม่ใช่อัตราที่ K9P ส่ง advertisement** — เป็นจำนวนครั้งที่ **ระบบเลือกจะส่งผล
+มาถึงเรา** หลังผ่าน batching และ duty cycle ของ BT stack แล้ว (ซึ่งถูกบังคับเป็น
+`SCAN_MODE_LOW_POWER` ตอนไม่ใช่ foreground — `docs/sources/android_background_ble.md`
+หัวข้อ 2) · ตัวนับ **รีเซ็ตเมื่อสั่งเฝ้าใหม่หรือหลังรีบูต** เพราะมันมีความหมายคู่กับ
+เวลาแบบ elapsed ที่ถูกล้างพร้อมกัน
+
+**ก่อนเริ่มทดสอบทุกรอบ: กดปุ่ม self-test ก่อน**
+
+ในแอปกาง panel **"เครื่องมือวัด: evidence log"** แล้วกด **"ทดสอบเขียน 1 บรรทัด"**
+— มันเขียนหนึ่งบรรทัด (`event=selftest`) ผ่านตัวเขียนตัวเดียวกับเส้นทางเบื้องหลัง
+แล้วอ่านไฟล์กลับขึ้นมาแสดง พร้อม path เต็มที่เอาไปต่อท้าย `adb ... cat` ได้ตรง ๆ
+
+**ถ้าปุ่มนี้ไม่ผ่าน ผลการทดสอบเบื้องหลังทุกเคสอ่านไม่ได้** เพราะไฟล์ที่ว่างเปล่า
+จะแปลว่าอะไรก็ได้ · บรรทัดแรกของ panel คือ **error ที่ค้างจากรอบก่อน**
+(`lastError` ฝั่ง native) ซึ่งเป็นค่าเดียวที่บอกได้ว่าการเขียนตอนไม่มีใครดูหน้าจอ
+ล้มเหลวไปแล้ว — panel อ่านค่านี้ตั้งแต่เปิดแอปโดยไม่ต้องกดอะไร
+
+⚠️ การเขียนที่สำเร็จจะ**ล้าง `lastError`** — ปุ่ม "อ่าน error ล่าสุด" จึงแยกจากปุ่ม
+self-test โดยตั้งใจ **เปิดแอปมาให้ดูค่าบน panel ก่อน แล้วค่อยกด self-test**
+
 **ฟิลด์ในคอลัมน์สัญญาณดิบ**
 
 | ฟิลด์ | ความหมาย |
@@ -144,30 +206,65 @@ dart run tool/analyze_region_log.dart /tmp/android_region_events.log
 | `importance` | ค่าที่ **ระบบ** จัดให้ process นี้ (`foreground` / `foregroundService` / `service` / `cached` …) — สัญญาณอิสระที่ไม่ได้มาจากการนับ Activity ของเราเอง |
 | `doze` | เครื่องอยู่ใน Doze ณ ตอนเขียนบรรทัดหรือไม่ |
 | `battOpt` | `ignoring` = ผู้ใช้ปลด battery optimization แล้ว · `optimized` = ยังไม่ปลด |
+| `procUuid` | ตัวระบุ process — **ค่าเดียวกับคอลัมน์ที่ 2 เสมอ** มีซ้ำไว้ให้ `grep` คอลัมน์เดียวได้ครบ |
 | `pid` | pid ของ Linux ไว้เทียบกับ `logcat` (**ถูกใช้ซ้ำได้ ไม่ใช่ตัวระบุ process**) |
-| `uptime` | process นี้มีอายุกี่วินาที — ใช้ key เดียวกับ iOS เพื่อให้เครื่องมือวิเคราะห์ตัวเดียวอ่านได้ |
-| `restoredRegions` | region ที่ **เราเองจำไว้** ณ ตอน launch (มีเฉพาะบรรทัด `launch`) — **ไม่ใช่** `monitoredRegions` ของ iOS ที่ระบบเป็นคนตอบ |
+| `uptimeMs` | process นี้มีอายุกี่ **มิลลิวินาที** (เดิมเป็น `uptime=<วินาที>s` ซึ่งปัดจนแยกหลักร้อยมิลลิวินาทีไม่ออก) — ใช้ key เดียวกับ iOS เพื่อให้เครื่องมือวิเคราะห์ตัวเดียวอ่านได้ |
+| `receiverEntry` | บรรทัดนี้เขียนจากใน `BroadcastReceiver.onReceive` หรือไม่ · บรรทัด `launch` เป็น `false` **เสมอ** แม้ process จะเกิดเพราะ broadcast ก็ตาม (ระบบเรียก `Application.onCreate()` จบก่อน `onReceive`) |
+| `sinceLastSeenMs` | **เฉพาะบรรทัด `exit`** — `now − lastSeen` ณ วินาทีที่ตัดสินใจ = **หน้าต่างที่ได้จริง** เทียบกับ `exitTimeoutSeconds × 1000` ที่ขอไป |
+| `scheduledAtElapsed` / `firedAtElapsed` | **เฉพาะบรรทัด `exit`** — เวลาที่**เราขอ**ให้นาฬิกาปลุกดัง กับเวลาที่มัน**ดังจริง** (`SystemClock.elapsedRealtime`) · **ผลต่าง = ระยะที่ระบบเลื่อนนาฬิกาปลุก วัดตรง ๆ ไม่ต้องอนุมาน** |
+| `restoredRegions` | region ที่ **เราเองจำไว้** ณ ตอน launch (มีเฉพาะบรรทัด `launch`) — **ไม่ใช่** `monitoredRegions` ของ iOS ที่ระบบเป็นคนตอบ · `[...]`/`[]` = อ่านไฟล์สถานะได้ · `<read-failed:เหตุผล>` = **อ่านไม่สำเร็จ จึงตอบไม่ได้ว่ามีหรือไม่มี** |
 
 ### ตารางแปลผล — ใช้ทุกครั้งก่อนสรุปอะไรก็ตาม
 
 | ที่เห็นใน log | แปลว่า | ทำอะไรต่อ |
 |---|---|---|
 | ไม่มีบรรทัด `launch` ที่ `processId` ใหม่เลย | ระบบไม่ได้ปลุกแอป | ไล่ที่การลงทะเบียนสแกน / สิทธิ์ / MIUI Autostart / ระยะ beacon — **ไม่ใช่**ที่โค้ดรับ event |
-| มี `launch` (`processId` ใหม่) แต่ `restoredRegions=[]` | ถูกปลุกแต่ไฟล์สถานะของเราว่าง | สงสัยว่ามีโค้ดล้างสถานะทิ้ง หรือขั้นเตรียมข้อ 5 ไม่ได้ทำ |
+| มี `launch` (`procUuid` ใหม่) แต่ `restoredRegions=[]` | ถูกปลุกแต่ไฟล์สถานะของเรา**ว่างจริง** (อ่านได้ ไม่มีอะไรอยู่) | ไล่ที่เส้นทางที่ล้างค่า: กดปุ่ม "หยุดเฝ้าเบื้องหลัง" (`stopBackgroundRegionMonitoring` → `clearAll()`) · ล้างข้อมูลแอป · ถอนแล้วติดตั้งใหม่ · หรือไม่เคยกด "เริ่มเฝ้าเบื้องหลัง" เลย — ยืนยันด้วยการ dump ไฟล์จริง (ดูคำสั่งใต้ตาราง) |
+| มี `launch` แต่ `restoredRegions=<read-failed:…>` | **อ่านไฟล์สถานะไม่สำเร็จ** — คนละเรื่องกับว่าง | อ่านเหตุผลในวงเล็บ: `invalid-json` = ค่าที่เก็บไว้เสีย · `unreadable-entries=n/m` = มี region ที่ถอดไม่ออก · ชื่อข้อยกเว้น = เปิด/อ่านไฟล์ไม่ได้ **ห้ามสรุปว่ามีโค้ดล้างสถานะทิ้ง** |
 | มี `launch` + region ครบ แต่ไม่มี `enter`/`exit` ตามมา | ถูกปลุกจริงและสถานะยังอยู่ แต่ **event ไปไม่ถึงเครื่องสถานะ** | สงสัย `FLAG_IMMUTABLE` (ADR-14 หัวข้อ 2.1) — ดู §8 |
 | `enter`/`exit` + `everForeground=false` | **process ที่ระบบสร้างขึ้นมาเอง = สิ่งที่ต้องการเห็น** | บันทึกลงไฟล์สถานะ |
 | `enter`/`exit` + `everForeground=true` | process เดิมยังไม่ตาย | **ยังไม่ได้ทดสอบสิ่งที่ตั้งใจ** ทำใหม่ |
+| `enter`/`exit` + `receiverEntry=false` | event ไม่ได้มาจาก `onReceive` — ผิดจากเส้นทางที่ออกแบบไว้ | อย่าเพิ่งนับเป็นผลผ่าน ไล่ดูว่ามีใครยิง event จากเส้นทางอื่นเพิ่มเข้ามา |
 
 ⚠️ **ห้ามสรุปว่า "ฟีเจอร์ไม่ทำงาน" จาก log ที่ว่างเปล่า** — log ว่างเป็นได้ 3 สาเหตุ
 ที่มีวิธีแก้คนละทางโดยสิ้นเชิง ตามสามแถวแรกของตารางนี้
 
+**ตรวจไฟล์สถานะจริงเมื่อเจอ `restoredRegions=[]` หรือ `<read-failed:…>`** — ไฟล์
+หลักฐานบอกได้แค่ว่าตอนอ่านเห็นอะไร ตัวไฟล์เองตอบได้ว่ามีอะไรอยู่จริง:
+
+```bash
+adb exec-out run-as com.beaconkit.example cat shared_prefs/beacon_kit_android.background.xml
+adb exec-out run-as com.beaconkit.example ls -l shared_prefs/   # เวลาแก้ไขล่าสุด
+```
+
+| ที่เห็นในไฟล์ | แปลว่า |
+|---|---|
+| ไม่มีคีย์ `regions` / ไฟล์แทบว่าง (`<map />`) | ถูกล้างด้วย `clearAll()` (ปุ่ม "หยุดเฝ้าเบื้องหลัง") หรือยังไม่เคยสั่งเฝ้า |
+| มีคีย์ `regions` ที่มี identifier ครบ แต่ log เขียน `[]` | ฝั่งอ่านผิดพลาด — เทียบกับเหตุผลใน `<read-failed:…>` |
+| ไม่มีไฟล์เลย | ข้อมูลแอปถูกล้าง หรือติดตั้งใหม่ |
+
 ### เกณฑ์ตัดสินที่ใช้กับทุกเคส
 
-**ห้ามรายงานว่าผ่าน** จนกว่าจะเห็นบรรทัดที่มีครบทั้งสามอย่างพร้อมกัน:
+**ห้ามรายงานว่าผ่าน** จนกว่าจะเห็นบรรทัดที่มีครบทั้งสี่อย่างพร้อมกัน:
 
-1. `processId` ที่ **ไม่เคยปรากฏ** ในบรรทัดก่อนหน้าของไฟล์เดียวกัน
-2. `conclusion` = `relaunchedFromTerminated`
-3. `event` = `enter` หรือ `exit` (ไม่ใช่แค่ `launch`)
+1. `procUuid` (คอลัมน์ที่ 2) ที่ **ไม่เคยปรากฏ** ในบรรทัดก่อนหน้าของไฟล์เดียวกัน
+2. `event` = `enter` หรือ `exit` (**ไม่ใช่แค่ `launch`**)
+3. `conclusion` = `relaunchedFromTerminated` **ในบรรทัด `enter`/`exit` นั้น**
+4. `receiverEntry=true` ในบรรทัดนั้น — ยืนยันว่า event มาถึงทาง `onReceive` จริง
+   ไม่ใช่ทางอื่น (บรรทัด `launch` ของ process เดียวกันจะเป็น `false` ซึ่งถูกต้อง)
+
+⚠️ **`conclusion` ของบรรทัด `launch` ไม่ใช่หลักฐาน และห้ามอ้างเป็นหลักฐาน**
+
+บรรทัด `launch` ถูกเขียนจาก `ExampleApplication.onCreate()` ซึ่งระบบเรียก **ก่อน**
+`Activity` ตัวแรกเสมอ ณ จุดนั้น `ProcessState` ยังนับ activity ได้ศูนย์และ
+`hasEverBeenForeground` ยังเป็น `false` ทุกครั้ง — ค่าจึงออกมาเป็น
+`relaunchedFromTerminated` **เสมอ แม้ผู้ใช้จะกดไอคอนเปิดแอปเอง** (เงื่อนไขเดียวกัน
+เป๊ะฝั่ง iOS: `didFinishLaunchingWithOptions` จบก่อนแอปขึ้น `.active`)
+
+**สิ่งที่พิสูจน์ว่าเป็น process ใหม่จริงคือ `procUuid` ที่ไม่เคยปรากฏมาก่อนเท่านั้น**
+ฟิลด์ `conclusion` ของบรรทัด `launch` เก็บไว้ได้ในฐานะสัญญาณดิบ แต่ห้ามนับเป็นหลักฐาน
+ในรายงานผล — ส่วนบรรทัด `enter`/`exit` คำนวณค่านี้ตอนที่ `ProcessState` มีข้อมูลจริง
+แล้ว จึงใช้เป็นหลักฐานได้
 
 ---
 
@@ -267,7 +364,31 @@ process เร็วขนาดนั้นเองก็เป็นข้อ
 
 ## 5. รีบูตเครื่องแล้วไม่เปิดแอป
 
-**สิ่งที่กำลังพิสูจน์:** `BootCompletedReceiver` ลงทะเบียนใหม่ได้จริงหรือไม่
+> ✅ **`BootCompletedReceiver` เปิดใช้งานอยู่ — และจะไม่มีรอบ baseline ที่ปิดตัวรับ**
+>
+> เดิมวางแผนปิดตัวรับไว้หนึ่งรอบ (`android:enabled="false"`) เพื่อแยกให้ออกว่า
+> การทำงานหลังรีบูตมาจาก **การลงทะเบียน `startScan(..., PendingIntent)` เดิมที่รอด
+> ข้ามรีบูต** หรือมาจาก **ตัวรับที่ลงทะเบียนใหม่ให้** แล้วค่อยเปิดกลับในรอบที่สอง
+>
+> **ทำไมถึงเลิกทำ:** ขอบเขตของ SDK เปลี่ยนเป็น **"ขาเข้าอย่างเดียว"** สิ่งที่ต้อง
+> รับประกันจึงเหลือแค่ *หลังรีบูตแล้วยังตรวจ `enter` ได้* · ที่มาของมันไม่มีผลกับ
+> สิ่งที่ SDK สัญญาไว้อีกต่อไป และไม่คุ้มกับการทดสอบข้ามคืนเพิ่มอีกหนึ่งรอบ —
+> ตัวรับจึงเปิดไว้ตลอด และ §5 วัดผลลัพธ์ปลายทางอย่างเดียว
+>
+> ⚠️ **สิ่งที่แลกไป — ต้องระบุทุกครั้งที่อ้างผลของ §5:** ผลรอบนี้ตอบได้แค่ว่า
+> "หลังรีบูตยังตรวจ `enter` ได้หรือไม่" **ตอบไม่ได้ว่าเพราะอะไร** · ห้ามอ้างเป็น
+> หลักฐานว่าการลงทะเบียนเดิมรอดข้ามรีบูต และห้ามอ้างเป็นหลักฐานว่า
+> `BootCompletedReceiver` เป็นตัวที่ทำให้ผ่าน — ทั้งสองข้ออยู่ในคอลัมน์
+> "พิสูจน์ไม่ได้" ของตารางท้าย §5
+>
+> ยืนยันก่อนเริ่มว่าตัวรับเปิดอยู่จริง (ต้อง **ไม่** เห็นสถานะ disabled):
+>
+> ```bash
+> adb shell dumpsys package com.beaconkit.example | grep -A2 BootCompletedReceiver
+> ```
+
+**สิ่งที่กำลังพิสูจน์:** หลังรีบูตแล้วไม่เปิดแอป ระบบยังปลุกแอปขึ้นมาให้ตรวจ
+`enter` ได้หรือไม่
 
 1. ทำขั้นเตรียมทั้งหมดใน §0.1 · จด `processId` ปัจจุบัน
 2. `adb reboot`
@@ -277,13 +398,103 @@ process เร็วขนาดนั้นเองก็เป็นข้อ
 5. รอ notification `enter`
 6. ดึง log ออกมาตรวจ **โดยไม่เปิดแอป** (คำสั่งใน §3 ข้อ 7)
 7. **สิ่งที่ต้องดูเป็นพิเศษ:** บรรทัด `launch` หลังรีบูตต้องมี
-   `restoredRegions=[k9p-default]` — ถ้าว่าง แปลว่าตัวรับ boot ทำงานแต่ไฟล์สถานะหาย
-   ซึ่งเป็นคนละปัญหากับตัวรับไม่ทำงาน
+   `restoredRegions=[k9p-default]` — ถ้าเป็น `[]` แปลว่าตัวรับ boot ทำงานแต่ไฟล์
+   สถานะว่างจริง · ถ้าเป็น `<read-failed:…>` แปลว่า **อ่านไฟล์สถานะไม่ได้**
+   (หลังรีบูตก่อนปลดล็อก `filesDir`/`shared_prefs` ยังเข้าถึงไม่ได้ — เคสที่ต้อง
+   แยกให้ออกในข้อนี้โดยเฉพาะ) ทั้งสองอย่างเป็นคนละปัญหากับตัวรับไม่ทำงาน
+   · **ถ้าไม่มีบรรทัด `launch` ใหม่เลยหลังรีบูต** แปลว่าไม่มีอะไรปลุกแอปขึ้นมาเลย
+   ซึ่งเป็นคนละอาการกับสองกรณีข้างบน — ดูตารางในข้อ 2 ของ "กับดักการตีความ A5"
 8. บันทึกลงไฟล์สถานะ **ข้อ 4**
 
 **ทดสอบเพิ่มอีกรอบแบบไม่ปลดล็อก:** รีบูตแล้ว**ทิ้งไว้ที่หน้าล็อก** 10 นาที
 ถอด/ใส่แบต K9P แล้วดูว่ามี event หรือไม่ — คาดว่าไม่มี (ADR-14 หัวข้อ 1.5)
 **ยืนยันว่าไม่มีจริงคือผลลัพธ์ที่ถูกต้อง** ไม่ใช่ความล้มเหลว
+
+### ⚠️ กับดักการตีความ A5 — อ่านก่อนสรุปผลทุกครั้ง
+
+#### 1. บรรทัด `exit` ที่โผล่มาเอง **ไม่ใช่หลักฐานการตรวจจับ**
+
+`BackgroundRegionMonitor.kt:445` มีสาขาที่ **ยิง `exit` ทันทีโดยไม่ตรวจ `lastSeen` เลย**
+เมื่อ `storedElapsedTimesAreFromThisBoot()` (`BackgroundRegionStore.kt:147-151`) คืน
+`false` — ซึ่งเกิดได้เมื่อ `bootToken` ที่เก็บไว้ต่างจากค่าปัจจุบันเกิน 10 วินาที
+หรือเมื่อไม่มีคีย์ `bootToken` เลย
+
+บรรทัด `exit` แบบนี้ **บอกแค่ว่า "เทียบเวลาข้ามรอบบูตไม่ได้"** ไม่ได้บอกว่าเคยเห็น
+beacon แล้วหายไป · **ห้ามนับเป็น event ของการตรวจจับ และห้ามนับเข้าสถิติ enter/exit**
+
+#### 2. หลังรีบูต สาขานั้น **ถูกเรียกได้จริง** — ต้องแยกออกจากการตรวจจับให้ได้
+
+ไล่จากโค้ดจริง: `onExitAlarm` มีผู้เรียกจุดเดียวคือ `RegionExitAlarmReceiver.onReceive`
+ซึ่งทำงานได้ก็ต่อเมื่อมีนาฬิกาปลุกที่ยังตั้งอยู่ · **นาฬิกาปลุกถูกล้างทิ้งเมื่อรีบูต:**
+
+> "Registered alarms are retained while the device is asleep... but **will be cleared
+> if it is turned off and rebooted**." — https://developer.android.com/reference/android/app/AlarmManager
+
+`BootCompletedReceiver` ที่เปิดอยู่จะลงทะเบียนสแกนและตั้งนาฬิกาปลุกใหม่ให้หลังบูต
+และเพราะ `bootToken` ที่เก็บไว้เป็นของรอบบูตก่อนหน้า `storedElapsedTimesAreFromThisBoot()`
+(`BackgroundRegionStore.kt:147-151`) จึงคืน `false` — **บรรทัด `exit` ที่โผล่มาเป็น
+บรรทัดแรกหลังรีบูตจึงเป็นสิ่งที่คาดไว้ ไม่ใช่หลักฐานว่าเคยเห็น beacon แล้วหายไป**
+ตามข้อ 1 · แยกออกได้จาก `sinceLastSeenMs=n/a` ในบรรทัดนั้น
+
+| สิ่งที่เห็นหลังรีบูต (ยังไม่เปิดแอป) | แปลว่า |
+|---|---|
+| **ไม่มีบรรทัดใหม่เลย** | **ไม่ผ่าน** — ไม่มีอะไรปลุกแอปเลย · ตรวจ Autostart / battery optimization / สถานะ `enabled` ของตัวรับ ก่อนสรุปว่าเป็นข้อจำกัดของแพลตฟอร์ม |
+| บรรทัด `launch` + `exit` ทันทีหลังบูต โดยไม่มี `enter` มาก่อน | **ตัวรับทำงานแล้ว แต่ยังไม่ใช่การตรวจจับ** — เป็นสาขา "เทียบเวลาข้ามรอบบูตไม่ได้" (`sinceLastSeenMs=n/a`) · **ห้ามนับเข้าสถิติ enter/exit** |
+| บรรทัด `enter` ที่มี `receiverEntry=true` และ `procUuid` ที่ไม่เคยปรากฏมาก่อน | **ผ่าน** — นี่คือหลักฐานเดียวที่ §5 ต้องการ (ดูข้อ 3) |
+
+#### 3. สิ่งที่นับเป็นหลักฐานของ A5
+
+**นับ:**
+- `procUuid` (คอลัมน์ที่ 2) ที่ **ไม่เคยปรากฏในไฟล์เดียวกันมาก่อน** — ตัวเดียวที่พิสูจน์ว่าเป็น process ใหม่จริง
+- `receiverEntry=true` ในบรรทัด `enter`/`exit` นั้น — ยืนยันว่ามาถึงทาง `onReceive`
+- `conclusion` ของบรรทัด `enter`/`exit` (ไม่ใช่ของบรรทัด `launch` — ดู "เกณฑ์ตัดสินที่ใช้กับทุกเคส")
+
+**ไม่นับ:**
+- `importance=` — **หาแหล่งอ้างอิงทางการไม่ได้** ว่า process ที่ถูกสร้างมาเพื่อ `onReceive`
+  จะได้ค่าอะไร เอกสารอธิบาย `IMPORTANCE_SERVICE` ว่าใช้กับ **service** ("This process
+  contains services that should remain running") ไม่ได้พูดถึง broadcast receiver เลย
+  (ดู `docs/sources/android_background_ble.md` หัวข้อ "หาแหล่งอ้างอิงไม่ได้")
+  **เก็บเป็นสัญญาณดิบเท่านั้น ห้ามใช้เป็นเกณฑ์ผ่าน/ไม่ผ่าน**
+- `conclusion` ของบรรทัด `launch` — เป็น `relaunchedFromTerminated` เสมอโดยโครงสร้าง
+
+#### 4. Direct Boot — สิ่งที่การตั้งค่าปัจจุบัน **พิสูจน์ไม่ได้**
+
+`BootCompletedReceiver` **ไม่ได้ประกาศ `android:directBootAware`** (ตรวจแล้วที่
+`packages/beacon_kit_android/android/src/main/AndroidManifest.xml:101-109` และใน merged
+manifest — ทั้งไฟล์มี `directBootAware` อยู่ตัวเดียวคือของ `androidx.profileinstaller`)
+ค่าปริยายคือ `false`
+
+> "**To receive this broadcast, your receiver component must be marked as being
+> `ComponentInfo.directBootAware`.**"
+> — `ACTION_LOCKED_BOOT_COMPLETED`, https://developer.android.com/reference/android/content/Intent#ACTION_LOCKED_BOOT_COMPLETED
+
+**แปลว่า `<action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />` ที่บรรทัด
+107 ของ manifest เป็นโค้ดตายมาตั้งแต่ต้น** ระบบไม่ส่ง broadcast นั้นมาให้เลย ไม่ว่าตัวรับจะ
+`enabled` หรือไม่ · **ห้ามรายงานว่า "ทดสอบ Direct Boot แล้ว"** — เรายังไม่เคยมีตัวรับที่มี
+สิทธิ์รับ broadcast นั้นเลยสักครั้ง
+
+และแม้จะเปิด `directBootAware` ก็ยังใช้กับ SDK นี้ไม่ได้ทันที เพราะไฟล์ที่ต้องอ่าน
+(`shared_prefs` ของ `BackgroundRegionStore` และไฟล์หลักฐาน) อยู่ใน credential-encrypted
+storage: "Credential encrypted storage, which is **the default storage location and only
+available after the user has unlocked the device**"
+(https://developer.android.com/privacy-and-security/direct-boot)
+
+⚠️ **แต่ห้ามอนุมานกลับด้าน:** ถ้าเครื่องทดสอบไม่ได้ใช้ file-based encryption เอกสารระบุว่า
+"both storage areas will become available at the same time" — การอ่าน/เขียนสำเร็จก่อนปลดล็อก
+จึง**ไม่ได้**พิสูจน์ว่าปลดล็อกแล้ว · ตรวจชนิดการเข้ารหัสของเครื่องก่อน (อ่านอย่างเดียว):
+
+```bash
+adb shell getprop ro.crypto.type      # file = FBE · block = FDE
+```
+
+#### 5. สรุป: A5 พิสูจน์อะไรได้ / ไม่ได้
+
+| พิสูจน์ได้ | พิสูจน์ไม่ได้ |
+|---|---|
+| หลังรีบูตแล้วไม่เปิดแอป ระบบยังปลุกแอปให้ตรวจ `enter` ได้หรือไม่ — **คำถามเดียวที่ขอบเขต "ขาเข้าอย่างเดียว" ต้องการคำตอบ** | **ว่าเป็นเพราะอะไร** — ตัวรับเปิดอยู่ตลอด ผลจึงแยกไม่ออกระหว่าง "การลงทะเบียนเดิมรอดข้ามรีบูต" กับ "ตัวรับลงทะเบียนใหม่ให้" (จงใจ — ดูหมายเหตุต้น §5) |
+| ไฟล์สถานะ (`shared_prefs`) รอดข้ามรีบูตหรือไม่ — ดู `restoredRegions` ในบรรทัด `launch` | พฤติกรรมช่วง Direct Boot (ก่อนปลดล็อก) — ไม่มีตัวรับที่ `directBootAware` จึงไม่มีอะไรทำงานให้วัด |
+| ว่าไฟล์หลักฐานยังเขียนได้หลังรีบูต — กดปุ่ม self-test หลังปลดล็อก | ว่าเขียนไฟล์หลักฐาน**ก่อน**ปลดล็อกได้หรือไม่ — ไม่มี component ที่รันตอนนั้น |
+| ว่า `procUuid` ใหม่เกิดขึ้นเมื่อใด | ว่าการลงทะเบียน `startScan(..., PendingIntent)` เดิมรอดข้ามรีบูตหรือไม่ — ADR-14 หัวข้อ 1.5 ยังเป็น **ข้อสรุปจากเอกสาร ไม่ใช่จากการวัด** |
 
 ---
 

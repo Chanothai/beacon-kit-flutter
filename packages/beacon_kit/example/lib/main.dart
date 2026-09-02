@@ -115,10 +115,32 @@ class _ScanPageState extends State<ScanPage> {
   bool _isScanning = false;
   String? _errorMessage;
 
+  // ---- self-test ของเครื่องมือวัด (ข้อ 3 + 4 ของรอบ pre-flight) ----
+  // การเขียนไฟล์ล้มเหลวแบบเงียบให้อาการเดียวกับ "ระบบไม่ส่ง event" เป๊ะ คือ
+  // ไฟล์ log ว่าง — ถ้าไม่มีทางดูค่าพวกนี้ เราจะแยกสองกรณีนั้นไม่ออกจนกว่าจะ
+  // เก็บข้อมูลทั้งคืนเสร็จ ซึ่งเก็บซ้ำไม่ได้
+  EvidenceLogSelfTest? _selfTest;
+  bool _selfTestRunning = false;
+
+  /// `lastError` ฝั่ง native ที่ดึงมาล่าสุด — **แยกจาก [_errorMessage]** เพราะ
+  /// อันนั้นคือ error ของ UI รอบนี้ ส่วนอันนี้คือ error ที่เกิดตอนไม่มีใครดูหน้าจอ
+  String? _logWriteError;
+
+  /// ถามฝั่ง native ไม่ได้เลย (เช่น channel ยังไม่พร้อม) — **คนละเรื่องกับ
+  /// [_logWriteError] ที่เป็น `null`** ซึ่งแปลว่า native ตอบแล้วว่าไม่มี error
+  String? _logWriteErrorReadFailure;
+
+  /// เคยดึง [_logWriteError] มาแล้วหรือยัง — ต้องแยกจาก "ดึงแล้วได้ `null`"
+  /// ไม่งั้นหน้าจอจะแสดง "ไม่มี error" ทั้งที่ยังไม่เคยถาม
+  bool _logWriteErrorLoaded = false;
+
   @override
   void initState() {
     super.initState();
     BeaconManager.register(_adapter);
+    // ดึงตั้งแต่เปิดแอป ไม่รอให้กดปุ่ม — ถ้ารอบเบื้องหลังก่อนหน้าเขียนไฟล์ไม่ได้
+    // ผู้ทดสอบต้องเห็นทันทีที่เปิดแอปมาดูผล ไม่ใช่ต้องรู้ว่ามีปุ่มนี้อยู่ก่อน
+    unawaited(_refreshLogWriteError());
     if (_splitByPlatformUntilAdr13Step4) {
       // ทุกอย่างข้างล่างนี้เป็นเส้นทาง iBeacon ของ iOS ล้วน (region monitoring,
       // ระดับสิทธิ์ location) — Android มีเส้นทางเบื้องหลังของตัวเองที่คนละกลไก
@@ -186,6 +208,65 @@ class _ScanPageState extends State<ScanPage> {
         _errorMessage = 'native เขียน log ไม่สำเร็จ: $logError';
       }
     });
+  }
+
+  /// ดึง `lastError` ฝั่ง native ขึ้นมาแสดง **โดยไม่เขียนอะไรลงไฟล์**
+  ///
+  /// ต้องมีทางนี้แยกจาก [_runEvidenceLogSelfTest] เพราะการเขียนที่สำเร็จจะล้าง
+  /// `lastError` เป็น `null` — ถ้ามีแต่ปุ่ม self-test การกดดู error ก็คือการลบ
+  /// error ทิ้ง ซึ่งทำให้หลักฐานที่รอมาทั้งคืนหายไปตอนที่กำลังจะได้อ่านพอดี
+  Future<void> _refreshLogWriteError() async {
+    try {
+      final error = await _diagnostics.getLogWriteError();
+      if (!mounted) return;
+      setState(() {
+        _logWriteError = error;
+        _logWriteErrorReadFailure = null;
+        _logWriteErrorLoaded = true;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      // **ไม่ยัดลง [_errorMessage]** — แถบ error ด้านบนคือ error ของสิ่งที่ผู้ใช้
+      // เพิ่งสั่ง ส่วนตัวนี้ถูกเรียกเองตอนเปิดแอป การไปยึดแถบนั้นจะกลบ error
+      // จริงของรอบทดสอบ และทำให้ "ถามไม่ได้" ดูเหมือน "แอปพัง"
+      //
+      // เก็บแยกจาก [_logWriteError] เพราะ **"ถามไม่ได้" ไม่ใช่ "ไม่มี error"**
+      // ถ้ายุบรวมกัน หน้าจอจะบอกว่าเขียน log ปกติดีทั้งที่ยังไม่เคยรู้เลย
+      setState(() {
+        _logWriteErrorReadFailure = '$error';
+        _logWriteErrorLoaded = true;
+      });
+    }
+  }
+
+  /// เขียน 1 บรรทัดลงไฟล์หลักฐานจริงแล้วอ่านกลับมาทันที
+  ///
+  /// **นี่คือการพิสูจน์เครื่องมือวัดโดยไม่ต้องพึ่ง beacon เลย** ถ้าปุ่มนี้ไม่ผ่าน
+  /// ผลการทดสอบเบื้องหลังทุกเคสอ่านไม่ได้ เพราะไฟล์ที่ว่างเปล่าจะแปลว่าอะไรก็ได้
+  Future<void> _runEvidenceLogSelfTest() async {
+    setState(() {
+      _selfTestRunning = true;
+      _errorMessage = null;
+    });
+    try {
+      final result = await _diagnostics.runEvidenceLogSelfTest();
+      if (!mounted) return;
+      setState(() {
+        _selfTest = result;
+        // native อ่าน lastError ให้ก่อนเขียนแล้ว — เอาค่านั้นมาแสดงต่อ แทนการ
+        // ถามซ้ำซึ่งจะได้ค่าหลังเขียน (null ถ้าสำเร็จ) แล้วกลบของเดิมทิ้ง
+        _logWriteError = result.errorBeforeWrite;
+        _logWriteErrorReadFailure = null;
+        _logWriteErrorLoaded = true;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(
+        () => _errorMessage = 'self-test ของ evidence log ล้มเหลว: $error',
+      );
+    } finally {
+      if (mounted) setState(() => _selfTestRunning = false);
+    }
   }
 
   Future<void> _refreshAuthorizationLevel() async {
@@ -476,7 +557,11 @@ class _ScanPageState extends State<ScanPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('beacon_kit example')),
-      body: Column(
+      // **ทั้งหน้าเลื่อนได้ ไม่ใช่ `Column` + `Expanded`** — panel วินิจฉัยบนหน้านี้
+      // ยืดหดตามข้อมูลที่ native ตอบกลับมา ถ้าใช้ `Column` ที่เลื่อนไม่ได้ เนื้อหา
+      // ที่เกินจอจะถูกตัดหายไปเงียบ ๆ (RenderFlex overflow) บนเครื่องจอเล็ก ซึ่ง
+      // ตรงกับสิ่งที่ผู้ทดสอบต้องอ่านพอดี — widget test ของ panel จับข้อนี้ได้
+      body: ListView(
         children: [
           if (_errorMessage != null)
             Container(
@@ -490,6 +575,15 @@ class _ScanPageState extends State<ScanPage> {
                 ),
               ),
             ),
+          _EvidenceLogPanel(
+            selfTest: _selfTest,
+            isRunning: _selfTestRunning,
+            logWriteError: _logWriteError,
+            logWriteErrorReadFailure: _logWriteErrorReadFailure,
+            logWriteErrorLoaded: _logWriteErrorLoaded,
+            onRunSelfTest: _runEvidenceLogSelfTest,
+            onRefreshError: _refreshLogWriteError,
+          ),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
@@ -552,15 +646,191 @@ class _ScanPageState extends State<ScanPage> {
                 ),
               ),
             ),
+          if (beacons.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Center(child: Text('No beacons found yet')),
+            )
+          else
+            for (final beacon in beacons) ...[
+              const Divider(height: 1),
+              _BeaconTile(beacon),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+/// พิสูจน์ว่า **เครื่องมือวัดเขียนไฟล์ได้จริง** ก่อนเริ่มทดสอบเบื้องหลัง
+///
+/// ## ทำไมต้องมีอยู่บนหน้าจอหลัก ไม่ใช่ซ่อนในหน้า "ดู log"
+///
+/// การเขียนไฟล์หลักฐานล้มเหลวแบบเงียบ (`append()` ห้าม throw จึงเก็บ error ไว้
+/// เฉย ๆ) ให้อาการ **เหมือนกันเป๊ะ** กับ "ระบบไม่เคยส่ง event มา" คือไฟล์ log
+/// ว่าง ถ้าไม่มีทางดูก่อนเริ่ม เราจะรู้ตัวตอนเก็บข้อมูลข้ามคืนเสร็จแล้ว ซึ่ง
+/// เก็บซ้ำไม่ได้
+///
+/// หัวข้อของ panel **สรุปสถานะให้เห็นตั้งแต่ยังไม่กด** ส่วนรายละเอียดอยู่ข้างใน
+/// — เพราะค่าที่สำคัญที่สุด (`errorBeforeWrite`) คือค่าที่ผู้ทดสอบต้องเห็นแม้จะ
+/// ไม่รู้ว่ามี panel นี้อยู่
+class _EvidenceLogPanel extends StatelessWidget {
+  const _EvidenceLogPanel({
+    required this.selfTest,
+    required this.isRunning,
+    required this.logWriteError,
+    required this.logWriteErrorReadFailure,
+    required this.logWriteErrorLoaded,
+    required this.onRunSelfTest,
+    required this.onRefreshError,
+  });
+
+  final EvidenceLogSelfTest? selfTest;
+  final bool isRunning;
+  final String? logWriteError;
+  final String? logWriteErrorReadFailure;
+  final bool logWriteErrorLoaded;
+  final Future<void> Function() onRunSelfTest;
+  final Future<void> Function() onRefreshError;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final result = selfTest;
+
+    final (String summary, Color color) = switch ((result, logWriteError)) {
+      // error ที่ native เคยเจอมาก่อนสำคัญกว่าผล self-test รอบนี้เสมอ — มันคือ
+      // หลักฐานว่าไฟล์เคยเขียนไม่ได้ตอนไม่มีใครดู ซึ่งทำให้ log ที่เก็บมาอ่านไม่ได้
+      (_, final String error?) => (
+        '⚠️ native เคยเขียน log ไม่สำเร็จ: $error',
+        scheme.error,
+      ),
+      (final EvidenceLogSelfTest r, _) when r.passed => (
+        '✅ เขียนแล้วอ่านกลับได้ตรง · ${r.lineCount} บรรทัดในไฟล์',
+        scheme.primary,
+      ),
+      (final EvidenceLogSelfTest r, _) => (
+        '❌ ${r.errorAfterWrite ?? r.readError ?? "อ่านกลับมาไม่ตรงกับที่เขียน"}',
+        scheme.error,
+      ),
+      // ยังไม่เคยกด — ห้ามบอกว่า "ปกติ" เพราะยังไม่ได้ตรวจอะไรเลย
+      _ => (
+        logWriteErrorLoaded
+            ? 'ยังไม่ได้ทดสอบ (native ยังไม่เคยรายงาน error)'
+            : 'ยังไม่ได้ทดสอบ',
+        scheme.onSurfaceVariant,
+      ),
+    };
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: ExpansionTile(
+        title: const Text('เครื่องมือวัด: evidence log'),
+        subtitle: Text(summary, style: TextStyle(color: color)),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: isRunning ? null : () => unawaited(onRunSelfTest()),
+                icon: const Icon(Icons.edit_note, size: 18),
+                label: Text(isRunning ? 'กำลังทดสอบ…' : 'ทดสอบเขียน 1 บรรทัด'),
+              ),
+              OutlinedButton.icon(
+                onPressed: isRunning ? null : () => unawaited(onRefreshError()),
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('อ่าน error ล่าสุด'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // แสดงเสมอ ไม่ว่าจะมี error หรือไม่ — "ไม่มี error" กับ "ยังไม่ได้ถาม"
+          // ต้องแยกออกจากกันบนหน้าจอ ไม่ใช่หายไปเหมือนกันทั้งคู่
+          _row(
+            context,
+            'error ที่ค้างจากรอบก่อน',
+            switch ((
+              logWriteErrorLoaded,
+              logWriteError,
+              logWriteErrorReadFailure,
+            )) {
+              (false, _, _) => 'ยังไม่ได้อ่าน',
+              // "ถามไม่ได้" ต้องไม่แสดงเป็น "ไม่มี" — ไม่งั้นหน้าจอจะรับรองว่า
+              // เขียน log ปกติดีทั้งที่ยังไม่เคยได้คำตอบจาก native เลย
+              (_, _, final String failure?) => 'ถาม native ไม่ได้: $failure',
+              (_, final String error?, _) => error,
+              _ => 'ไม่มี',
+            },
+            emphasize:
+                logWriteError != null || logWriteErrorReadFailure != null,
+          ),
+          if (result != null) ...[
+            _row(context, 'ไฟล์', result.path),
+            _row(
+              context,
+              'มีไฟล์อยู่จริง',
+              '${result.fileExists} · ${result.fileSizeBytes} bytes · '
+                  '${result.lineCount} บรรทัด',
+            ),
+            _row(
+              context,
+              'เขียน',
+              result.errorAfterWrite ?? 'สำเร็จ',
+              emphasize: result.errorAfterWrite != null,
+            ),
+            _row(
+              context,
+              'อ่านกลับ',
+              result.readError ??
+                  (result.readBackMatches
+                      ? 'ตรงกับบรรทัดที่เพิ่งเขียน'
+                      : 'อ่านได้แต่ไม่ตรงกับที่เขียน'),
+              emphasize: result.readError != null || !result.readBackMatches,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'บรรทัดที่อ่านกลับมา',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            // บรรทัดดิบเต็ม ๆ ไม่ตัดทอน — ผู้ทดสอบต้องเห็น procUuid/pid/uptimeMs/
+            // receiverEntry ด้วยตาเพื่อเทียบกับ log ที่ดึงออกมาทาง adb
+            SelectableText(
+              result.readBackLine ?? '(อ่านไม่ได้)',
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _row(
+    BuildContext context,
+    String label,
+    String value, {
+    bool emphasize = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(label, style: Theme.of(context).textTheme.labelMedium),
+          ),
           Expanded(
-            child: beacons.isEmpty
-                ? const Center(child: Text('No beacons found yet'))
-                : ListView.separated(
-                    itemCount: beacons.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) =>
-                        _BeaconTile(beacons[index]),
-                  ),
+            child: SelectableText(
+              value,
+              style: TextStyle(
+                fontSize: 12,
+                color: emphasize ? scheme.error : null,
+              ),
+            ),
           ),
         ],
       ),
