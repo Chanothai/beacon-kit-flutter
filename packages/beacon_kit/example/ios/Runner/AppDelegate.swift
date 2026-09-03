@@ -39,6 +39,13 @@ import beacon_kit_ios
   /// เป็นสัญญาณอิสระที่**ไม่พึ่ง API ที่ deprecated เลย**: process ที่ผู้ใช้เปิดเอง
   /// จะผ่าน active เสมอ ส่วน process ที่ iOS ปลุกขึ้นมาเบื้องหลังเพื่อส่ง location
   /// event จะไม่เคย active จนกว่าผู้ใช้จะกดเปิดแอปเอง
+  ///
+  /// **ADR-16 §1.3:** ตั้งค่าจากสองเส้นทาง — observer ของ
+  /// `UIApplication.didBecomeActiveNotification` (ทางหลัก ทำงานได้ทั้งกรณีแอปใช้
+  /// scene และไม่ใช้) กับ `override applicationDidBecomeActive` ด้านล่าง (fallback
+  /// เดิม ที่ตายเมื่อแอปใช้ scene ตามเอกสาร Apple — ดูคอมเมนต์ที่จุดลงทะเบียน
+  /// observer ใน `didFinishLaunchingWithOptions`) ทั้งสองเส้นทางตั้งค่าเดียวกันแบบ
+  /// idempotent จึงเรียกซ้ำหรือเรียกทั้งคู่ได้อย่างปลอดภัย
   private var hasEverBecomeActive = false
 
   override func application(
@@ -46,6 +53,76 @@ import beacon_kit_ios
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     launchedByLocationKey = launchOptions?[.location] != nil
+
+    // **ADR-16 §1.3 — แหล่งความจริงใหม่ของ `hasEverBecomeActive` ภายใต้ UIScene
+    // lifecycle:** แอปนี้ประกาศ `UIApplicationSceneManifest` (Info.plist:40-60)
+    // ตามเอกสาร Apple ของ `applicationDidBecomeActive(_:)`
+    // (https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationdidbecomeactive(_:)):
+    // "If you're using scenes ... UIKit will not call this method" — override
+    // เดิมด้านล่างจึงเป็น dead code ตลอดชีพ process ทุกกรณีที่แอปยังใช้ scene
+    // เอกสารหน้าเดียวกันยืนยันด้วยว่า "UIKit posts a didBecomeActiveNotification
+    // regardless of whether your app uses scenes" — สังเกตสัญญาณนี้แทนจึงทำงานได้
+    // ไม่ว่าแอปจะใช้ scene หรือไม่
+    //
+    // ลงทะเบียนที่ต้นเมธอดนี้ (ก่อน scene ใด ๆ ถูก connect เสมอ) เพราะเอกสาร Apple
+    // ของ `didFinishLaunchingWithOptions` เองระบุลำดับเหตุการณ์ไว้ตรง ๆ ว่า
+    // "The system calls this method as soon as the process is done launching.
+    // The system then creates the scene(s) that you configured for your app.
+    // The system calls scene life-cycle methods, such as
+    // scene(_:willConnectTo:options:)." — observer จึงมีตัวตนก่อนโอกาสแรกที่
+    // `didBecomeActiveNotification` จะถูก post ได้เสมอ ไม่มีช่องให้ race
+    //
+    // ใช้ `[weak self]` กัน retain cycle — `NotificationCenter` ถือ closure นี้ไว้
+    // เอง ไม่ใช่ผูกกับ observer token ที่เราทิ้งไว้โดยไม่เก็บ reference คืน — นี่คือ
+    // สิ่งที่ทำให้ "ทิ้ง token ได้โดยไม่กลายเป็น no-op" ทั้ง fix นี้แขวนอยู่ ยืนยัน
+    // จากเอกสาร Apple ของหน้าเดียวกับที่คอมเมนต์ `queue: nil` ด้านล่างอ้างอิง
+    // (`NotificationCenter.addObserver(forName:object:queue:using:)`) สองจุด:
+    //
+    // ส่วน **Return Value** ของหน้านั้น: "An opaque object to act as the
+    // observer. Notification center strongly holds this return value until
+    // you remove the observer registration." — คือ token ที่เราทิ้งไป (ไม่เก็บ
+    // reference คืน)
+    //
+    // ส่วนพารามิเตอร์ **block**: "The notification center copies the block.
+    // The notification center strongly holds the copied block until you
+    // remove the observer registration." — คือ closure นี้เอง ซึ่งเป็นคนละ
+    // object กับ token ข้างบน
+    //
+    // รวมสองประโยคนี้: notification center ถือทั้ง**block ที่ copy ไว้เอง**
+    // (strong) จนกว่าจะ `removeObserver` ไม่ใช่ถือผ่าน token ที่เราคืนค่ามา — การ
+    // ไม่เก็บ token ไว้จึงไม่ทำให้ observer ถูกปล่อยทิ้งหรือกลายเป็น no-op ตราบใด
+    // ที่ยังไม่มีใครเรียก `removeObserver` (ดูเหตุผลข้อถัดไปว่าทำไมไม่ต้องเรียก)
+    //
+    // ไม่ removeObserver เพราะ `AppDelegate` (`@main`) มีอายุเท่ากับ process เอง
+    // ไม่มีจังหวะใดที่ instance นี้จะถูกทำลายก่อน process จบแล้วต้องเลิกฟังก่อน
+    //
+    // ปลอดภัยต่อการเรียกซ้ำ/เรียกคู่กับ `override applicationDidBecomeActive`
+    // ด้านล่าง (คงไว้เป็น defensive fallback ตาม ADR-16 §1.3 เผื่อวันหนึ่งแอปเลิก
+    // ใช้ scene): ทั้งสองเส้นทางแค่ตั้ง `Bool` เดียวกันเป็น `true` ซึ่ง idempotent
+    // อยู่แล้ว — ยิงกี่ครั้ง ยิงพร้อมกัน หรือยิงจากคนละเส้นทาง ผลลัพธ์เหมือนเดิมเป๊ะ
+    //
+    // **ทำไมต้องเป็น `queue: nil`** — เอกสาร Apple ของพารามิเตอร์ `queue` ของ
+    // เมธอดนี้ (`NotificationCenter.addObserver(forName:object:queue:using:)`,
+    // https://developer.apple.com/documentation/foundation/notificationcenter/addobserver(forname:object:queue:using:))
+    // ระบุตรง ๆ ว่า: "The operation queue where the block runs." และ "When nil,
+    // the block runs synchronously on the posting thread." — `nil` จึงแปลว่า
+    // block นี้รันทันทีบนเธรดเดียวกับที่ UIKit post notification (main thread
+    // สำหรับ lifecycle notification นี้) ไม่มีการเลื่อนคิวใด ๆ
+    //
+    // ⚠️ **ถ้ามีคนเปลี่ยนเป็น `.main` ในอนาคต:** ผลจะเปลี่ยนจาก "รันทันทีแบบ
+    // synchronous" เป็น "ถูก schedule เข้าคิวของ `OperationQueue.main` แบบ
+    // asynchronous" — เปิดช่องให้มีจังหวะสั้น ๆ ที่ notification ถูก post ไปแล้ว
+    // จริง แต่ `hasEverBecomeActive` ยังไม่ทันถูกตั้งเป็น `true` (โค้ดอื่นที่อ่าน
+    // ค่านี้ในช่วงนั้นจะเห็นค่าเก่า) ทั้งที่ block ในตัวนี้ไม่ได้ทำงานหนักอะไรเลย
+    // (แค่ตั้ง `Bool` ตัวเดียว) จึงไม่มีเหตุผลด้านประสิทธิภาพที่ต้องเลื่อนออกจาก
+    // เธรดเดิม — คงไว้เป็น `nil` ตราบใดที่ closure ยังทำแค่สิ่งนี้
+    NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: nil
+    ) { [weak self] _ in
+      self?.hasEverBecomeActive = true
+    }
 
     // ต้องตั้ง delegate ตรงนี้ ไม่งั้น `userNotificationCenter(_:willPresent:...)`
     // จะไม่ถูกเรียกเลย และ **notification จะไม่แสดงตอนแอปอยู่ foreground**
@@ -147,13 +224,27 @@ import beacon_kit_ios
     )
   }
 
-  /// ข้อสรุปว่ารอบนี้แอปอยู่ในบริบทไหน — ใช้ตรรกะเดียวกับ `AppRunContext` ฝั่ง Dart
+  /// **ตรรกะการตัดสินล้วน (pure)** — แยกออกจาก `currentRunContext()` เพื่อให้
+  /// XCTest คลุมได้จริงโดยไม่ต้องพึ่งค่า `UIApplication.shared.applicationState`
+  /// ของจริง (ซึ่งอ่านได้แค่ตอนแอปรันอยู่ ไม่ใช่ค่าที่ทดสอบตั้งเองได้) — pattern
+  /// เดียวกับที่ `BackgroundEvidenceLog.line`/`processMarker` ฝั่ง Android แยก
+  /// pure function ออกมาให้ unit test คลุมได้ (ดู `BackgroundEvidenceLog.kt`)
   ///
-  /// `relaunchedFromTerminated` คือค่าที่ B5 ต้องเห็นในไฟล์ log จึงจะถือว่าผ่าน:
-  /// process อยู่เบื้องหลัง **และ** ไม่เคยขึ้น foreground เลยตั้งแต่เริ่ม แปลว่า
-  /// ไม่ใช่ผู้ใช้เปิดแอปเอง
-  private func currentRunContext() -> String {
-    switch UIApplication.shared.applicationState {
+  /// รับพารามิเตอร์แทนการอ่าน property ของ `self` ตรง ๆ เพื่อให้เป็น pure
+  /// function จริง (input เดียวกัน -> output เดียวกันเสมอ ไม่มี side effect
+  /// และไม่ต้องสร้าง `AppDelegate` instance เพื่อเรียก) — ดู ADR-16 หัวข้อ 1
+  ///
+  /// ⚠️ **ห้ามเปลี่ยนสตริงที่คืนกลับแม้แต่ตัวเดียว** (`foreground` / `background` /
+  /// `relaunchedFromTerminated` / `unknown`) — ค่าเหล่านี้ใช้ร่วมกับ
+  /// `ProcessState.conclusion` ฝั่ง Android และ `AppRunContext` ใน
+  /// `example/lib/diagnostics/launch_context.dart` ถ้าเปลี่ยนชื่อค่าที่นี่โดยไม่
+  /// เปลี่ยนอีกสองฝั่ง เครื่องมือเทียบ log ข้ามแพลตฟอร์ม
+  /// (`tool/analyze_region_log.dart`) จะอ่านไม่ตรงกันทันที
+  static func runContext(
+    applicationState: UIApplication.State,
+    hasEverBecomeActive: Bool
+  ) -> String {
+    switch applicationState {
     case .active:
       return "foreground"
     case .background, .inactive:
@@ -161,6 +252,21 @@ import beacon_kit_ios
     @unknown default:
       return "unknown"
     }
+  }
+
+  /// ข้อสรุปว่ารอบนี้แอปอยู่ในบริบทไหน — ใช้ตรรกะเดียวกับ `AppRunContext` ฝั่ง Dart
+  ///
+  /// `relaunchedFromTerminated` คือค่าที่ B5 ต้องเห็นในไฟล์ log จึงจะถือว่าผ่าน:
+  /// process อยู่เบื้องหลัง **และ** ไม่เคยขึ้น foreground เลยตั้งแต่เริ่ม แปลว่า
+  /// ไม่ใช่ผู้ใช้เปิดแอปเอง
+  ///
+  /// แค่ทางผ่านไปยัง [runContext] พร้อมค่าจริงของ process นี้ — ตัวตรรกะเองอยู่ที่
+  /// [runContext] ทั้งหมด (ADR-16 หัวข้อ 1)
+  private func currentRunContext() -> String {
+    Self.runContext(
+      applicationState: UIApplication.shared.applicationState,
+      hasEverBecomeActive: hasEverBecomeActive
+    )
   }
 
   /// สัญญาณดิบชุดเดียวกับที่ `getLaunchDiagnostics` คืนให้ Dart — เก็บลง log ด้วย
@@ -249,6 +355,16 @@ import beacon_kit_ios
     completionHandler([.banner, .list, .sound])
   }
 
+  /// **ADR-16 §1.3 — เก็บไว้เป็น defensive fallback เท่านั้น ห้ามลบ**
+  ///
+  /// ตราบใดที่แอปประกาศ `UIApplicationSceneManifest` (Info.plist:40-60) เมธอดนี้
+  /// **ไม่ถูก UIKit เรียกเลย** ตามเอกสาร Apple ที่ observer ใน
+  /// `didFinishLaunchingWithOptions` อ้างถึงข้างบน — สัญญาณตัวจริงในวันนี้คือ
+  /// `UIApplication.didBecomeActiveNotification` observer เท่านั้น เมธอดนี้จึง
+  /// เป็น dead code ในทางปฏิบัติ *แต่ยังคุ้มค่าเก็บไว้*: ถ้าวันหนึ่งแอปเลิกใช้ scene
+  /// เส้นทางนี้จะกลับมาทำงานได้เองทันทีโดยไม่ต้องแก้โค้ดเพิ่ม และเพราะการตั้ง
+  /// `hasEverBecomeActive = true` เป็น idempotent การเรียกซ้ำกับ observer (ถ้าวัน
+  /// หนึ่งทั้งสองเส้นทางทำงานพร้อมกันจริง) จึงไม่มีผลข้างเคียงใด ๆ
   override func applicationDidBecomeActive(_ application: UIApplication) {
     hasEverBecomeActive = true
     super.applicationDidBecomeActive(application)
@@ -441,6 +557,35 @@ import beacon_kit_ios
 
   static func protectionOfLogFile(named fileName: String) -> String? {
     BackgroundEvidenceLog.protectionOfLogFile(named: fileName)
+  }
+
+  /// **สำหรับ XCTest เท่านั้น — ADR-16** อ่านค่า `hasEverBecomeActive` ปัจจุบันของ
+  /// `AppDelegate` instance ที่กำลังรันอยู่จริงใน process นี้
+  ///
+  /// เหตุผลที่ต้องมีทางผ่านนี้: `RunnerTests` เป็น **hosted test bundle**
+  /// (`TEST_HOST`/`BUNDLE_LOADER` ชี้ไปที่ `Runner.app` ใน `project.pbxproj`) จึง
+  /// รันอยู่**ข้างในแอปจริงที่ launch เต็มรูปแบบ** บน simulator ไม่ใช่รันแยกเดี่ยว
+  /// ๆ — นี่คือสภาพแวดล้อมเดียวที่ทำให้ตรวจสอบได้จริงว่า observer ของ
+  /// `UIApplication.didBecomeActiveNotification` ที่ลงทะเบียนใน
+  /// `didFinishLaunchingWithOptions` ทำงานหรือไม่ (ดู
+  /// `testDidBecomeActiveObserverFiresOnRealAppLifecycle` ใน `RunnerTests.swift`)
+  ///
+  /// **ไม่ใช่การเปลี่ยน access level ของ `hasEverBecomeActive` เอง** — ตัวแปรยัง
+  /// เป็น `private` เหมือนเดิมทุกประการ นี่เป็นทางผ่านเดียวที่เปิดให้
+  /// `@testable import` อ่านค่าออกไปได้ ตามรูปแบบเดียวกับ
+  /// `prepareLogFileForTesting`/`protectionOfLogFile` ด้านบน
+  ///
+  /// คืน **`Bool?` ไม่ใช่ `Bool`** โดยตั้งใจ — นี่คือบทเรียนของ `launchKey` ย่อส่วน
+  /// (ADR-16 หัวข้อ 2): ถ้ายุบ "cast `UIApplication.shared.delegate` เป็น
+  /// `AppDelegate` ไม่สำเร็จ / ไม่มี delegate เลย" กับ "cast สำเร็จแต่ยังไม่เคย
+  /// active จริง" ให้เหลือแค่ `false` เหมือนกัน เทสต์ที่อ่านค่านี้จะไม่มีทาง
+  /// แยกได้เลยว่า "ไม่เคย active" ที่เห็นเป็นข้อเท็จจริงของแอป หรือเป็นเพราะทางผ่าน
+  /// ของเทสต์เองใช้งานไม่ได้ตั้งแต่ต้น (เช่น รันนอกบริบทแอปจริง) — `nil` จึงสงวนไว้
+  /// สื่อว่า "อ่านค่าจริงไม่ได้" แยกจาก `false` ที่แปลว่า "อ่านได้ ค่าจริงคือยังไม่
+  /// เคย active" ผู้เรียก (เทสต์) ต้อง `XCTUnwrap` ค่านี้ก่อนเสมอ เพื่อให้ `nil`
+  /// ทำให้เทสต์ fail ทันทีแทนที่จะเงียบเป็น `false` ที่ดูเหมือนผลที่ถูกต้อง
+  static var hasEverBecomeActiveForTesting: Bool? {
+    (UIApplication.shared.delegate as? AppDelegate)?.hasEverBecomeActive
   }
 
   private static func stateString(_ state: UIApplication.State) -> String {
