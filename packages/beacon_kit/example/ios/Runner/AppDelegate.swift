@@ -73,7 +73,25 @@ import beacon_kit_ios
     // `didBecomeActiveNotification` จะถูก post ได้เสมอ ไม่มีช่องให้ race
     //
     // ใช้ `[weak self]` กัน retain cycle — `NotificationCenter` ถือ closure นี้ไว้
-    // เอง ไม่ใช่ผูกกับ observer token ที่เราทิ้งไว้โดยไม่เก็บ reference คืน
+    // เอง ไม่ใช่ผูกกับ observer token ที่เราทิ้งไว้โดยไม่เก็บ reference คืน — นี่คือ
+    // สิ่งที่ทำให้ "ทิ้ง token ได้โดยไม่กลายเป็น no-op" ทั้ง fix นี้แขวนอยู่ ยืนยัน
+    // จากเอกสาร Apple ของหน้าเดียวกับที่คอมเมนต์ `queue: nil` ด้านล่างอ้างอิง
+    // (`NotificationCenter.addObserver(forName:object:queue:using:)`) สองจุด:
+    //
+    // ส่วน **Return Value** ของหน้านั้น: "An opaque object to act as the
+    // observer. Notification center strongly holds this return value until
+    // you remove the observer registration." — คือ token ที่เราทิ้งไป (ไม่เก็บ
+    // reference คืน)
+    //
+    // ส่วนพารามิเตอร์ **block**: "The notification center copies the block.
+    // The notification center strongly holds the copied block until you
+    // remove the observer registration." — คือ closure นี้เอง ซึ่งเป็นคนละ
+    // object กับ token ข้างบน
+    //
+    // รวมสองประโยคนี้: notification center ถือทั้ง**block ที่ copy ไว้เอง**
+    // (strong) จนกว่าจะ `removeObserver` ไม่ใช่ถือผ่าน token ที่เราคืนค่ามา — การ
+    // ไม่เก็บ token ไว้จึงไม่ทำให้ observer ถูกปล่อยทิ้งหรือกลายเป็น no-op ตราบใด
+    // ที่ยังไม่มีใครเรียก `removeObserver` (ดูเหตุผลข้อถัดไปว่าทำไมไม่ต้องเรียก)
     //
     // ไม่ removeObserver เพราะ `AppDelegate` (`@main`) มีอายุเท่ากับ process เอง
     // ไม่มีจังหวะใดที่ instance นี้จะถูกทำลายก่อน process จบแล้วต้องเลิกฟังก่อน
