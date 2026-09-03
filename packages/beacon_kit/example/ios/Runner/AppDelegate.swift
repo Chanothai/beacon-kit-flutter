@@ -556,8 +556,18 @@ import beacon_kit_ios
   /// เป็น `private` เหมือนเดิมทุกประการ นี่เป็นทางผ่านเดียวที่เปิดให้
   /// `@testable import` อ่านค่าออกไปได้ ตามรูปแบบเดียวกับ
   /// `prepareLogFileForTesting`/`protectionOfLogFile` ด้านบน
-  static var hasEverBecomeActiveForTesting: Bool {
-    (UIApplication.shared.delegate as? AppDelegate)?.hasEverBecomeActive ?? false
+  ///
+  /// คืน **`Bool?` ไม่ใช่ `Bool`** โดยตั้งใจ — นี่คือบทเรียนของ `launchKey` ย่อส่วน
+  /// (ADR-16 หัวข้อ 2): ถ้ายุบ "cast `UIApplication.shared.delegate` เป็น
+  /// `AppDelegate` ไม่สำเร็จ / ไม่มี delegate เลย" กับ "cast สำเร็จแต่ยังไม่เคย
+  /// active จริง" ให้เหลือแค่ `false` เหมือนกัน เทสต์ที่อ่านค่านี้จะไม่มีทาง
+  /// แยกได้เลยว่า "ไม่เคย active" ที่เห็นเป็นข้อเท็จจริงของแอป หรือเป็นเพราะทางผ่าน
+  /// ของเทสต์เองใช้งานไม่ได้ตั้งแต่ต้น (เช่น รันนอกบริบทแอปจริง) — `nil` จึงสงวนไว้
+  /// สื่อว่า "อ่านค่าจริงไม่ได้" แยกจาก `false` ที่แปลว่า "อ่านได้ ค่าจริงคือยังไม่
+  /// เคย active" ผู้เรียก (เทสต์) ต้อง `XCTUnwrap` ค่านี้ก่อนเสมอ เพื่อให้ `nil`
+  /// ทำให้เทสต์ fail ทันทีแทนที่จะเงียบเป็น `false` ที่ดูเหมือนผลที่ถูกต้อง
+  static var hasEverBecomeActiveForTesting: Bool? {
+    (UIApplication.shared.delegate as? AppDelegate)?.hasEverBecomeActive
   }
 
   private static func stateString(_ state: UIApplication.State) -> String {

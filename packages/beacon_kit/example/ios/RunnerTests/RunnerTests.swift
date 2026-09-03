@@ -338,23 +338,58 @@ class RunnerTests: XCTestCase {
   /// `hasEverBecomeActiveForTesting` จะยังเป็น `false` — ตรงกับรูปแบบหลักฐานบั๊ก
   /// จริงที่บันทึกไว้ใน ADR-16 หัวข้อ 0 เป๊ะ (`state=active everActive=false`
   /// พร้อมกัน)
+  ///
+  /// **แก้ 3 ก.ย. 2026 — ทำให้ deterministic:** เดิมเทสต์นี้ skip ทันทีถ้าเห็น
+  /// `applicationState != .active` ณ ตอนเทสต์เริ่ม ซึ่งไม่ deterministic เลย
+  /// (ขึ้นกับจังหวะที่ simulator พาแอปไป active เทียบกับจังหวะที่ XCTest เริ่มรัน
+  /// เทสต์เมธอด) — ขัดกับภาคผนวกข้อ 1 ของ runbook ที่บอกว่าเครื่องมือวัดต้องรอด
+  /// ในสภาพที่กำลังทดสอบ ไม่ใช่หายไปเองตามจังหวะเครื่อง ตอนนี้เช็ก flag ที่ตั้งไว้
+  /// แล้วก่อนเสมอ แล้วค่อย**รอ**การยืนยันจริงด้วย `XCTestExpectation` + timeout
+  /// ก่อนจะ skip — skip จึงเกิดเฉพาะกรณีที่แอปไม่ยอมขึ้น active เลยภายในเวลาที่ให้
+  /// จริง ๆ เท่านั้น
   func testDidBecomeActiveObserverFiresOnRealAppLifecycle() throws {
-    // ยืนยันก่อนว่าเทสต์นี้กำลังรันในสภาพที่ตั้งใจวัดจริง — ถ้า simulator ไม่ได้
-    // พาแอปไป active (เช่นรันผ่านเครื่องมือ CI แปลก ๆ ที่ไม่ทำตามสมมติฐานนี้)
-    // ต้อง skip ไม่ใช่ปล่อยให้ผ่านลอย ๆ โดยไม่ได้พิสูจน์อะไร
-    guard UIApplication.shared.applicationState == .active else {
+    // เช็ก flag ปัจจุบันก่อนเสมอ — **ห้ามข้ามขั้นนี้ไปรอ notification เลย**:
+    // ถ้าแอป active ไปแล้วก่อนเทสต์นี้เริ่ม (กรณีปกติเวลารันแบบ interactive บน
+    // เครื่อง dev) `didBecomeActiveNotification` ถูก post ไปแล้วในอดีต จะไม่มีวัน
+    // ถูก post ซ้ำให้ observer ที่เพิ่งลงทะเบียนในเทสต์ตอนนี้เห็นเลย — รอเฉย ๆ จะ
+    // timeout ทุกครั้งทั้งที่ไม่มีอะไรผิดปกติ
+    if let alreadyActive = AppDelegate.hasEverBecomeActiveForTesting, alreadyActive {
+      // มีหลักฐานอยู่แล้วว่า observer เคยยิงสำเร็จมาก่อนหน้านี้ในรอบทดสอบนี้
+      return
+    }
+
+    // ยังไม่เคย active (หรืออ่านค่าไม่ได้ — กรณีนั้นจะ fail ตอน XCTUnwrap ด้านล่าง
+    // ไม่ใช่ค้างเงียบ ๆ ที่นี่) — รอการยืนยันจริงด้วย timeout แทนที่จะ skip ทันที
+    let becameActive = expectation(
+      forNotification: UIApplication.didBecomeActiveNotification,
+      object: nil,
+      handler: nil
+    )
+    let waitResult = XCTWaiter().wait(for: [becameActive], timeout: 5.0)
+
+    guard waitResult == .completed else {
       throw XCTSkip(
-        "แอป host ไม่ได้อยู่ในสถานะ active ตอนเทสต์นี้รัน "
-          + "(applicationState=\(UIApplication.shared.applicationState.rawValue)) "
-          + "— เทสต์นี้ต้องการสภาพแวดล้อมที่แอปจริงถูก launch ขึ้นมา active บน "
-          + "simulator ไม่งั้นพิสูจน์อะไรไม่ได้ ดู ADR-16 หัวข้อ 5"
+        "แอป host ไม่ได้ post didBecomeActiveNotification เลยภายใน 5 วินาที "
+          + "(applicationState=\(UIApplication.shared.applicationState.rawValue) "
+          + "ตอนหมดเวลา) — เทสต์นี้ต้องการสภาพแวดล้อมที่แอปจริงถูก launch ขึ้นมา "
+          + "active บน simulator ไม่งั้นพิสูจน์อะไรไม่ได้ ดู ADR-16 หัวข้อ 5"
       )
     }
 
-    XCTAssertTrue(
+    // ได้รับ notification จริงแล้ว — ตรวจว่า observer ของ AppDelegate (ซึ่ง
+    // ลงทะเบียนไว้ก่อนเทสต์นี้ตั้งแต่ตอน didFinishLaunchingWithOptions) ตั้ง flag
+    // ทันเวลาจริง `nil` (อ่านไม่ได้เลย) ต้องทำให้เทสต์ fail ชัดเจน ไม่ใช่เงียบเป็น
+    // `false` ที่ดูเหมือนผลที่ถูกต้อง (ดูเหตุผลเต็มที่ `hasEverBecomeActiveForTesting`)
+    let becameActiveFlag = try XCTUnwrap(
       AppDelegate.hasEverBecomeActiveForTesting,
-      "แอปอยู่ใน state=active จริงแล้ว แต่ hasEverBecomeActive ยังเป็น false — "
-        + "แปลว่า observer ของ didBecomeActiveNotification ที่ลงทะเบียนใน "
+      "อ่านค่า hasEverBecomeActive จาก AppDelegate ไม่ได้เลย (cast "
+        + "UIApplication.shared.delegate เป็น AppDelegate ไม่สำเร็จ หรือไม่มี "
+        + "delegate) — นี่คือปัญหาของทางผ่านที่ใช้ทดสอบเอง ไม่ใช่บั๊กของ observer"
+    )
+    XCTAssertTrue(
+      becameActiveFlag,
+      "ได้รับ didBecomeActiveNotification จริงแล้ว แต่ hasEverBecomeActive ยังเป็น "
+        + "false — แปลว่า observer ของ didBecomeActiveNotification ที่ลงทะเบียนใน "
         + "didFinishLaunchingWithOptions ไม่ทำงาน (นี่คือรูปแบบเดียวกับบั๊กเดิมที่ "
         + "ADR-16 บันทึกไว้จากอุปกรณ์จริง: state=active everActive=false พร้อมกัน)"
     )
