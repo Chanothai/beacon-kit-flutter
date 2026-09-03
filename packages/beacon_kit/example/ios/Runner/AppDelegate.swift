@@ -39,6 +39,13 @@ import beacon_kit_ios
   /// เป็นสัญญาณอิสระที่**ไม่พึ่ง API ที่ deprecated เลย**: process ที่ผู้ใช้เปิดเอง
   /// จะผ่าน active เสมอ ส่วน process ที่ iOS ปลุกขึ้นมาเบื้องหลังเพื่อส่ง location
   /// event จะไม่เคย active จนกว่าผู้ใช้จะกดเปิดแอปเอง
+  ///
+  /// **ADR-16 §1.3:** ตั้งค่าจากสองเส้นทาง — observer ของ
+  /// `UIApplication.didBecomeActiveNotification` (ทางหลัก ทำงานได้ทั้งกรณีแอปใช้
+  /// scene และไม่ใช้) กับ `override applicationDidBecomeActive` ด้านล่าง (fallback
+  /// เดิม ที่ตายเมื่อแอปใช้ scene ตามเอกสาร Apple — ดูคอมเมนต์ที่จุดลงทะเบียน
+  /// observer ใน `didFinishLaunchingWithOptions`) ทั้งสองเส้นทางตั้งค่าเดียวกันแบบ
+  /// idempotent จึงเรียกซ้ำหรือเรียกทั้งคู่ได้อย่างปลอดภัย
   private var hasEverBecomeActive = false
 
   override func application(
@@ -46,6 +53,42 @@ import beacon_kit_ios
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     launchedByLocationKey = launchOptions?[.location] != nil
+
+    // **ADR-16 §1.3 — แหล่งความจริงใหม่ของ `hasEverBecomeActive` ภายใต้ UIScene
+    // lifecycle:** แอปนี้ประกาศ `UIApplicationSceneManifest` (Info.plist:40-60)
+    // ตามเอกสาร Apple ของ `applicationDidBecomeActive(_:)`
+    // (https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationdidbecomeactive(_:)):
+    // "If you're using scenes ... UIKit will not call this method" — override
+    // เดิมด้านล่างจึงเป็น dead code ตลอดชีพ process ทุกกรณีที่แอปยังใช้ scene
+    // เอกสารหน้าเดียวกันยืนยันด้วยว่า "UIKit posts a didBecomeActiveNotification
+    // regardless of whether your app uses scenes" — สังเกตสัญญาณนี้แทนจึงทำงานได้
+    // ไม่ว่าแอปจะใช้ scene หรือไม่
+    //
+    // ลงทะเบียนที่ต้นเมธอดนี้ (ก่อน scene ใด ๆ ถูก connect เสมอ) เพราะเอกสาร Apple
+    // ของ `didFinishLaunchingWithOptions` เองระบุลำดับเหตุการณ์ไว้ตรง ๆ ว่า
+    // "The system calls this method as soon as the process is done launching.
+    // The system then creates the scene(s) that you configured for your app.
+    // The system calls scene life-cycle methods, such as
+    // scene(_:willConnectTo:options:)." — observer จึงมีตัวตนก่อนโอกาสแรกที่
+    // `didBecomeActiveNotification` จะถูก post ได้เสมอ ไม่มีช่องให้ race
+    //
+    // ใช้ `[weak self]` กัน retain cycle — `NotificationCenter` ถือ closure นี้ไว้
+    // เอง ไม่ใช่ผูกกับ observer token ที่เราทิ้งไว้โดยไม่เก็บ reference คืน
+    //
+    // ไม่ removeObserver เพราะ `AppDelegate` (`@main`) มีอายุเท่ากับ process เอง
+    // ไม่มีจังหวะใดที่ instance นี้จะถูกทำลายก่อน process จบแล้วต้องเลิกฟังก่อน
+    //
+    // ปลอดภัยต่อการเรียกซ้ำ/เรียกคู่กับ `override applicationDidBecomeActive`
+    // ด้านล่าง (คงไว้เป็น defensive fallback ตาม ADR-16 §1.3 เผื่อวันหนึ่งแอปเลิก
+    // ใช้ scene): ทั้งสองเส้นทางแค่ตั้ง `Bool` เดียวกันเป็น `true` ซึ่ง idempotent
+    // อยู่แล้ว — ยิงกี่ครั้ง ยิงพร้อมกัน หรือยิงจากคนละเส้นทาง ผลลัพธ์เหมือนเดิมเป๊ะ
+    NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: nil
+    ) { [weak self] _ in
+      self?.hasEverBecomeActive = true
+    }
 
     // ต้องตั้ง delegate ตรงนี้ ไม่งั้น `userNotificationCenter(_:willPresent:...)`
     // จะไม่ถูกเรียกเลย และ **notification จะไม่แสดงตอนแอปอยู่ foreground**
@@ -249,6 +292,16 @@ import beacon_kit_ios
     completionHandler([.banner, .list, .sound])
   }
 
+  /// **ADR-16 §1.3 — เก็บไว้เป็น defensive fallback เท่านั้น ห้ามลบ**
+  ///
+  /// ตราบใดที่แอปประกาศ `UIApplicationSceneManifest` (Info.plist:40-60) เมธอดนี้
+  /// **ไม่ถูก UIKit เรียกเลย** ตามเอกสาร Apple ที่ observer ใน
+  /// `didFinishLaunchingWithOptions` อ้างถึงข้างบน — สัญญาณตัวจริงในวันนี้คือ
+  /// `UIApplication.didBecomeActiveNotification` observer เท่านั้น เมธอดนี้จึง
+  /// เป็น dead code ในทางปฏิบัติ *แต่ยังคุ้มค่าเก็บไว้*: ถ้าวันหนึ่งแอปเลิกใช้ scene
+  /// เส้นทางนี้จะกลับมาทำงานได้เองทันทีโดยไม่ต้องแก้โค้ดเพิ่ม และเพราะการตั้ง
+  /// `hasEverBecomeActive = true` เป็น idempotent การเรียกซ้ำกับ observer (ถ้าวัน
+  /// หนึ่งทั้งสองเส้นทางทำงานพร้อมกันจริง) จึงไม่มีผลข้างเคียงใด ๆ
   override func applicationDidBecomeActive(_ application: UIApplication) {
     hasEverBecomeActive = true
     super.applicationDidBecomeActive(application)
