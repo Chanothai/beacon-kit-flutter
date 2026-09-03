@@ -2499,9 +2499,23 @@ $(PRODUCT_MODULE_NAME).SceneDelegate`) — ตามหลักฐานเอ�
 > user interface. **UIKit posts a `didBecomeActiveNotification` regardless of
 > whether your app uses scenes.**"
 >
-> "This method is deprecated as of iOS 26.0 ... Use the UIScene lifecycle with
-> `sceneDidBecomeActive(_:)` from UISceneDelegate or
-> `UIApplication.didBecomeActiveNotification` instead."
+> **แก้ไข 3 ก.ย. 2026 — ที่มาของคำพูดด้านล่างนี้ไม่ตรงตามที่บันทึกไว้เดิม:**
+> ข้อความก่อนหน้านี้ ("This method is deprecated as of iOS 26.0 ... Use the
+> UIScene lifecycle with...") หาคำต่อคำในหน้าเอกสารนี้ไม่เจอ — หน้านี้ไม่มี
+> ประโยคดังกล่าว มีแต่คำเตือน deprecation สั้น ๆ (แสดงเป็นกล่องเตือนบนหน้าเว็บ
+> มาจากฟิลด์ `deprecationSummary`/`metadata.platforms[].message` ของ JSON data
+> endpoint หน้าเดียวกัน) ซึ่งข้อความคำต่อคำคือ:
+>
+> "Use UIScene lifecycle and sceneDidBecomeActive(_:) from UISceneDelegate or
+> the UIApplication.didBecomeActiveNotification instead."
+>
+> ส่วนเลขเวอร์ชัน **iOS 26.0** มาจากฟิลด์โครงสร้าง
+> `metadata.platforms[].deprecatedAt` ของ JSON เดียวกัน (คู่กับ
+> `introducedAt: "2.0"`) — เป็นข้อมูลเชิงโครงสร้าง (availability range) ไม่ใช่
+> ข้อความที่เขียนเป็นประโยคบนหน้าเว็บ จึงไม่ใส่ในเครื่องหมายคำพูดคู่กับข้อความ
+> ข้างบน เนื้อหาที่บันทึกไว้เดิม (deprecated ใน iOS 26.0, แนะนำให้ใช้
+> `sceneDidBecomeActive(_:)` หรือ `UIApplication.didBecomeActiveNotification`
+> แทน) **ยังถูกต้องทั้งหมด** มีแค่การอ้างว่าเป็นคำพูดคำต่อคำที่ผิด
 
 **`sceneDidBecomeActive(_:)`**
 <https://developer.apple.com/documentation/uikit/uiscenedelegate/scenedidbecomeactive(_:)>

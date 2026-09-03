@@ -257,6 +257,109 @@ class RunnerTests: XCTestCase {
     )
   }
 
+  // MARK: - ADR-16: `AppDelegate.runContext(applicationState:hasEverBecomeActive:)`
+
+  /// `state=active` ต้องได้ `"foreground"` **ไม่ว่า `hasEverBecomeActive` จะเป็น
+  /// อะไรก็ตาม** — ตารางการตัดสินใน ADR-16 หัวข้อ 1 เช็ค `applicationState` ก่อน
+  /// เสมอ ไม่สนใจ flag เลยในกรณีนี้ ทดสอบทั้งสองค่าของ flag เพื่อล็อกว่าไม่มีทาง
+  /// ที่ใครจะแอบเพิ่มเงื่อนไขให้ `foreground` ขึ้นกับ `hasEverBecomeActive`
+  func testActiveStateAlwaysMapsToForegroundRegardlessOfEverActiveFlag() {
+    XCTAssertEqual(
+      AppDelegate.runContext(applicationState: .active, hasEverBecomeActive: true),
+      "foreground"
+    )
+    XCTAssertEqual(
+      AppDelegate.runContext(applicationState: .active, hasEverBecomeActive: false),
+      "foreground",
+      "นี่คือรูปแบบที่ตรงกับหลักฐานบั๊กจริงใน ADR-16 หัวข้อ 0 (process ed11d170: "
+        + "state=active everActive=false พร้อมกัน) — ต้องยังได้ foreground ไม่ใช่ "
+        + "ค่าอื่น"
+    )
+  }
+
+  /// `state=background`/`.inactive` + **เคย** active แล้ว → `"background"`
+  ///
+  /// ทดสอบทั้ง `.background` และ `.inactive` เพราะ `runContext` จัดสองสถานะนี้ไว้
+  /// กลุ่มเดียวกัน (`case .background, .inactive:`) — ถ้าใครแยก branch ออกจากกัน
+  /// ในอนาคตแล้วพลาด เทสต์นี้ต้องจับได้ทั้งคู่
+  func testBackgroundOrInactiveWithPriorActiveMapsToBackground() {
+    XCTAssertEqual(
+      AppDelegate.runContext(applicationState: .background, hasEverBecomeActive: true),
+      "background"
+    )
+    XCTAssertEqual(
+      AppDelegate.runContext(applicationState: .inactive, hasEverBecomeActive: true),
+      "background"
+    )
+  }
+
+  /// `state=background`/`.inactive` + **ไม่เคย** active เลย → `"relaunchedFromTerminated"`
+  ///
+  /// นี่คือค่าที่ B5 ต้องเห็นในไฟล์ log จึงจะถือว่าผ่าน (ADR-16 หัวข้อ 4) — ห้ามมี
+  /// ใครแก้สตริงนี้เพราะ Android (`ProcessState.kt`) และ Dart
+  /// (`AppRunContext.relaunchedFromTerminated` ใน `launch_context.dart`) ผูกกับ
+  /// ค่านี้เป๊ะ
+  func testBackgroundOrInactiveWithoutPriorActiveMapsToRelaunchedFromTerminated() {
+    XCTAssertEqual(
+      AppDelegate.runContext(applicationState: .background, hasEverBecomeActive: false),
+      "relaunchedFromTerminated"
+    )
+    XCTAssertEqual(
+      AppDelegate.runContext(applicationState: .inactive, hasEverBecomeActive: false),
+      "relaunchedFromTerminated"
+    )
+  }
+
+  /// **เทสต์ end-to-end ตัวเดียวที่จับบั๊กคลาสนี้ได้ตั้งแต่ต้น (ADR-16 หัวข้อ 5)**
+  ///
+  /// สามเทสต์ข้างบนพิสูจน์แค่ว่า `runContext` เป็น pure function ที่ถูกตาม
+  /// สัญญาที่เรา *คิดว่า* ถูก — พิสูจน์ไม่ได้เลยว่า
+  /// `UIApplication.didBecomeActiveNotification` ถูก post จริงภายใต้ UIScene
+  /// lifecycle ตามที่เอกสาร Apple อ้างใน ADR-16 หัวข้อ 1.1 (ซึ่งเป็นสมมติฐานที่
+  /// บั๊กเดิมพิสูจน์แล้วว่าเชื่อไม่ได้เฉย ๆ ถ้าไม่ได้รันจริง — override
+  /// `applicationDidBecomeActive` เดิมก็ "ดูเหมือนถูกต้อง" ตามสัญญาเดียวกันทุก
+  /// ประการ แต่ไม่เคยถูกเรียกเลยเมื่อแอปใช้ scene)
+  ///
+  /// **ทำไมเทสต์นี้ทำได้จริง ไม่ใช่แค่ mock:** `RunnerTests` ถูกตั้งเป็น
+  /// **hosted test bundle** (`TEST_HOST = Runner.app` ใน `project.pbxproj`) —
+  /// XCTest จึงรันโค้ดนี้**ข้างในแอป `Runner` ที่ launch เต็มรูปแบบจริงบน
+  /// simulator** ผ่าน `didFinishLaunchingWithOptions` ตามปกติทุกขั้นตอน
+  /// (รวมถึงการลงทะเบียน observer ที่ ADR-16 เพิ่ม) ไม่ใช่การเรียกฟังก์ชันเปล่า ๆ
+  /// แยกจากบริบทแอป
+  ///
+  /// เมื่อ test runner ของ Xcode รัน XCTest bundle มันต้องนำแอป host ขึ้นมา
+  /// **foreground/active** ก่อนเสมอเพื่อ inject ตัวเทสต์เข้าไป — ถึงตอนที่เทสต์
+  /// เมธอดนี้เริ่มทำงาน แอปควรจะผ่าน `didBecomeActiveNotification` มาแล้วจริง
+  /// ครั้งหนึ่งตามธรรมชาติของการรัน ไม่ใช่สิ่งที่เทสต์ต้องจำลองเอง
+  ///
+  /// ถ้าบั๊กเดิมยังไม่ถูกแก้ (observer ไม่ทำงาน หรือแอปเลิกใช้ observer แล้วกลับไป
+  /// พึ่ง `override applicationDidBecomeActive` ที่ตายภายใต้ scene) เทสต์นี้จะ
+  /// **แดง** เพราะ `applicationState` เป็น `.active` จริงแต่
+  /// `hasEverBecomeActiveForTesting` จะยังเป็น `false` — ตรงกับรูปแบบหลักฐานบั๊ก
+  /// จริงที่บันทึกไว้ใน ADR-16 หัวข้อ 0 เป๊ะ (`state=active everActive=false`
+  /// พร้อมกัน)
+  func testDidBecomeActiveObserverFiresOnRealAppLifecycle() throws {
+    // ยืนยันก่อนว่าเทสต์นี้กำลังรันในสภาพที่ตั้งใจวัดจริง — ถ้า simulator ไม่ได้
+    // พาแอปไป active (เช่นรันผ่านเครื่องมือ CI แปลก ๆ ที่ไม่ทำตามสมมติฐานนี้)
+    // ต้อง skip ไม่ใช่ปล่อยให้ผ่านลอย ๆ โดยไม่ได้พิสูจน์อะไร
+    guard UIApplication.shared.applicationState == .active else {
+      throw XCTSkip(
+        "แอป host ไม่ได้อยู่ในสถานะ active ตอนเทสต์นี้รัน "
+          + "(applicationState=\(UIApplication.shared.applicationState.rawValue)) "
+          + "— เทสต์นี้ต้องการสภาพแวดล้อมที่แอปจริงถูก launch ขึ้นมา active บน "
+          + "simulator ไม่งั้นพิสูจน์อะไรไม่ได้ ดู ADR-16 หัวข้อ 5"
+      )
+    }
+
+    XCTAssertTrue(
+      AppDelegate.hasEverBecomeActiveForTesting,
+      "แอปอยู่ใน state=active จริงแล้ว แต่ hasEverBecomeActive ยังเป็น false — "
+        + "แปลว่า observer ของ didBecomeActiveNotification ที่ลงทะเบียนใน "
+        + "didFinishLaunchingWithOptions ไม่ทำงาน (นี่คือรูปแบบเดียวกับบั๊กเดิมที่ "
+        + "ADR-16 บันทึกไว้จากอุปกรณ์จริง: state=active everActive=false พร้อมกัน)"
+    )
+  }
+
   // MARK: - ADR-10: กู้ region ที่ระบบเก็บไว้ข้าม launch กลับมา
 
   /// จุดที่ทำให้ B5 รอบ 30 ส.ค. 2026 ไม่ผ่าน: process ใหม่ที่ถูกปลุกขึ้นมามี
