@@ -348,18 +348,31 @@ class RunnerTests: XCTestCase {
   /// ก่อนจะ skip — skip จึงเกิดเฉพาะกรณีที่แอปไม่ยอมขึ้น active เลยภายในเวลาที่ให้
   /// จริง ๆ เท่านั้น
   func testDidBecomeActiveObserverFiresOnRealAppLifecycle() throws {
-    // เช็ก flag ปัจจุบันก่อนเสมอ — **ห้ามข้ามขั้นนี้ไปรอ notification เลย**:
+    // **แก้ 3 ก.ย. 2026 — unwrap ก่อนแยกแขนเสมอ:** เดิม `if let alreadyActive =
+    // ..., alreadyActive` ปล่อยให้ `nil` (อ่านค่าไม่ได้ — cast delegate พัง/ไม่มี
+    // delegate) ไหลลงไปแขนรอ notification ด้านล่างเงียบ ๆ แล้วจบเป็น `XCTSkip`
+    // ธรรมดาในสภาพที่ดูปกติทุกอย่าง — ขัดกับเจตนาทั้งหมดของการเปลี่ยน
+    // `hasEverBecomeActiveForTesting` เป็น `Bool?` (แยก "ทางผ่านของเทสต์เองพัง"
+    // ออกจาก "ยังไม่เคย active") `nil` จึงต้อง **fail ทันทีตรงนี้เลย** ไม่ใช่ไหล
+    // ต่อไปแขนไหนทั้งสิ้น
+    let current = try XCTUnwrap(
+      AppDelegate.hasEverBecomeActiveForTesting,
+      "อ่านค่า hasEverBecomeActive จาก AppDelegate ไม่ได้เลย (cast "
+        + "UIApplication.shared.delegate เป็น AppDelegate ไม่สำเร็จ หรือไม่มี "
+        + "delegate) — นี่คือปัญหาของทางผ่านที่ใช้ทดสอบเอง ไม่ใช่บั๊กของ observer"
+    )
+
     // ถ้าแอป active ไปแล้วก่อนเทสต์นี้เริ่ม (กรณีปกติเวลารันแบบ interactive บน
     // เครื่อง dev) `didBecomeActiveNotification` ถูก post ไปแล้วในอดีต จะไม่มีวัน
-    // ถูก post ซ้ำให้ observer ที่เพิ่งลงทะเบียนในเทสต์ตอนนี้เห็นเลย — รอเฉย ๆ จะ
-    // timeout ทุกครั้งทั้งที่ไม่มีอะไรผิดปกติ
-    if let alreadyActive = AppDelegate.hasEverBecomeActiveForTesting, alreadyActive {
-      // มีหลักฐานอยู่แล้วว่า observer เคยยิงสำเร็จมาก่อนหน้านี้ในรอบทดสอบนี้
+    // ถูก post ซ้ำให้ observer ที่เพิ่งลงทะเบียนในเทสต์ตอนนี้เห็นเลย — ต้องจบทันที
+    // ตรงนี้ ห้ามไปรอ notification ต่อ เพราะรอเฉย ๆ จะ timeout ทุกครั้งทั้งที่ไม่มี
+    // อะไรผิดปกติ (มีหลักฐานอยู่แล้วว่า observer เคยยิงสำเร็จมาก่อนหน้านี้)
+    if current {
       return
     }
 
-    // ยังไม่เคย active (หรืออ่านค่าไม่ได้ — กรณีนั้นจะ fail ตอน XCTUnwrap ด้านล่าง
-    // ไม่ใช่ค้างเงียบ ๆ ที่นี่) — รอการยืนยันจริงด้วย timeout แทนที่จะ skip ทันที
+    // ยังไม่เคย active จริง (ไม่ใช่ `nil` — กรณีนั้นถูกดักไปแล้วด้านบน) — รอการ
+    // ยืนยันจริงด้วย timeout แทนที่จะ skip ทันที
     let becameActive = expectation(
       forNotification: UIApplication.didBecomeActiveNotification,
       object: nil,
