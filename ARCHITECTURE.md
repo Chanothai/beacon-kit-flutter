@@ -1096,6 +1096,13 @@ launch key เป็นสัญญาณเดียวตามแนวทา
 **ไม่จำเป็นต่อการใช้งาน** เพราะเราไม่ได้พึ่ง key นี้อยู่แล้ว — บันทึกไว้เพราะใครก็ตาม
 ที่เขียนโค้ดใหม่บนสมมติฐานคลาสสิกจะเจอปัญหานี้
 
+> **หมายเหตุเพิ่ม 3 ก.ย. 2026 — ดู ADR-16:** พบว่า `hasEverBecomeActive` เองก็ค้าง
+> `false` ตลอดชีพ process ด้วยสาเหตุคนละอันแต่เกี่ยวโยงกัน (ไม่ใช่แค่ `launchKey`) —
+> ADR-16 มีคำตอบยืนยันจากเอกสาร Apple ทั้งสองเรื่อง (ทำไม `launchKey` เป็น `false`
+> เสมอ และทำไม `everActive` ค้าง `false`) พร้อมทางแก้และผลต่อการตีความ log เก่า
+> **ผลการทดสอบ B5 ที่บันทึก "ผ่าน" ในหัวข้อนี้ยังไม่ถูกเพิกถอน** แต่เหตุผลที่ใช้รองรับ
+> ต้องอ่านใหม่ตาม ADR-16 หัวข้อ 3 — ห้ามอ่านแค่หัวข้อนี้เพียวๆ อีกต่อไป
+
 ---
 
 ## ADR-11: Region flapping — ข้อกำหนดเรื่อง debounce และการรวม session (เพิ่ม 31 ส.ค. 2026)
@@ -2449,3 +2456,285 @@ CoreLocation ยิง `didExitRegion` ให้เอง และ **ADR-11 ค
 2. **ข้อ จ. (ติดตั้งฟิลด์วัดผล)** — เก็บข้อมูลหนึ่งคืนเพื่อให้เลิกเถียงด้วยขอบล่าง
 3. **ค่อยตัดสิน ข./ค./ง.** เมื่อมีตัวเลขจริง — **ห้ามเลือกเกณฑ์ clamp จากตัวเลข
    ขอบล่างในข้อ 5** เพราะมันจะดูเหมือนแก้แล้วทั้งที่ยังไม่รู้ค่าจริง
+
+---
+
+## ADR-16: แหล่งความจริงใหม่ของ `hasEverBecomeActive` ภายใต้ UIScene lifecycle — แก้บั๊ก `everActive` ค้าง `false` ตลอดชีพ process (เพิ่ม 3 ก.ย. 2026)
+
+> **สถานะ: ตัดสินใจด้านสถาปัตยกรรมแล้ว — ยังไม่ implement**
+> นี่คือขั้นที่ 1/4 ตาม PIPELINE.md (ออกแบบ) เท่านั้น ห้ามมีโค้ด Swift ในเอกสารนี้
+> หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev` เมื่อสถาปัตยกรรม
+> ในหัวข้อนี้ถูก sign-off แล้วเท่านั้น
+> **ขอบเขต:** เฉพาะ `packages/beacon_kit/example/ios/Runner/AppDelegate.swift`
+> (โค้ดวัดผลของ **example app** เหมือน ADR-10 — ไม่แตะ `beacon_kit_ios` SDK,
+> ไม่แตะ Android, ไม่แตะสัญญา Dart)
+
+### 0. บั๊กที่ต้องแก้ (สรุปจากงานตรวจสอบก่อนออกแบบรอบนี้)
+
+`AppDelegate.swift:252-255` ตั้ง `hasEverBecomeActive = true` ใน
+`override func applicationDidBecomeActive` จุดเดียว แอปนี้ประกาศ
+`UIApplicationSceneManifest` ใน `Info.plist:40-60` (`UISceneDelegateClassName =
+$(PRODUCT_MODULE_NAME).SceneDelegate`) — ตามหลักฐานเอกสาร Apple ในหัวข้อ 1.1
+ด้านล่าง **`applicationDidBecomeActive` ไม่ถูกเรียกเลยเมื่อแอปใช้ scene** ไม่ใช่
+"บางเคส" ผลคือ `hasEverBecomeActive` ค้าง `false` **ตลอดชีพ process ทุกกรณี**
+รวมถึงตอนแอปอยู่ foreground จริง (`state=active`) ก็ยังรายงาน `everActive=false`
+ตามหลักฐานอุปกรณ์จริง 3 ก.ย. 2026 (process `ed11d170`, บรรทัด `exit` เวลา
+13:57:11.974 มี `state=active everActive=false` พร้อมกัน — เป็นข้อขัดแย้งที่ยืนยัน
+บั๊กได้เอง โดยไม่ต้องอาศัยการตีความ)
+
+ผลกระทบต่อระบบวัดผล: `currentRunContext()` (`AppDelegate.swift:155-164`) แยก
+`background` ออกจาก `relaunchedFromTerminated` ด้วยค่านี้เพียงค่าเดียว — เมื่อ
+มันค้าง `false` เสมอ ทุกบรรทัดที่ `state` ไม่ใช่ `active` จะถูก stamp เป็น
+`relaunchedFromTerminated` **โดยไม่สนใจว่าความจริงเป็นอย่างไร**
+
+### 1. (a) แหล่งความจริงใหม่ของ `hasEverBecomeActive`
+
+#### 1.1 หลักฐานจากเอกสาร Apple (ดึงจาก data endpoint ของหน้าเอกสารทางการจริง 3 ก.ย. 2026 — ไม่ใช่การเดา)
+
+**`applicationDidBecomeActive(_:)`**
+<https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationdidbecomeactive(_:)>
+
+> "If you're using scenes (see Scenes), UIKit will not call this method. Use
+> `sceneDidBecomeActive(_:)` instead to restart any tasks or refresh your app's
+> user interface. **UIKit posts a `didBecomeActiveNotification` regardless of
+> whether your app uses scenes.**"
+>
+> "This method is deprecated as of iOS 26.0 ... Use the UIScene lifecycle with
+> `sceneDidBecomeActive(_:)` from UISceneDelegate or
+> `UIApplication.didBecomeActiveNotification` instead."
+
+**`sceneDidBecomeActive(_:)`**
+<https://developer.apple.com/documentation/uikit/uiscenedelegate/scenedidbecomeactive(_:)>
+
+> "In addition to calling this method, UIKit posts a `didActivateNotification`
+> and a `didBecomeActiveNotification`."
+>
+> "When you implement this method and enable scenes, UIKit calls this method
+> but **does not call the `applicationDidBecomeActive(_:)` method** on
+> `UIApplicationDelegate`."
+
+**`UIApplication.didBecomeActiveNotification`**
+<https://developer.apple.com/documentation/uikit/uiapplication/didbecomeactivenotification>
+
+> "An app is active when it is receiving events. An active app can be said to
+> have focus. It gains focus after being launched, loses focus when an overlay
+> window pops up or when the device is locked, and gains focus when the device
+> is unlocked."
+
+สามหน้านี้ประกอบกันยืนยันข้อเท็จจริงสามข้อที่จำเป็นต่อการตัดสินใจ:
+
+1. เหตุผลของบั๊กคือสิ่งที่ Apple บอกไว้ตรง ๆ ไม่ใช่การเดา — แอปใช้ scene จึง
+   `applicationDidBecomeActive` ไม่ถูกเรียก
+2. `sceneDidBecomeActive(_:)` (ถ้า override ใน `SceneDelegate`) จะถูกเรียกแทน
+3. **`didBecomeActiveNotification` ถูก post เสมอ "regardless of whether your
+   app uses scenes"** — ประโยคนี้คือกุญแจของการตัดสินใจข้อ 1.3
+
+**หมายเหตุความน่าเชื่อถือ:** พบความเห็นจากบุคคลที่สาม (ไม่ใช่ Apple) ใน GitHub
+issue ของ SDK อื่น (`OneSignal-iOS-SDK#647`,
+<https://github.com/OneSignal/OneSignal-iOS-SDK/issues/647>) ที่ตั้งข้อสังเกตว่า
+`UIApplicationDidBecomeActiveNotification` ยังคงถูก post ภายใต้ scene lifecycle
+แต่เดาว่า **"this seems like an oversight on Apple's part that might change in
+the future"** — ข้อความนี้**ขัดแย้งกับเอกสารทางการที่ยกมาข้างบน** ซึ่งระบุ
+"regardless of whether your app uses scenes" อย่างชัดเจนว่าเป็นพฤติกรรมที่ตั้งใจ
+ไม่ใช่ oversight เราเลือกเชื่อเอกสารทางการ (first-party, หน้าเอกสาร API ปัจจุบัน)
+เหนือความเห็นบุคคลที่สามใน GitHub issue ของ SDK อื่น — แต่บันทึกความเห็นนี้ไว้
+เพราะเป็นสัญญาณเดียวที่มีว่า Apple *เคย* ถูกมองว่าพฤติกรรมนี้ไม่ตั้งใจมาก่อน
+
+#### 1.2 ทางเลือกที่พิจารณา และเหตุผลที่ไม่เลือก
+
+| ทาง | เนื้อหา | ผล |
+|---|---|---|
+| **ก. Override `sceneDidBecomeActive` ใน `SceneDelegate` แล้วเรียกกลับ `AppDelegate`** | ต้อง cast `UIApplication.shared.delegate as! AppDelegate` หรือส่ง reference ให้ `SceneDelegate` ถืออ้างอิงไปยัง `AppDelegate` | **ไม่เลือก** — `SceneDelegate.swift` เป็นคลาสว่างของ **example app** (ไม่ใช่ SDK) ส่วนสถานะที่ต้องแก้อยู่ใน `AppDelegate` คนละคลาส การให้ `SceneDelegate` ต้องรู้จัก `AppDelegate` โดยตรงเป็นการผูก (couple) สองคลาสที่ ADR-10 ตั้งใจแยกให้ `AppDelegate` เป็นเจ้าของสถานะแต่ผู้เดียวอยู่แล้ว (ดูเหตุผล "ผู้เขียน log เพียงรายเดียว" ใน ADR-10 (ฉ)) — ยิ่งไปกว่านั้น ตามหลักฐานหัวข้อ 1.1 การ override `sceneDidBecomeActive` ก็ยังทำให้ UIKit post `didBecomeActiveNotification` เหมือนกันอยู่ดี แปลว่าเป็นการเขียนโค้ดเพิ่มเพื่อได้สัญญาณที่ทางเลือก ข. ได้มาฟรีอยู่แล้ว |
+| **ข. สังเกต `UIApplication.didBecomeActiveNotification` ผ่าน `NotificationCenter` จาก `AppDelegate` เอง** | ลงทะเบียน observer ใน `application(_:didFinishLaunchingWithOptions:)` | **เลือก** — เหตุผลเต็มในหัวข้อ 1.3 |
+| **ค. สังเกต `UIScene.didActivateNotification`** | แจ้งเมื่อ scene หนึ่ง ๆ active | ไม่เลือกเป็นสัญญาณหลัก — เป็นระดับ **scene** ไม่ใช่ระดับ **app** ถ้าวันหนึ่ง `UIApplicationSupportsMultipleScenes = true` (ปัจจุบันเป็น `false` ที่ `Info.plist:42-43`) ความหมายที่ต้องการคือ "แอปนี้เคย active หรือยัง" (ระดับ app) ไม่ใช่ "scene ตัวนี้เคย active หรือยัง" (ระดับ scene) — `didBecomeActiveNotification` เป็นระดับ app โดยตรงและถูก post คู่กับ `didActivateNotification` เสมอตามหลักฐานหัวข้อ 1.1 จึงไม่มีเหตุผลต้องลงระดับ scene |
+| **ง. คงไว้เฉยๆ ไม่แก้ (ปล่อยให้ค้าง `false`)** | — | ไม่เลือก — ตามที่บั๊กนี้ระบุไว้ในหัวข้อ 0 คือสิ่งที่ต้องแก้ |
+
+#### 1.3 การตัดสินใจ
+
+**ลงทะเบียน `NotificationCenter` observer สำหรับ `UIApplication.didBecomeActiveNotification`
+จาก `AppDelegate.application(_:didFinishLaunchingWithOptions:)`** เพื่อตั้ง
+`hasEverBecomeActive = true` — **`AppDelegate` ยังคงเป็นเจ้าของสถานะและผู้แจ้งแต่
+ผู้เดียวเหมือนเดิมทุกประการ ไม่มีคลาสอื่นเข้ามาเกี่ยวข้อง**
+
+**ทำไมจังหวะลงทะเบียนนี้ปลอดภัย (ไม่มี race กับ scene connect):** เอกสาร Apple ของ
+`application(_:didFinishLaunchingWithOptions:)` ระบุลำดับเหตุการณ์ของแอปที่รองรับ
+scene ไว้ตรง ๆ ว่า "The system calls this method as soon as the process is done
+launching. The system then creates the scene(s) that you configured for your
+app. The system calls scene life-cycle methods, such as
+`scene(_:willConnectTo:options:)`." — `didFinishLaunchingWithOptions` เกิด
+**ก่อน** scene ใด ๆ ถูก connect เสมอ การลงทะเบียน observer ที่จุดเริ่มของเมธอดนี้
+(จุดเดียวกับที่ ADR-10 เรียก `startBackgroundRegionMonitoring`) จึงรับประกันว่า
+observer มีตัวตนก่อนโอกาสแรกที่ `didBecomeActiveNotification` จะถูก post ได้
+
+**เก็บ `override func applicationDidBecomeActive` เดิมไว้ด้วย** (ไม่ลบ) เป็น
+defensive fallback ที่ไม่มีต้นทุน — ถ้าวันหนึ่งแอปเลิกใช้ scene (`Info.plist`
+ไม่มี `UIApplicationSceneManifest`) เส้นทางเดิมจะกลับมาทำงานได้เองโดยไม่ต้องแก้โค้ด
+เพิ่ม ทั้งสองเส้นทางตั้งค่าตัวแปร `Bool` เดียวกันแบบ **idempotent** (ตั้งเป็น
+`true` ซ้ำได้ไม่มีผลข้างเคียง) จึงไม่มีความเสี่ยงเรื่อง race ระหว่างสองเส้นทาง
+
+#### 1.4 ตอบข้อกังวลที่ระบุไว้ในโจทย์ครบทุกข้อ
+
+| ข้อกังวล | คำตอบ |
+|---|---|
+| ใครเป็นเจ้าของสถานะ/ใครแจ้ง | `AppDelegate` เจ้าของและผู้แจ้งแต่ผู้เดียว ทั้งก่อนและหลังแก้ — `SceneDelegate.swift` **ไม่ต้องแก้ไขแม้แต่บรรทัดเดียว** ยังคงว่างเปล่าได้ตามเดิม เพราะสัญญาณที่ใช้เป็นระดับ `UIApplication` ไม่ใช่ระดับ scene |
+| `UIApplicationSupportsMultipleScenes = false` วันนี้ ต้องทนถ้าวันหนึ่งเป็น `true` | `didBecomeActiveNotification` เป็น notification ระดับ **app** (มาจาก class `UIApplication` ไม่ใช่ instance ของ scene ใดตัวหนึ่ง) — ความหมายคงเดิมไม่ว่าจะมีกี่ scene: "แอปนี้ active" ไม่ใช่ "scene ตัวนี้ active" จึงไม่ต้องแก้อะไรถ้าวันหนึ่งเปิดหลาย scene |
+| process ที่ถูกปลุกเบื้องหลังอาจไม่มี scene เลย ต้องไม่พัง/ไม่รายงานผิด | ถ้าไม่มี scene ถูก connect เลย จะไม่มี `sceneDidBecomeActive` เกิดขึ้น และไม่มีเหตุการณ์ใดทำให้ `didBecomeActiveNotification` ถูก post — observer จึงไม่ทำงาน `hasEverBecomeActive` ค้าง `false` ต่อไป **ซึ่งเป็นคำตอบที่ถูกต้องพอดี** (process ที่ไม่มี UI เลยไม่เคย active จริง) ไม่มี optional การ unwrap ที่จะ crash เพราะ observer ใช้ global notification ไม่ใช่การอ้างอิง scene object ใด ๆ |
+| ห้ามเปลี่ยนความหมาย `foreground`/`background`/`relaunchedFromTerminated` ข้ามแพลตฟอร์ม | **ไม่เปลี่ยน** — การแก้นี้เปลี่ยนแค่ **แหล่งที่มาของค่า** `hasEverBecomeActive` (`Bool`) ฝั่ง iOS เท่านั้น ไม่เปลี่ยนชื่อฟิลด์ ไม่เปลี่ยน type ไม่เปลี่ยนตรรกะการแปลผลใน `currentRunContext()` (`AppDelegate.swift:155-164`), ไม่เปลี่ยน `AppRunContext`/`LaunchDiagnostics.context` ฝั่ง Dart (`launch_context.dart:70-78`), และ **ไม่กระทบ Android เลย** เพราะ `ProcessState.kt` ใช้ `Application.ActivityLifecycleCallbacks` ซึ่งไม่มีปัญหานี้ (Android ไม่มีแนวคิด scene) — ตรวจแล้วว่า `ProcessState.kt` และ `launch_context.dart` ไม่ต้องแก้ไขไฟล์ใด ๆ ในงานนี้ |
+
+### 2. (b) `launchedByLocationKey` ยังหาได้ไหมภายใต้ UIScene lifecycle
+
+**คำตอบ: หาไม่ได้อีกต่อไปในทางปฏิบัติ — มีเอกสาร Apple ยืนยันตรง ๆ ว่าเหตุใด**
+(ไม่ใช่แค่ deprecation — ตัว dictionary ทั้งก้อนเป็น `nil`)
+
+**`application(_:didFinishLaunchingWithOptions:)` — พารามิเตอร์ `launchOptions`**
+<https://developer.apple.com/documentation/uikit/uiapplicationdelegate/application(_:didfinishlaunchingwithoptions:)>
+
+> "A dictionary indicating the reason the person or system launched the app.
+> The contents of this dictionary may be empty in situations where a person
+> launched the app directly. **If the app supports scenes, this is `nil`.**
+> For information about the possible keys in this dictionary and how to handle
+> them, see `UIApplication.LaunchOptionsKey`."
+
+**Apple Developer Forums — คำตอบจาก Apple engineer**, กระทู้ "Scene-based Launch
+Detection" <https://developer.apple.com/forums/thread/814444>
+
+> "For apps that support UIScene, the UIApplication launch options will be nil.
+> Instead the app will be presented with the `UIScene.ConnectionOptions`. **Not
+> every launch option will have an equivalent connection option.** Specifically
+> for CoreLocation triggered app launches, as after launch there will always be
+> a delegate method that will be called to pass on the information, you can use
+> that as an indicator that your app was launched by CoreLocation and based on
+> the specific method that was called back, you can determine which API has
+> triggered it."
+
+**หมายเหตุความน่าเชื่อถือของแหล่งที่สอง:** เป็น Apple Developer Forums ซึ่งเป็น
+โดเมนทางการของ Apple และคำตอบระบุว่ามาจาก Apple engineer แต่ WebFetch ที่ใช้ค้น
+ไม่สามารถยืนยัน username/badge ของผู้ตอบได้โดยตรง (เห็นเฉพาะเนื้อหาที่ดึงมา ไม่เห็น
+หน้าเว็บเต็ม) — ความน่าเชื่อถือจึงต่ำกว่าหน้าเอกสาร API อย่างเป็นทางการหน้าแรก
+เล็กน้อย แต่ **สอดคล้องกันเป๊ะ** กับหน้าเอกสาร API ("launchOptions will be nil"
+ตรงกับ "this is nil") จึงถือว่ายืนยันซ้ำแล้ว (independent confirmation ตามกติกา
+"ห้ามเดา")
+
+**สรุปผลต่อ `launchedByLocationKey`:**
+
+แอปนี้ประกาศ `UIApplicationSceneManifest` (`Info.plist:40-60`) จึง "supports
+scenes" ตามคำจำกัดความข้างบน — `launchOptions` ทั้ง dictionary เป็น `nil` เสมอ
+ไม่ใช่แค่ key `.location` หายไป **`launchedByLocationKey = launchOptions?[.location]
+!= nil` จะได้ `false` เสมอ ไม่ว่าเหตุผลการ launch จะเป็นอะไรก็ตาม** ซึ่งตรงกับ
+สิ่งที่วัดได้จากอุปกรณ์จริง 2 รอบเมื่อ 30 ส.ค. 2026 (`launchKey=false` ทั้งสองรอบ
+ทั้งที่ยืนยันแล้วว่าเป็นการปลุกจากสถานะ terminated จริง — ADR-10 หัวข้อ 6)
+
+**ผลต่อ open question ในเช็คลิสต์ (`docs/test-checklists/ios_broadcast_scanning.md`
+หัวข้อ 12 🔍):** เอกสารนี้**อธิบายกลไกของสมมติฐาน (ข) ได้ตรงและสมบูรณ์กว่าที่บันทึกไว้เดิม**
+(เดิมมีแค่ข้อความ deprecation ที่พูดถึง "after scene connection" แบบเป็นนัย
+ตอนนี้มีเอกสารบอกตรง ๆ ว่า "launchOptions will be nil") — สมมติฐาน (ก) ในเรื่อง
+deprecation กลายเป็น**ไม่จำเป็นต้องพิสูจน์อีกต่อไป** เพราะ (ข) อธิบายผลที่วัดได้ครบ
+อยู่แล้วโดยไม่ต้องอาศัย (ก) เลย
+
+**แต่ยังต้องรักษาสถานะ open question ในไฟล์เช็คลิสต์ไว้ตามที่งานนี้ระบุ — ห้ามปิด
+เอง:** สิ่งที่ยังพิสูจน์ไม่ได้จริง ๆ คือ**การเทียบกับอุปกรณ์จริง** — เอกสารนี้อธิบาย
+เชิงทฤษฎีว่าทำไม `launchKey=false` ถึงเกิดขึ้นได้ (และสอดคล้องกับข้อมูลที่มีอยู่
+2/2 รอบ) แต่**ยังไม่มีการทดสอบอุปกรณ์จริงที่ตั้งใจแยกกรณีนี้โดยเฉพาะ** เช่น การ
+เทียบกับบิลด์ที่ไม่ใช้ scene lifecycle — ซึ่งตามขอบเขตงานนี้ (`beacon-qa` เป็นคน
+ปิดสถานะการทดสอบ) จะให้เหตุผล ไม่ประกาศปิด ไว้ในหัวข้อนี้เท่านั้น การปิดสถานะ
+open question ในไฟล์เช็คลิสต์เองเป็นงานของ `beacon-qa` ในขั้นที่ 3
+
+**ทางปฏิบัติ:** เก็บ `launchedByLocationKey` ไว้ในโค้ดต่อไป (ต้นทุนต่ำ ไม่ต้องลบ
+อะไร) แต่ให้ปรับคอมเมนต์ในโค้ด (งานของ `flutter-dev`) จาก "ต้องรอพิสูจน์" เป็น
+"ทราบแล้วว่าทำไมเป็น `false` เสมอภายใต้ scene lifecycle ปัจจุบัน — เก็บไว้เป็น
+สัญญาณสำรองเผื่อวันหนึ่งแอปเลิกใช้ scene เท่านั้น" พร้อม cite สอง URL ข้างบน
+
+### 3. (c) วิธีตีความบรรทัด log เก่าที่ stamp `relaunchedFromTerminated` ไปแล้ว
+
+**หลักการก่อน:** บั๊กนี้ทำให้ `hasEverBecomeActive` ค้าง `false` **ตลอดชีพ process
+ทุกกรณี ไม่ใช่บางเคส** (หัวข้อ 0) เพราะเส้นทางเดียวที่เคยตั้งค่ามันเป็น `true`
+(`applicationDidBecomeActive`) เป็น dead code ทั้งหมดตราบใดที่แอปประกาศ
+`UIApplicationSceneManifest` — ซึ่งเป็นอย่างนั้นมาตั้งแต่ก่อนมีเครื่องมือวัดผลนี้
+(ไม่ใช่การเปลี่ยนแปลงเมื่อเร็ว ๆ นี้) ผลคือ **คอลัมน์ข้อสรุป (`background` เทียบกับ
+`relaunchedFromTerminated`) ในไฟล์ log ทุกไฟล์ที่เขียนด้วยบิลด์ก่อนแก้ ไม่มีค่า
+พิสูจน์อะไรได้ด้วยตัวเอง** — มันจะเป็น `relaunchedFromTerminated` เสมอสำหรับทุก
+บรรทัดที่ `state` ไม่ใช่ `active` โดยไม่สนใจว่าความจริงเป็นอย่างไร
+
+**กฎการอ่าน log เก่า (เรียงจากเชื่อได้มากไปน้อย):**
+
+| เงื่อนไขของบรรทัด | เชื่อได้แค่ไหน | เหตุผล |
+|---|---|---|
+| `state=active` (ข้อสรุป `foreground`) | **เชื่อได้เต็มที่ ไม่ต้องตีความใหม่** | บั๊กอยู่ที่ `hasEverBecomeActive` เท่านั้น ไม่แตะ `UIApplication.shared.applicationState` ซึ่งเป็นค่าที่อ่านจาก OS ตรง ๆ |
+| บรรทัดแรกสุดของ `procUuid` นั้น (คือบรรทัด `launch`, `uptimeMs` ≈ 0) ที่เป็น `relaunchedFromTerminated` | **เชื่อได้** | ก่อนบรรทัดนี้ process ยังไม่มีตัวตน (`uptimeMs=0`) ไม่มีเวลาให้ผู้ใช้เปิด-ใช้-พับแอปได้จริงในทางกายภาพ ทางเลือก "จริง ๆ คือ `background`" จึงเป็นไปไม่ได้เอง**โดยไม่ต้องพึ่งความถูกต้องของ `everActive`** — นี่คือเหตุผลเดียวกับที่ทำให้หลักฐาน B5 30 ส.ค. 2026 (`launch` uptime 0.0s → `enter` uptime 0.8s/3-5s ทั้งสองรอบ) ยังน่าเชื่อถือ |
+| บรรทัดของ `procUuid` เดียวกัน ที่ตามหลัง `launch` มาไม่นาน (ระยะเวลาสั้นจนไม่พอให้คนเปิด-ปลดล็อก-ใช้แอปได้จริง) และเป็น `relaunchedFromTerminated` | **เชื่อได้ด้วยเหตุผลเดียวกับข้างบน** | ต้องพิจารณาเป็นกรณี ๆ จากค่า `uptimeMs`/timestamp — ไม่มีเลขตายตัวในเอกสารนี้เพราะไม่ใช่ค่าที่วัดได้ ให้ใช้สามัญสำนึกเชิงเวลาบวกกับส่วนต่างของ `uptimeMs` ระหว่างบรรทัด |
+| บรรทัดของ `procUuid` เดียวกัน ที่ห่างจาก `launch` มากพอจะให้ผู้ใช้เปิดแอปได้จริง (นาที+) และเป็น `relaunchedFromTerminated` **และไม่มีบรรทัดอื่นของ `procUuid` เดียวกันที่มี `state=active` มาก่อนเวลานั้น** | **แยกไม่ออกอีกต่อไป — ต้องอ่านเป็น "ไม่ทราบ" ไม่ใช่ยึดคอลัมน์ตามตัวอักษร** | นี่คือผลโดยตรงของบั๊ก: ไม่มีทางแยกจากภายในไฟล์เดียวว่าเป็น `relaunchedFromTerminated` จริง หรือเป็น `background` จริงที่ถูกบั๊กบังคับให้แสดงผิด |
+| บรรทัดของ `procUuid` เดียวกัน ที่มี **บรรทัดอื่นของ `procUuid` เดียวกันซึ่งมี `state=active` อยู่ก่อนเวลานั้น** (timestamp ของบรรทัด active < timestamp ของบรรทัดที่กำลังพิจารณา) แต่ตัวบรรทัดเองยังถูก stamp `relaunchedFromTerminated` | **กู้ข้อสรุปกลับมาได้ — ต้องอ่านเป็น `background`** | มีหลักฐานอิสระ (บรรทัด active ก่อนหน้า) ยืนยันว่า ณ เวลานั้น process **เคย** active มาแล้วจริง ๆ ไม่ว่าคอลัมน์ข้อสรุปจะเขียนว่าอะไร ข้อเท็จจริงคือ `background` |
+| บรรทัดที่มีแต่ `procUuid` เดียวกันซึ่งมี `state=active` อยู่**หลัง**เวลานั้น (ในอนาคตของบรรทัดที่พิจารณา) | **ยังกู้ไม่ได้** | รู้แค่ว่า process เคย active ใน**อนาคต**ของบรรทัดนั้น ไม่ได้บอกว่า ณ เวลาที่บรรทัดนั้นถูกเขียน process เคย active มาก่อนหรือยัง — ต้องอ่านเป็น "ไม่ทราบ" เหมือนแถวก่อนหน้า |
+
+**`launchKey=` ใช้กู้ข้อสรุปอะไรไม่ได้เลยในทุกกรณี** — ตามหัวข้อ 2 (b) ค่านี้เป็น
+`false` เสมอภายใต้ scene lifecycle ไม่ว่าความจริงจะเป็นอย่างไร (แก้ไขเพิ่มเติม
+จากที่ ADR-10 หัวข้อ 6 บันทึกไว้ว่า "ยังไม่ยืนยัน" — ตอนนี้ยืนยันแล้วว่า **ไม่มี
+ข้อมูลอยู่ในค่านี้เลย** ไม่ใช่แค่ "เชื่อไม่ได้เต็มที่")
+
+**ตัวอย่างจริงที่ใช้ตรวจตารางข้างบน (procUuid `ed11d170`, 3 ก.ย. 2026):**
+
+```
+13:36:32.008  ed11d170  launch  -          relaunchedFromTerminated   uptime=0.0s   state=background
+13:41:11.701  ed11d170  enter   bigc-test  relaunchedFromTerminated   uptime≈5m     state=background
+13:57:11.974  ed11d170  exit    bigc-test  foreground                 uptime≈21m    state=active
+```
+
+- บรรทัด `13:36:32` (`launch`, `uptime=0.0s`) → **เชื่อได้** (แถวที่ 2 ของตาราง —
+  ไม่มีเวลาให้ทางเลือก `background` เป็นไปได้เลยตั้งแต่ก่อนบรรทัดนี้จะมีตัวตนด้วยซ้ำ)
+- บรรทัด `13:41:11` (`enter`, ~5 นาทีหลัง `launch`) → **แยกไม่ออก ต้องอ่านเป็น
+  "ไม่ทราบ"** (แถวที่ 4) — 5 นาทีนานพอที่ผู้ใช้จะปลดล็อก เปิดแอป แล้วกดออกได้จริง
+  ในทางกายภาพ และไม่มีบรรทัด `state=active` ของ `procUuid` เดียวกันอยู่**ก่อน**
+  เวลานี้ให้กู้กลับ (บรรทัด active ที่มีอยู่คือ `13:57:11` ซึ่งอยู่**หลัง**) — ตรงกับ
+  แถวสุดท้ายของตาราง ไม่ใช่แถวที่ 5 เพราะ mismatched ทิศทางเวลา
+- บรรทัด `13:57:11` (`exit`, `state=active`) → **เชื่อได้เต็มที่** (แถวแรกของ
+  ตาราง) และเป็นหลักฐานว่า process นี้**เคย active จริงในบางช่วง** ระหว่าง
+  36 นาทีที่มีชีวิต — แต่บอกไม่ได้ว่า active ครั้งแรกเกิดตอนไหน (อาจเกิดก่อนหรือ
+  หลัง 13:41:11 ก็ได้ ข้อมูลในไฟล์นี้ไม่พอชี้ขาด)
+
+**สรุปสั้นสำหรับตัวอย่างนี้:** เราไม่รู้จริง ๆ ว่าบรรทัด `13:41:11` เป็น
+`relaunchedFromTerminated` แท้ หรือ `background` ที่ถูกบั๊กบังคับให้แสดงผิด — และ
+**นี่คือคำตอบที่ถูกต้องของ log เก่า** ไม่ใช่การพยายามยืนยันไปทางใดทางหนึ่งด้วย
+ข้อมูลที่ไม่พอ
+
+### 4. ผลต่อสถานะ B5 ("ผ่าน" 30 ส.ค. 2026, `docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 12) — วิเคราะห์เท่านั้น ไม่แก้ไฟล์เช็คลิสต์
+
+**หลักฐานที่ทำให้ B5 ผ่านเมื่อ 30 ส.ค. 2026 ยังน่าเชื่อถืออยู่** — ทั้ง 2 รอบทดสอบ
+มีรูปแบบ `launch`(`uptime=0.0s`) ตามด้วย `enter`(`uptime=0.8s` และ ~3-5s) ทันที
+ซึ่งตรงกับแถวที่ 2-3 ของตารางในหัวข้อ 3 (บรรทัดที่ใกล้ `launch` มากจนทางเลือก
+`background` เป็นไปไม่ได้ทางกายภาพ) **ข้อสรุปยังยืนอยู่ได้**
+
+**แต่เหตุผลที่ ADR-10 หัวข้อ 5 ใช้อธิบายว่าทำไมถึงเชื่อได้ต้องแก้ไข:** ADR-10
+หัวข้อ 5 เขียนไว้ว่า "log ยืนยัน `everActive=false` + `state=background`... จึง
+ถือว่าผ่าน" — ตามที่วิเคราะห์ในเอกสารนี้ ค่า `everActive=false` **ไม่มีน้ำหนัก
+พิสูจน์อะไรเลย** เพราะมันจะเป็น `false` เสมอไม่ว่าความจริงจะเป็นอะไร (บั๊กนี้)
+**น้ำหนักที่แท้จริงของการพิสูจน์อยู่ที่ `uptime` ใกล้ศูนย์ทันทีหลัง `launch` ของ
+`procUuid` เดียวกัน ไม่ใช่ที่ค่า `everActive`** — ข้อสรุปสุดท้าย (B5 ผ่าน) ไม่
+เปลี่ยน แต่**เหตุผลสนับสนุนต้องเปลี่ยนจาก "เพราะ everActive=false" เป็น "เพราะ
+เวลาไม่พอให้ทางเลือกอื่นเป็นไปได้"**
+
+**สิ่งที่ต้องส่งต่อให้ `beacon-qa` (ขั้นที่ 3) พิจารณา — ไม่ใช่การตัดสินใจของ
+เอกสารนี้:** ควรพิจารณาเติมหมายเหตุในหัวข้อ 12 ของเช็คลิสต์ว่าเหตุผลรองรับ B5
+ต้องอ่านคู่กับ ADR-16 นี้ และพิจารณาว่าจำเป็นต้องมีรอบทดสอบเพิ่มที่ตั้งใจสร้าง
+เคส "process มีชีวิตนาน + active ช้า ๆ ไม่ติดกับ launch" (แบบ `ed11d170` ในหัวข้อ 3)
+เพื่อพิสูจน์ `background` แยกจาก `relaunchedFromTerminated` ได้จริงหลังแก้บั๊กนี้
+หรือไม่ — เกณฑ์ผ่านของ B5 เองไม่เปลี่ยน (ยังต้องเห็น `relaunchedFromTerminated`
+จริงตามที่กำหนดไว้เดิม)
+
+### 5. สิ่งที่ยังพิสูจน์ไม่ได้จนกว่าจะมี iPhone จริง (หลัง `flutter-dev` implement ตาม ADR นี้)
+
+- ว่า `NotificationCenter` observer ของ `didBecomeActiveNotification` ที่ลงทะเบียน
+  ใน `didFinishLaunchingWithOptions` ได้รับ notification จริงตอนแอปขึ้น foreground
+  ปกติ (ทางทฤษฎีควรได้ตามหัวข้อ 1.3 แต่ยังไม่มีการรันบนอุปกรณ์จริง)
+- ว่าเคส "process ถูกปลุกเบื้องหลัง ไม่มี scene, ไม่มีวัน active" ยังให้
+  `hasEverBecomeActive=false` ถูกต้องตามที่ออกแบบไว้ในหัวข้อ 1.4 จริงหรือไม่
+  (ทางทฤษฎีใช่ แต่ยังไม่มีรอบทดสอบเทียบก่อน/หลังแก้)
+- ว่าหลังแก้แล้ว บรรทัด log ใหม่จะแยก `background` ออกจาก `relaunchedFromTerminated`
+  ได้ถูกต้องในเคสแบบ `ed11d170` (process อายุยืน, active ล่าช้าไม่ติดกับ `launch`)
+  จริงหรือไม่ — ต้องมีรอบทดสอบใหม่ที่ตั้งใจสร้างเคสนี้โดยเฉพาะ
+- ว่า `applicationDidBecomeActive` override เดิมที่เก็บไว้เป็น fallback จะไม่ถูก
+  เรียกซ้ำสองครั้ง (จาก override + จาก notification) จนเกิดผลข้างเคียงอื่นที่ยัง
+  มองไม่เห็นในตอนออกแบบ — ต้องยืนยันตอน implement/ทดสอบจริง
+- สาเหตุที่แท้จริงว่า `launchKey=false` ที่วัดได้ 2/2 รอบเป็นเพราะ "launchOptions
+  ทั้งก้อนเป็น nil" (สมมติฐาน ข ตามหัวข้อ 2) แต่เพียงอย่างเดียว หรือมีปัจจัยอื่นร่วม
+  ด้วย — ยังไม่มีการทดสอบเทียบกับบิลด์ที่ไม่ใช้ scene lifecycle ตามที่ระบุไว้ใน
+  ADR-10 หัวข้อ 6 (และไม่จำเป็นต้องทำ เพราะไม่กระทบการใช้งานจริง)
