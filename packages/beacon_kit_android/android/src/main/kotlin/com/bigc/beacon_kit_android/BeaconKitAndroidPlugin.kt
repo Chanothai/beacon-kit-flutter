@@ -115,6 +115,16 @@ class BeaconKitAndroidPlugin :
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
+
+        // ADR-17 หัวข้อ 3: ต้องมาก่อน `drainQueuedBackgroundEvents()` (เรียกจาก
+        // ใน `onListen` ของ backgroundRegionChannel ด้านล่าง) เสมอ — ถ้า
+        // reconcile() สังเคราะห์ exit(stale) ขึ้นมาใหม่ ต้องถูก enqueue ก่อนการ
+        // drain ครั้งนี้ ไม่งั้น event ที่เพิ่งสังเคราะห์จะตกค้างรอรอบเปิดแอป
+        // ถัดไป ทั้งที่ควรไหลออกไปพร้อมคิวเดิมทันที — วางไว้ตรงนี้ (ต้นสุดของ
+        // onAttachedToEngine) รับประกันลำดับได้เพราะเมธอดนี้ทำงานจบก่อนเสมอ
+        // ก่อนที่ Dart จะเรียก listen() บนช่องที่กำลังจะสร้างข้างล่าง
+        BackgroundRegionMonitor.reconcile(applicationContext!!)
+
         methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL).apply {
             setMethodCallHandler(this@BeaconKitAndroidPlugin)
         }
@@ -199,6 +209,10 @@ class BeaconKitAndroidPlugin :
         // เองล้วน ๆ — ค่านี้ถูกติดไปกับทุก event เบื้องหลังเพื่อให้แยกได้ภายหลังว่า
         // event เกิดตอนแอปเปิดอยู่หรือตอนแอปถูกปิดไปแล้ว
         HostProcessInfo.markForeground()
+        // ADR-17 หัวข้อ 3: แอปขึ้น foreground คือโอกาสที่ CPU ตื่นแน่นอน แม้
+        // ผู้ใช้จะไม่ได้เดินเข้าใกล้ beacon เลยก็ตาม — ลำดับกับ markForeground()
+        // ข้างบนไม่มีผล (ไม่ตัดกัน)
+        BackgroundRegionMonitor.reconcile(binding.activity.applicationContext)
     }
 
     override fun onDetachedFromActivityForConfigChanges() = onDetachedFromActivity()

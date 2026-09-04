@@ -70,37 +70,63 @@ class ExampleApplication : Application() {
                         context = this,
                         state = processState,
                         receiverEntry = true,
-                    ) + exitTimingSuffix(event),
+                    ) + rawSignalsSuffix(event),
                 ),
             )
-            ExampleNotifications.post(
-                context = this,
-                title = "Region ${event.state}: ${event.regionIdentifier}",
-                // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ [BackgroundEvidenceLog.processId]
-                // ไม่ใช่ pid ของ Linux การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat`
-                // หาไม่เจอแล้วสรุปว่า process ไม่ตรงกัน
-                body = "สถานะแอป: ${processState.conclusion} · " +
-                    "procUuid=${BackgroundEvidenceLog.processId}",
-            )
+            // ADR-17 หัวข้อ 6: `exitAlarmDeferred` เป็น diagnostic ล้วนๆ สำหรับ
+            // ไฟล์หลักฐาน ไม่ใช่การเปลี่ยนสถานะที่ผู้ใช้ควรรู้ — แจ้งเตือนแค่
+            // enter/exit จริง ไม่งั้นผู้ใช้จะเห็นการแจ้งเตือนถี่ผิดปกติทุกครั้ง
+            // ที่นาฬิกาปลุกดังแล้วยังไม่ครบเวลาจริง (เกิดซ้ำได้หลายรอบต่อคืน)
+            if (event.state == "enter" || event.state == "exit") {
+                ExampleNotifications.post(
+                    context = this,
+                    title = "Region ${event.state}: ${event.regionIdentifier}",
+                    // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ
+                    // [BackgroundEvidenceLog.processId] ไม่ใช่ pid ของ Linux
+                    // การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat` หาไม่เจอ
+                    // แล้วสรุปว่า process ไม่ตรงกัน
+                    body = "สถานะแอป: ${processState.conclusion} · " +
+                        "procUuid=${BackgroundEvidenceLog.processId}",
+                )
+            }
         }
 
         logLaunch()
     }
 
     /**
-     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุก **เฉพาะบรรทัด `exit`**
+     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุกและเหตุผล — **เฉพาะบรรทัด `exit`**
+     * และ `exitAlarmDeferred`
      *
-     * บรรทัด `enter` ไม่มีนาฬิกาปลุกให้พูดถึง การใส่ `n/a` สามช่องทุกบรรทัดจะ
-     * ทำให้คอลัมน์สัญญาณดิบยาวขึ้นโดยไม่ได้ข้อมูลเพิ่ม และทำให้ `n/a` เสีย
-     * ความหมาย — ค่านั้นถูกใช้แยกสาขา `bootMismatch` ของ exit อยู่
+     * บรรทัด `enter`/`launch`/`selftest` ไม่มีนาฬิกาปลุกให้พูดถึง การใส่ `n/a`
+     * สามช่องทุกบรรทัดจะทำให้คอลัมน์สัญญาณดิบยาวขึ้นโดยไม่ได้ข้อมูลเพิ่ม และทำให้
+     * `n/a` เสียความหมาย — ค่านั้นถูกใช้แยกสาขา `bootMismatch` ของ exit อยู่
+     *
+     * - `exit` — `exitTimingField` ต่อด้วย `exitReasonField` (ADR-17 หัวข้อ 4)
+     *   บอกว่า exit นี้มาจากนาฬิกาปลุกปกติ (`alarm`) หรือมาจาก `reconcile()`
+     *   ที่กู้สถานะ `inside` ที่ค้างเพราะนาฬิกาปลุกไม่มาถึง (`staleReconcile` /
+     *   `staleBootMismatch`)
+     * - `exitAlarmDeferred` — `exitTimingField` ต่อด้วย `deferReasonField`
+     *   (ADR-17 หัวข้อ 6) บอกว่าทำไม `onExitAlarm` ถึงเลื่อนนาฬิกาปลุกแทนการ
+     *   ประกาศ exit (หรือ return เฉยๆ)
      */
-    private fun exitTimingSuffix(event: BackgroundRegionStateEvent): String {
-        if (event.state != "exit") return ""
-        return " " + BackgroundEvidenceLog.exitTimingField(
+    private fun rawSignalsSuffix(event: BackgroundRegionStateEvent): String {
+        val timing = BackgroundEvidenceLog.exitTimingField(
             sinceLastSeenMillis = event.exitSinceLastSeenMillis,
             scheduledAtElapsedMillis = event.exitScheduledAtElapsedMillis,
             firedAtElapsedMillis = event.exitFiredAtElapsedMillis,
         )
+        return when (event.state) {
+            "exit" -> " $timing " + BackgroundEvidenceLog.exitReasonField(event.exitReason)
+            "exitAlarmDeferred" -> " $timing " + BackgroundEvidenceLog.deferReasonField(
+                // ค่า default "unknown" ตรงนี้เป็นแค่ตาข่ายกันคอมไพล์เลื่อน —
+                // ในทางปฏิบัติผู้เรียกเดียว (`BackgroundRegionMonitor
+                // .emitExitAlarmDeferred`) ส่ง reason มาเสมอทุกครั้ง ไม่มีทาง
+                // เป็น null จริง
+                event.deferReason ?: "unknown",
+            )
+            else -> ""
+        }
     }
 
     /**
@@ -170,8 +196,34 @@ class ExampleApplication : Application() {
                     context = this,
                     state = processState,
                     receiverEntry = false,
-                ) + " " + restoredField,
+                ) + " " + restoredField + " " + deviceIdentityField(),
             ),
         )
+    }
+
+    /**
+     * `manufacturer=<...> model=<...> os=<API level>` — เฉพาะบรรทัด `launch`
+     *
+     * เพิ่มเพราะรอบทดสอบข้ามคืนเจอความต่างของพฤติกรรม Doze/App Standby ระหว่าง
+     * ยี่ห้อ (คำเตือนเรื่อง MIUI ที่กระจายอยู่ทั้งไฟล์นี้เป็นตัวอย่าง) — ไฟล์
+     * หลักฐานที่ไม่ระบุรุ่นเครื่องตรวจสอบย้อนกลับไม่ได้ว่าอาการที่เจอเป็นเรื่อง
+     * ทั่วไปของ Android หรือเฉพาะยี่ห้อนั้น เหมือนกับที่ `battOpt`/`doze` ต้อง
+     * บันทึกทุกบรรทัดเพราะเป็นตัวแปรที่เปลี่ยนผลการทดสอบได้ทั้งรอบ
+     *
+     * ใส่ไว้เฉพาะบรรทัด `launch` (ไม่ใช่ทุกบรรทัด เหมือน `restoredRegions`)
+     * เพราะค่าคงที่ตลอดอายุ process — การเขียนซ้ำทุกบรรทัดจะกินพื้นที่ไฟล์โดย
+     * ไม่ได้ข้อมูลใหม่ ผู้อ่านย้อนกลับไปดูบรรทัด `launch` ของ `procUuid`
+     * เดียวกันได้เสมอ
+     *
+     * `model`/`manufacturer` แทนช่องว่างด้วย `_` (เหมือนที่
+     * [BackgroundEvidenceLog.restoredRegionsField] ทำกับเหตุผลของ read-failed)
+     * — บางรุ่นมีช่องว่างในชื่อ (เช่น `Galaxy A51`) และคอลัมน์สัญญาณดิบคั่นค่า
+     * ด้วยช่องว่าง ถ้าปล่อยผ่านตัวอ่านจะเห็นเป็นหลาย key โดยไม่มีอะไรฟ้อง
+     */
+    private fun deviceIdentityField(): String {
+        fun sanitize(value: String) = value.replace(Regex("\\s+"), "_")
+        return "manufacturer=${sanitize(android.os.Build.MANUFACTURER)} " +
+            "model=${sanitize(android.os.Build.MODEL)} " +
+            "os=${android.os.Build.VERSION.SDK_INT}"
     }
 }
