@@ -87,4 +87,12 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
+    // org.json.JSONObject/JSONArray ในสตับ android.jar ที่ unit test คอมไพล์
+    // ด้วยมี body ที่โยน "not mocked" เสมอ (คนละปัญหากับ android.* class อื่น
+    // ที่ mock ด้วย Mockito ได้ — เพราะ JSONObject/JSONArray เป็นคลาสจริงที่
+    // BackgroundRegionStateEvent.toJson() เรียกตรง ๆ ไม่ผ่าน Context เลย)
+    // ใส่ implementation จริงของ org.json ลง test classpath เพื่อให้เทสต์ที่
+    // เดินเส้นทาง markOutsideAndEnqueueEvent() ตรวจ JSON ที่เขียนจริงได้
+    // (ไม่ใช่แค่ผ่านเพราะไม่ throw) — อนุมัติเฉพาะบรรทัดนี้บรรทัดเดียว
+    testImplementation("org.json:json:20240303")
 }
