@@ -43,6 +43,16 @@ class BeaconScanReceiver : BroadcastReceiver() {
         val results = scanResultsFrom(intent)
         if (results.isEmpty()) return
 
+        // ADR-17 หัวข้อ 3: ต้องมาก่อนตรรกะเดิมทั้งหมดของ onSighting — ถ้า
+        // reconcile() พบว่า region นี้ (หรือ region อื่นที่กำลังเฝ้าอยู่พร้อมกัน)
+        // ค้างสถานะ inside ทั้งที่เงียบไปนานผิดปกติ มันจะพลิก isInside เป็น
+        // false ให้ก่อน แล้ว onSighting เดิม (ซึ่งไม่ต้องแก้อะไรเลยแม้แต่บรรทัด
+        // เดียว) จะอ่านเจอ wasInside=false เองโดยธรรมชาติ และยิง enter ให้เอง
+        // ตามตรรกะที่มีอยู่แล้ว — ผลคือผู้ใช้ SDK ได้ exit(stale) ตามด้วย enter
+        // เรียงกัน แทนที่จะถูก onSighting กลืนเงียบเพราะเช็คแค่ wasInside บูลีน
+        // ตัวเดียวโดยไม่รู้ว่าความเงียบก่อนหน้านั้นนานแค่ไหน
+        BackgroundRegionMonitor.reconcile(context)
+
         // ใช้เวลาของเครื่องตอนรับ ไม่ใช่ `ScanResult.getTimestampNanos()` ซึ่งเป็น
         // เวลาแบบ elapsed-since-boot ที่แปลงเป็นเวลานาฬิกาได้ไม่ตรงเมื่อ event ถูก
         // คิวไว้นาน — และ log ต้องเทียบกับนาฬิกาข้อมือของผู้ทดสอบได้

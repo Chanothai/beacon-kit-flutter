@@ -1,6 +1,7 @@
 package com.beaconkit.example
 
 import android.app.ActivityManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
@@ -42,6 +43,15 @@ import java.util.UUID
 object BackgroundEvidenceLog {
 
     const val FILE_NAME = "region_events.log"
+
+    /**
+     * ค่าดิบของ `UsageStatsManager.STANDBY_BUCKET_EXEMPTED`/`STANDBY_BUCKET_NEVER`
+     * — เรียกผ่านชื่อ constant ไม่ได้เพราะเป็น `@hide @SystemApi` (ดู
+     * [standbyBucketName]) ยืนยันตัวเลขจากซอร์สจริง
+     * `~/Library/Android/sdk/sources/android-37.0/android/app/usage/UsageStatsManager.java:123,177`
+     */
+    private const val STANDBY_BUCKET_EXEMPTED_HIDDEN = 5
+    private const val STANDBY_BUCKET_NEVER_HIDDEN = 50
 
     /**
      * **ตัวระบุ process** — สุ่มใหม่ทุกครั้งที่ process เริ่ม เขียนลงทุกบรรทัด
@@ -255,6 +265,8 @@ object BackgroundEvidenceLog {
      * - `importance` — ค่าที่ **ระบบ** จัดให้ process นี้ ไม่ใช่ค่าที่เราคำนวณเอง
      * - `doze` — เครื่องอยู่ใน Doze หรือไม่ ณ ตอนเขียนบรรทัด
      * - `battOpt` — แอปถูกยกเว้น battery optimization อยู่หรือไม่
+     * - `standbyBucket` — App Standby bucket ปัจจุบัน (ADR-17 หัวข้อ 6)
+     * - `lightIdle` — เครื่องอยู่ใน light idle mode หรือไม่ (ADR-17 หัวข้อ 6)
      *
      * [receiverEntry] ไม่มีค่า default **โดยตั้งใจ** — ผู้เรียกต้องตอบทุกครั้งว่า
      * บรรทัดนี้เขียนจากใน `BroadcastReceiver.onReceive` หรือไม่ ถ้าให้ default ไว้
@@ -276,6 +288,8 @@ object BackgroundEvidenceLog {
             append(" importance=${importanceName(context)}")
             append(" doze=${isDeviceIdle(context)}")
             append(" battOpt=${batteryOptimizationState(context)}")
+            append(" standbyBucket=${standbyBucketName(context)}")
+            append(" lightIdle=${isDeviceLightIdle(context)}")
         }
     }
 
@@ -379,6 +393,111 @@ object BackgroundEvidenceLog {
             ?: return false
         return power.isDeviceIdleMode
     }
+
+    /**
+     * App Standby bucket ปัจจุบันของแอปนี้เอง — ยิ่ง restrictive เท่าไร ระบบยิ่ง
+     * จำกัดจำนวนนาฬิกาปลุกที่ยอมให้ (ADR-17 หัวข้อ 2 และ 6)
+     *
+     * **ยืนยันจาก
+     * [developer.android.com/topic/performance/appstandby](https://developer.android.com/topic/performance/appstandby)
+     * (ดึง 4 ก.ย. 2026):** "Android 9 (API level 28) and later support App
+     * Standby Buckets." — ต้อง guard ด้วย `Build.VERSION_CODES.P` ก่อนเรียก
+     * ตามรูปแบบเดียวกับที่ [batteryOptimizationState] guard ด้วย
+     * `Build.VERSION_CODES.M` อยู่แล้วในไฟล์นี้ — เครื่องต่ำกว่า API 28 เขียน
+     * `n/a` (ไม่ใช่ `unknown`) เพราะรู้แน่ชัดว่าฟีเจอร์นี้ไม่มีบนเครื่องนั้น
+     * ไม่ใช่แค่ "หาค่าไม่ได้"
+     *
+     * ค่าที่เป็นไปได้ยืนยันจาก
+     * `~/Library/Android/sdk/sources/android-37.0/android/app/usage/UsageStatsManager.java:124-175`
+     *
+     * ⚠️ **`STANDBY_BUCKET_EXEMPTED` (5) และ `STANDBY_BUCKET_NEVER` (50) เป็น
+     * `@hide @SystemApi`** ในซอร์สเดียวกัน (บรรทัด 118-123, 172-177) — คอมไพล์
+     * ไม่ผ่านถ้าอ้างชื่อ constant ตรงๆ (ตรวจแล้วในเซสชันนี้: `flutter build apk`
+     * ล้มด้วย `Unresolved reference`) แต่ **ค่า int ยังเกิดขึ้นได้จริงกับแอป
+     * ทั่วไป** ตามที่เอกสารของ [developer.android.com/topic/performance/appstandby]
+     * อธิบายพฤติกรรมของทั้งสอง bucket ไว้ตรงๆ จึงเทียบด้วยเลขดิบแทนชื่อ
+     * constant ที่เรียกไม่ได้ — เฉพาะสองค่านี้เท่านั้น ค่าที่เหลือเป็น public
+     * API เรียกผ่านชื่อได้ตามปกติ
+     */
+    private fun standbyBucketName(context: Context): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return "n/a"
+        val usageStatsManager =
+            context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+                ?: return "unknown"
+        return standbyBucketNameForRawBucket(usageStatsManager.appStandbyBucket)
+    }
+
+    /**
+     * แปลงเลขดิบของ `UsageStatsManager.getAppStandbyBucket()` เป็นชื่อ — **pure
+     * function** แยกออกจาก [standbyBucketName] เพื่อให้ JVM unit test ธรรมดา
+     * (ไม่ต้อง Robolectric) คลุมการแมปทั้ง 7 bucket ได้จริงโดยไม่ต้อง mock
+     * `Context`/`UsageStatsManager` — pattern เดียวกับที่ ADR-17 ใช้แยก
+     * `BackgroundRegionMonitor.staleReason` ออกจาก `staleReasonFor` ที่พึ่ง
+     * `Context` จริง
+     *
+     * การ refactor นี้เป็นเชิงโครงสร้างล้วน ๆ ไม่เปลี่ยนพฤติกรรม — ค่าที่คืนต้อง
+     * เหมือนเดิมทุกกรณีเทียบกับ `when` ที่เคยอยู่ใน [standbyBucketName] ตรง ๆ
+     * ก่อนแยก (รวมค่าดิบ `5`/`50` ของ `@hide @SystemApi` ตามคอมเมนต์เดิมข้างบน)
+     */
+    fun standbyBucketNameForRawBucket(raw: Int): String = when (raw) {
+        STANDBY_BUCKET_EXEMPTED_HIDDEN -> "exempted"
+        UsageStatsManager.STANDBY_BUCKET_ACTIVE -> "active"
+        UsageStatsManager.STANDBY_BUCKET_WORKING_SET -> "workingSet"
+        UsageStatsManager.STANDBY_BUCKET_FREQUENT -> "frequent"
+        UsageStatsManager.STANDBY_BUCKET_RARE -> "rare"
+        UsageStatsManager.STANDBY_BUCKET_RESTRICTED -> "restricted"
+        STANDBY_BUCKET_NEVER_HIDDEN -> "never"
+        else -> "other($raw)"
+    }
+
+    /**
+     * เครื่องอยู่ใน **light** idle mode หรือไม่ — คนละสถานะกับ [isDeviceIdle]
+     * (Doze เต็มรูปแบบ) ระบบเข้า light idle ได้เร็วกว่ามาก แค่จอปิดสั้นๆ
+     * (ADR-17 หัวข้อ 6)
+     *
+     * ⚠️ **ชื่อ API นี้ต้องเป๊ะ** — โจทย์เดิมอ้างถึง `isLightDeviceIdleMode` แต่
+     * ตรวจซอร์สจริง
+     * (`~/Library/Android/sdk/sources/android-37.0/android/os/PowerManager.java:2676-2686`)
+     * พบว่าเมธอดชื่อนั้น **`@Deprecated` + `@hide` +
+     * `@UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.S)`** — ไม่ใช่
+     * public API ที่เรียกได้จากแอปทั่วไปตั้งแต่ Android S เป็นต้นไป ชื่อที่ถูกคือ
+     * `PowerManager.isDeviceLightIdleMode()` (บรรทัด 2657-2668) ซึ่งไม่มี
+     * annotation จำกัดใดๆ เหมือนกับ [isDeviceIdle] ข้างบนที่เรียก
+     * `isDeviceIdleMode()` โดยไม่ guard เวอร์ชันเช่นกัน จึงเรียกแบบเดียวกัน
+     * ไม่มี `Build.VERSION.SDK_INT` guard
+     *
+     * ทั้งสองเมธอด (`isDeviceIdleMode`/`isDeviceLightIdleMode`) มีประโยคเดียวกัน
+     * เป๊ะในเอกสารต้นฉบับ: "it will return false if the device is in a
+     * long-term idle mode but currently running a maintenance window where
+     * restrictions have been lifted." — แปลว่า `false` **ไม่ได้แปลว่าออกจาก
+     * idle mode แล้วจริงๆ** อาจเป็นแค่ maintenance window ชั่วคราว ผู้อ่าน
+     * ต้องดูควบคู่กับความยาวเวลาที่เครื่องไม่มีการโต้ตอบ ไม่ใช่เชื่อค่า `false`
+     * ว่าปลอดภัยเสมอ
+     */
+    private fun isDeviceLightIdle(context: Context): Boolean {
+        val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            ?: return false
+        return power.isDeviceLightIdleMode
+    }
+
+    /**
+     * `exitReason=<alarm|staleReconcile|staleBootMismatch>` — **เฉพาะบรรทัด
+     * `exit`** (ADR-17 หัวข้อ 4)
+     *
+     * แยกเป็นฟังก์ชันของตัวเองแบบเดียวกับ [exitTimingField]/[restoredRegionsField]
+     * เพื่อให้มี unit test คลุมรูปแบบได้โดยไม่ต้อง mock `Context`
+     */
+    fun exitReasonField(reason: String): String = "exitReason=$reason"
+
+    /**
+     * `reason=<stillSeen|notInside|notActive>` — **เฉพาะบรรทัด
+     * `exitAlarmDeferred`** (ADR-17 หัวข้อ 6)
+     *
+     * บอกว่าทำไม `onExitAlarm` ถึงเลื่อนนาฬิกาปลุกออกไปแทนการประกาศ exit (หรือ
+     * ทำไมถึง return โดยไม่ทำอะไรเลย) — ปิดช่องว่างที่ทำให้คืน 3-4 ก.ย. 2026
+     * เงียบสนิท 14 ชั่วโมงโดยไม่มีร่องรอยอะไรในไฟล์หลักฐานเลย
+     */
+    fun deferReasonField(reason: String): String = "reason=$reason"
 
     /**
      * `ignoring` = ผู้ใช้ปลด battery optimization ให้แอปแล้ว
