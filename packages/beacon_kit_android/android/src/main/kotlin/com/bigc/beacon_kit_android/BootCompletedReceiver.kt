@@ -41,23 +41,25 @@ import android.content.Intent
  */
 class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val action = intent.action
-        if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_LOCKED_BOOT_COMPLETED &&
-            action != Intent.ACTION_MY_PACKAGE_REPLACED
-        ) {
-            return
-        }
-        if (action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            // ADR-17 หัวข้อ 3: MY_PACKAGE_REPLACED ไม่ใช่การรีบูต —
-            // `SystemClock.elapsedRealtime()` ไม่รีเซ็ตตอนแอปอัปเดต ต้องให้
-            // reconcile() ประกาศ exit(stale) ก่อน (ถ้ามีจริง) ก่อนที่
-            // restoreAfterBoot() ด้านล่างจะล้างสถานะทิ้งแบบไม่มีเงื่อนไข
-            // ไม่งั้น exit ที่ควรได้จะหายเงียบไปพร้อมกับ clearRegionStates()
-            BackgroundRegionMonitor.reconcile(context)
-        }
         // ผลลัพธ์ (สำเร็จ/ล้มเหลวราย region) ถูกบันทึกโดยผู้สังเกตการณ์ของ host app
         // ผ่าน BackgroundRegionMonitor — ตรงนี้ไม่มีใครให้รายงานถึง
-        BackgroundRegionMonitor.restoreAfterBoot(context)
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_LOCKED_BOOT_COMPLETED ->
+                BackgroundRegionMonitor.restoreAfterBoot(context)
+
+            // ADR-17 หัวข้อ 3 — บั๊กแฝงที่พบระหว่างออกแบบ แยกจากบั๊กหลักแต่
+            // เกี่ยวเนื่องกันโดยตรง: MY_PACKAGE_REPLACED **ไม่ใช่การรีบูต**
+            // `SystemClock.elapsedRealtime()` ไม่รีเซ็ตตอนแอปอัปเดต (boot
+            // token ยังตรงกันได้ตามปกติ) เส้นทางเดิมที่เรียก restoreAfterBoot()
+            // ตรงๆ (เหมือนสองบรรทัดข้างบน) จะเรียก clearRegionStates() แบบไม่มี
+            // เงื่อนไข ซึ่งทิ้งสถานะ inside=true ที่ยังถูกต้องอยู่จริงไปเงียบๆ
+            // โดยไม่มีการรายงาน exit เลย — ต้องแยกเป็นเส้นทางของตัวเองที่
+            // "ลงทะเบียนสแกนใหม่" (จำเป็นเพราะ Bluetooth stack ทำ registration
+            // หายไปกับแอปเวอร์ชันเก่า) โดย**ไม่**ล้างสถานะเข้า/ออกทิ้ง
+            Intent.ACTION_MY_PACKAGE_REPLACED ->
+                BackgroundRegionMonitor.restoreAfterPackageReplaced(context)
+
+            else -> return
+        }
     }
 }

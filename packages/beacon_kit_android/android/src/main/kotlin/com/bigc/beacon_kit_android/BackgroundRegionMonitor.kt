@@ -160,6 +160,39 @@ object BackgroundRegionMonitor {
     }
 
     /**
+     * ลงทะเบียนใหม่หลังแอปอัปเดต (`ACTION_MY_PACKAGE_REPLACED`) — เรียกจาก
+     * [BootCompletedReceiver] เท่านั้น **ห้ามใช้ [restoreAfterBoot] แทน**
+     * (ADR-17 หัวข้อ 3)
+     *
+     * ต่างจาก [restoreAfterBoot] ตรงที่**ไม่ล้างสถานะเข้า/ออกทิ้ง** และ**ไม่
+     * stamp boot token ใหม่** — เหตุผลคือ `SystemClock.elapsedRealtime()`
+     * ไม่รีเซ็ตตอนแอปอัปเดต (คนละกรณีกับรีบูตจริงที่ [restoreAfterBoot]
+     * รับผิดชอบ) เวลาแบบ elapsed ที่เก็บไว้ก่อนอัปเดตจึงยัง **เทียบกับ
+     * `now` หลังอัปเดตได้ตรงๆ** สถานะ `inside=true` ที่ยังถูกต้องอยู่จริงจึง
+     * ไม่ควรถูกทิ้งไปเงียบๆ เหมือนที่เส้นทางเดิม (เรียก `restoreAfterBoot`
+     * ตรงๆ ให้ทุก action) เคยทำ — บั๊กแฝงที่พบระหว่างออกแบบ ADR-17
+     *
+     * เรียก [reconcile] ก่อนเสมอ เพื่อให้ region ที่ stale จริง (เงียบนาน
+     * เกิน K เท่าของ exitTimeoutSeconds ไปแล้วระหว่างที่แอปกำลังอัปเดต) ได้
+     * ประกาศ `exit(staleReconcile/staleBootMismatch)` ก่อนที่จะลงทะเบียนสแกน
+     * ใหม่ — **ต้องประกาศ exit ก่อนเสมอถ้าจำเป็นต้องทิ้งสถานะจริง ห้ามหายเงียบ**
+     * ส่วนการลงทะเบียนสแกนใหม่ยังจำเป็นอยู่ (แยกจากการล้างสถานะ) เพราะการ
+     * ลงทะเบียน `startScan(..., PendingIntent)` อยู่ในหน่วยความจำของ
+     * Bluetooth stack ซึ่งผูกกับ process/APK เดิม — แอปเวอร์ชันใหม่ต้อง
+     * ลงทะเบียนของตัวเองใหม่เสมอ ไม่ต่างจากเหตุผลที่ [restoreAfterBoot]
+     * ต้องทำ เพียงแต่ไม่ต้องแตะสถานะเข้า/ออกไปด้วย
+     */
+    fun restoreAfterPackageReplaced(context: Context): StartResult {
+        val appContext = context.applicationContext
+        val store = BackgroundRegionStore(appContext)
+        if (!store.isActive) {
+            return StartResult(emptyList(), emptyMap())
+        }
+        reconcile(appContext)
+        return registerScans(appContext, store.regions)
+    }
+
+    /**
      * identifier ของ region ที่ **เราเอง** เก็บไว้ว่ากำลังเฝ้าอยู่
      *
      * ⚠️ **ห้ามใช้ตัวนี้เขียนไฟล์หลักฐาน** — list ว่างที่คืนมาไม่ได้บอกว่า "ไม่มี
