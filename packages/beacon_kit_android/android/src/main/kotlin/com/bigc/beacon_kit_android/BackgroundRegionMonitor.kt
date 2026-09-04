@@ -448,14 +448,16 @@ object BackgroundRegionMonitor {
         if (!store.storedElapsedTimesAreFromThisBoot()) {
             // เทียบเวลาข้ามรอบบูตไม่ได้ — ประกาศ exit เพราะการลงทะเบียนสแกนหายไป
             // กับการรีบูตอยู่แล้ว การค้างสถานะ "อยู่ในโซน" ไว้ต่อจะแย่กว่า
-            store.markOutside(regionIdentifier)
-            emit(
+            emitExitAndMarkOutside(
                 appContext,
+                store,
+                regionIdentifier,
                 BackgroundRegionStateEvent(
                     regionIdentifier = regionIdentifier,
                     state = "exit",
                     timestampMillis = System.currentTimeMillis(),
                     fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                    exitReason = REASON_STALE_BOOT_MISMATCH,
                     // **ไม่ส่งค่าเวลาเลยในสาขานี้ โดยตั้งใจ** — `scheduledAt` และ
                     // `lastSeenElapsed` ที่เก็บไว้มาจากคนละรอบบูตกับ `now` การลบ
                     // กันจึงให้ตัวเลขที่ดูสมเหตุสมผลแต่ไม่มีความหมาย ซึ่งอันตราย
@@ -475,14 +477,16 @@ object BackgroundRegionMonitor {
             return
         }
 
-        store.markOutside(regionIdentifier)
-        emit(
+        emitExitAndMarkOutside(
             appContext,
+            store,
+            regionIdentifier,
             BackgroundRegionStateEvent(
                 regionIdentifier = regionIdentifier,
                 state = "exit",
                 timestampMillis = System.currentTimeMillis(),
                 fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                exitReason = REASON_ALARM,
                 // สามค่านี้ทำให้บรรทัด exit อธิบายตัวเองได้โดยไม่ต้องเดา:
                 // `sinceLastSeen` = หน้าต่างที่ **ได้จริง** (เทียบกับ 30 วิที่ขอไป)
                 // `scheduledAt`/`now` = ระยะที่ระบบเลื่อนนาฬิกาปลุกออกไป
@@ -491,6 +495,162 @@ object BackgroundRegionMonitor {
                 exitFiredAtElapsedMillis = now,
             ),
         )
+    }
+
+    /**
+     * ตรวจทุก region ว่ามี region ไหนค้างอยู่ในสถานะ `inside` ทั้งที่ควรออกไป
+     * แล้วแต่ไม่มีใครมาบอก — แก้บั๊กหลักของ ADR-17: ถ้านาฬิกาปลุก exit ถูกระบบ
+     * ระงับไว้ทั้งคืน (Doze / App Standby bucket) `onExitAlarm` จะไม่ถูกเรียก
+     * เลยสักครั้ง และสถานะ `inside=true` จะค้างอยู่แบบนั้นไม่มีวันหลุดออกด้วย
+     * ตัวเอง (หลักฐานอุปกรณ์จริง 3-4 ก.ย. 2026: ค้าง 14 ชั่วโมงจนถึงเช้า)
+     *
+     * ## เรียกจากไหนบ้าง — ADR-17 หัวข้อ 3
+     *
+     * ทุกจังหวะที่ process ตื่นอยู่แล้วไม่ว่าด้วยเหตุใด (เปิดแอป, ได้ผลสแกน,
+     * นาฬิกาปลุกดัง, แอปเพิ่งอัปเดต) คือโอกาสถูกที่จะตรวจ — จึงตรวจ**ทุก region
+     * ใน `store.regions` เสมอ ไม่ใช่แค่ region เดียวที่เกี่ยวข้องกับ trigger ที่
+     * เรียกมัน** ต้นทุนคือการอ่าน `SharedPreferences` ไม่กี่คีย์ต่อ region ซึ่ง
+     * ถูกมากเทียบกับเพดาน 20 region ของ ADR-8
+     *
+     * ## สิ่งที่ตั้งใจไม่ทำ
+     *
+     * - **ไม่เรียก `startScan`/`registerScans` เด็ดขาด** — ADR-17 หัวข้อ 5 ตรวจ
+     *   ซอร์ส `BluetoothLeScanner.doStartScan` แล้วยืนยันไม่ได้ว่าเรียกซ้ำด้วย
+     *   `PendingIntent` เดิมปลอดภัย 100% (โค้ดฝั่ง Bluetooth stack จริงอยู่ใน
+     *   APEX module ไม่ได้แจกมากับ SDK sources) จึงจำกัดตัวเองไว้แค่อ่าน/แก้
+     *   สถานะบนดิสก์เป็นมาตรการป้องกันไว้ก่อน
+     * - **ไม่แก้ตรรกะของ `onSighting`/`onExitAlarm` เลยแม้แต่บรรทัดเดียว** —
+     *   ฟังก์ชันนี้เป็นแค่ pre-step ที่ทำงานก่อนหน้า ผลของมันคือพลิก
+     *   `store.isInside()` ให้ตรงความจริงมากขึ้นก่อนที่ตรรกะเดิมจะอ่านค่านั้นต่อ
+     *
+     * ## idempotency (ADR-17 หัวข้อ 3.1)
+     *
+     * ชั้นที่ 1 (หลัก): `store.isInside()` อ่านจากดิสก์เป็นความจริงหนึ่งเดียว —
+     * region ที่ไม่ inside อยู่แล้วข้ามไปทันที ไม่ต้องพึ่ง lock เลย รอบที่สอง
+     * ที่เรียกซ้ำ (จากผู้เรียกคนละคนในตารางข้างบน) จะอ่านเจอ `false` เอง
+     * หลังจากรอบแรกคอมมิตสำเร็จ
+     *
+     * ชั้นที่ 2 (เสริม): ครอบด้วย `synchronized(this)` กัน TOCTOU ในหน้าต่าง
+     * แคบๆ ระหว่าง "อ่าน isInside" กับ "คอมมิตพลิกเป็น false" เพราะผู้เรียกใน
+     * ตารางข้างบนมาจากคนละเธรดได้จริง (`BroadcastReceiver.onReceive` มาจาก
+     * binder thread ส่วน `onAttachedToEngine`/`onAttachedToActivity` มาจาก
+     * main thread ของ Flutter engine) — บรรทัดฐานเดียวกับที่
+     * `BluetoothLeScanner.doStartScan` ครอบ `mLeScanClients` ด้วย
+     * `synchronized` สำหรับปัญหาชนิดเดียวกัน ไม่จำเป็นต้องเป็น cross-process
+     * lock เพราะแอปนี้มี process เดียว (เหตุผลเดียวกับที่ `sightingCount`
+     * ยอมรับไว้แล้วใน `BackgroundRegionStore`)
+     *
+     * ชั้นที่ 3: การพลิกสถานะกับการทำให้ event รอด (enqueue) อยู่ใน `commit()`
+     * เดียวกันเสมอผ่าน [emitExitAndMarkOutside] — ดูเหตุผลที่ฟังก์ชันนั้น
+     */
+    fun reconcile(context: Context) {
+        val appContext = context.applicationContext
+        val store = BackgroundRegionStore(appContext)
+        if (!store.isActive) return
+
+        synchronized(this) {
+            val sameBoot = store.storedElapsedTimesAreFromThisBoot()
+            val now = SystemClock.elapsedRealtime()
+
+            for (region in store.regions) {
+                val identifier = region.identifier
+                // ชั้นป้องกันที่ 1 — ไม่ inside อยู่แล้วไม่มีอะไรต้อง reconcile
+                if (!store.isInside(identifier)) continue
+
+                val reason = staleReasonFor(store, identifier, sameBoot, now) ?: continue
+
+                val event = if (reason == REASON_STALE_BOOT_MISMATCH) {
+                    // เงื่อนไขข้อ 1 ของนิยาม stale (ADR-17 หัวข้อ 2) — เหมือนสาขา
+                    // bootMismatch เดิมของ onExitAlarm ทุกประการ: ห้ามส่งค่าเวลา
+                    // ที่คำนวณจากเลขคนละรอบบูตออกไป เพราะดูสมเหตุสมผลแต่ไม่จริง
+                    BackgroundRegionStateEvent(
+                        regionIdentifier = identifier,
+                        state = "exit",
+                        timestampMillis = System.currentTimeMillis(),
+                        fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                        exitReason = REASON_STALE_BOOT_MISMATCH,
+                    )
+                } else {
+                    // เงื่อนไขข้อ 2 (K=10 เท่าของ exitTimeoutSeconds) — boot ตรงกัน
+                    // จึงเทียบเวลาได้จริง ค่าอาจเป็นหลักสิบล้าน ms ได้จริงตามที่
+                    // ADR-17 หัวข้อ 4 บันทึกไว้ (คืนที่หายไป 14 ชม. = 50,400,000ms)
+                    BackgroundRegionStateEvent(
+                        regionIdentifier = identifier,
+                        state = "exit",
+                        timestampMillis = System.currentTimeMillis(),
+                        fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                        exitReason = REASON_STALE_RECONCILE,
+                        exitSinceLastSeenMillis = now - store.lastSeenElapsedMillis(identifier),
+                        exitScheduledAtElapsedMillis =
+                            store.scheduledExitAlarmElapsedMillis(identifier),
+                        // ไม่มีนาฬิกาปลุกดังจริงในเส้นทางนี้ — reconcile()
+                        // ตัดสินเองก่อนที่นาฬิกาปลุกจะมาถึง (หรืออาจไม่มาถึงเลย
+                        // ก็ได้) ใส่ null แทนเลขปลอมตามหลักเดียวกับ exitTimingField
+                        exitFiredAtElapsedMillis = null,
+                    )
+                }
+
+                emitExitAndMarkOutside(appContext, store, identifier, event)
+            }
+        }
+    }
+
+    /** K=10 (ADR-17 หัวข้อ 2) — เหตุผลเต็มของค่านี้อยู่ในเอกสารนั้น ไม่ใช่ที่นี่ */
+    private const val STALE_SILENCE_MULTIPLIER = 10
+
+    private const val REASON_ALARM = "alarm"
+    private const val REASON_STALE_RECONCILE = "staleReconcile"
+    private const val REASON_STALE_BOOT_MISMATCH = "staleBootMismatch"
+
+    /**
+     * `null` = ยังไม่ stale — เงื่อนไขทั้งสองข้อของ ADR-17 หัวข้อ 2 แยกกันโดย
+     * สิ้นเชิง เช็คบูตมิสแมตช์ก่อนเสมอเพราะเป็นความแน่นอน 100% ไม่ต้องใช้ K
+     */
+    private fun staleReasonFor(
+        store: BackgroundRegionStore,
+        identifier: String,
+        sameBoot: Boolean,
+        now: Long,
+    ): String? {
+        if (!sameBoot) return REASON_STALE_BOOT_MISMATCH
+        val thresholdMillis = store.exitTimeoutSeconds * 1000L * STALE_SILENCE_MULTIPLIER
+        val sinceLastSeen = now - store.lastSeenElapsedMillis(identifier)
+        return if (sinceLastSeen > thresholdMillis) REASON_STALE_RECONCILE else null
+    }
+
+    /**
+     * ประกาศ exit พร้อมพลิกสถานะเป็น outside — ใช้ร่วมกันทั้ง [onExitAlarm] และ
+     * [reconcile] เพื่อไม่ให้มีตรรกะ "เขียนสถานะ + ทำให้ event รอด" สองชุดที่
+     * อาจเพี้ยนไปคนละทางโดยไม่มีใครรู้ (ADR-17 หัวข้อ 3.1 ข้อ 3)
+     *
+     * ไม่มี Flutter engine → `store.markOutsideAndEnqueueEvent` เขียนสถานะ +
+     * เข้าคิว event ใน `commit()` เดียว (ดูเหตุผลที่ฟังก์ชันนั้นใน
+     * `BackgroundRegionStore`) · มี engine → แค่พลิกสถานะเฉยๆ เพราะไม่มีอะไร
+     * ต้องคิว (ส่งตรงถึง Dart) — ทั้งสองกรณีการเรียก [observer]/`sink` ยังเป็น
+     * best-effort (`runCatching`) เหมือนเดิม เพราะมีทางสำรองอยู่แล้ว (ไฟล์
+     * หลักฐานเป็นแค่ log ไม่ใช่ source of truth · sink มีคิวดิสก์เป็น fallback)
+     *
+     * ⚠️ ลำดับปัจจุบัน (พลิกสถานะ**ก่อน**แจ้ง observer/sink) เหมือนเส้นทางเดิม
+     * ทุกประการ ยังไม่ใช่การแก้บั๊กแฝงเรื่องลำดับ — ดูคอมเมนต์อัปเดตของฟังก์ชัน
+     * นี้ในคอมมิตที่แก้บั๊กนั้นโดยเฉพาะ (สลับให้หลักฐานลงดิสก์ก่อนเปลี่ยนสถานะ)
+     */
+    private fun emitExitAndMarkOutside(
+        context: Context,
+        store: BackgroundRegionStore,
+        regionIdentifier: String,
+        event: BackgroundRegionStateEvent,
+    ) {
+        val sink = flutterSink
+        if (sink == null) {
+            store.markOutsideAndEnqueueEvent(regionIdentifier, event)
+        } else {
+            store.markOutside(regionIdentifier)
+        }
+
+        runCatching { observer?.onRegionStateEvent(event) }
+        if (sink != null) {
+            runCatching { sink.onRegionStateEvent(event) }
+        }
     }
 
     /**

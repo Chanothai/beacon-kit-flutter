@@ -235,6 +235,28 @@ class BackgroundRegionStore(context: Context) {
     }
 
     /**
+     * พลิกสถานะเป็น outside **พร้อมกับ** enqueue event ที่จะส่งให้ Dart ใน
+     * `commit()` เดียวกัน — ห้ามแยกเป็นสองคอมมิตต่อกัน (ADR-17 หัวข้อ 3.1 ข้อ 3)
+     *
+     * เส้นทางเดิม (ก่อน ADR-17) เรียก [markOutside] แยกจาก [enqueueEvent] คนละ
+     * `commit()` — ถ้าระบบฆ่า process คั่นกลางพอดี สถานะจะพลิกเป็น outside
+     * สำเร็จ **แต่ event ไม่เคยถูกบันทึกลงคิวเลย** และเพราะ `isInside` อ่านได้
+     * `false` ไปแล้วตั้งแต่คอมมิตแรก ไม่มีทางรู้ย้อนหลังได้อีกว่าเคยมี exit ที่
+     * ควรรายงานแต่หายไป — ความเสี่ยงชนิดเดียวกับบั๊กหลักที่ ADR-17 ทั้งฉบับแก้
+     * เพียงแต่มาจากคนละสาเหตุ (process ตายกลางคัน ไม่ใช่นาฬิกาปลุกไม่มา)
+     *
+     * ผู้เรียก: `BackgroundRegionMonitor.emitExitAndMarkOutside` เท่านั้น —
+     * ดูคอมเมนต์ของฟังก์ชันนั้นสำหรับลำดับเทียบกับการเขียนไฟล์หลักฐาน
+     */
+    fun markOutsideAndEnqueueEvent(identifier: String, event: BackgroundRegionStateEvent) {
+        prefs.edit()
+            .putBoolean(PREFIX_INSIDE + identifier, false)
+            .remove(PREFIX_ALARM_AT_ELAPSED + identifier)
+            .putString(KEY_PENDING_EVENTS, trimmedPendingEventsJson(event))
+            .commit()
+    }
+
+    /**
      * ล้างสถานะเข้า/ออกทั้งหมด แต่ **ไม่ล้างคิว event ที่ Dart ยังไม่ได้รับ**
      *
      * ใช้ตอนรีบูต: การลงทะเบียนสแกนหายไปกับการรีบูตแน่นอน (ADR-14 หัวข้อการทดสอบ)
@@ -271,6 +293,17 @@ class BackgroundRegionStore(context: Context) {
      * จะไม่มีทางรู้ว่าเคยมี
      */
     fun enqueueEvent(event: BackgroundRegionStateEvent) {
+        prefs.edit().putString(KEY_PENDING_EVENTS, trimmedPendingEventsJson(event)).commit()
+    }
+
+    /**
+     * อ่านคิวเดิม + ต่อท้ายด้วย [event] + ตัดหัวทิ้งถ้าเกินเพดาน — **คืนสตริง
+     * เฉยๆ ไม่คอมมิต** เพื่อให้ผู้เรียกเอาไปใส่ใน `Editor` ก้อนเดียวกับการเขียน
+     * อย่างอื่นได้ (ดู [markOutsideAndEnqueueEvent]) แยกออกมาเป็นฟังก์ชันเดียว
+     * เพื่อไม่ให้ตรรกะการตัดหัวคิว (ตัวเก่าสุดออกก่อน) มีสองชุดที่อาจเพี้ยนไป
+     * คนละทาง
+     */
+    private fun trimmedPendingEventsJson(event: BackgroundRegionStateEvent): String {
         val array = runCatching {
             JSONArray(prefs.getString(KEY_PENDING_EVENTS, "[]") ?: "[]")
         }.getOrElse { JSONArray() }
@@ -288,7 +321,7 @@ class BackgroundRegionStore(context: Context) {
             array
         }
 
-        prefs.edit().putString(KEY_PENDING_EVENTS, trimmed.toString()).commit()
+        return trimmed.toString()
     }
 
     /** อ่านคิวแล้วล้างทิ้งใน `commit()` เดียว — ผู้เรียกต้องส่งต่อให้ครบ */
@@ -333,6 +366,27 @@ data class BackgroundRegionStateEvent(
     val fromBackgroundProcess: Boolean,
 
     /**
+     * ที่มาของ exit นี้ — มีความหมายเฉพาะ `state == "exit"` (ADR-17 หัวข้อ 4)
+     *
+     * ค่าที่เป็นไปได้:
+     * - `alarm` — `onExitAlarm` ตัดสินตามปกติ (นาฬิกาปลุกดัง เช็คซ้ำแล้วครบเวลาจริง)
+     * - `staleReconcile` — `BackgroundRegionMonitor.reconcile()` พบว่าเงียบนาน
+     *   เกิน K เท่าของ `exitTimeoutSeconds` ทั้งที่นาฬิกาปลุกยังไม่ดัง (เช่น
+     *   ถูก Doze/App Standby bucket ระงับไว้)
+     * - `staleBootMismatch` — เทียบเวลาข้ามรอบบูตไม่ได้ (`elapsedRealtime`
+     *   ที่เก็บไว้มาจากคนละรอบบูต) — เกิดได้ทั้งจาก `onExitAlarm` เองหรือจาก
+     *   `reconcile()` เพราะทั้งสองเส้นทางเจอเงื่อนไขเดียวกันเป๊ะ
+     *
+     * ค่าเริ่มต้น `"alarm"` **ไม่ใช่ปล่อยว่างหรือ nullable** เพื่อให้บรรทัดเก่า
+     * (ก่อน ADR-17 ที่ยังไม่มีคีย์ `exitReason=` ในไฟล์เลย) แยกออกจากบรรทัดใหม่
+     * ได้ด้วยการเช็ค "มีคีย์นี้หรือไม่" ล้วนๆ โดยไม่ต้องเดา — ตรงกับรูปแบบ `n/a`
+     * ที่ [exitSinceLastSeenMillis] ใช้อยู่แล้วสำหรับสาขา boot-mismatch เดิม
+     * ค่านี้ไม่ถูกเขียนออกไฟล์หลักฐานสำหรับ event ที่ `state` ไม่ใช่ `"exit"`
+     * (ดู `ExampleApplication.exitTimingSuffix` ฝั่ง example app)
+     */
+    val exitReason: String = "alarm",
+
+    /**
      * `now - lastSeenElapsed` **ณ วินาทีที่ตัดสินใจประกาศ exit** — มีเฉพาะ
      * `state == "exit"` · `null` = ตอบไม่ได้
      *
@@ -373,6 +427,7 @@ data class BackgroundRegionStateEvent(
         put("state", state)
         put("timestampMillis", timestampMillis)
         put("fromBackgroundProcess", fromBackgroundProcess)
+        put("exitReason", exitReason)
         // `JSONObject.put(String, Any?)` เก็บ null เป็น "ไม่มีคีย์" ให้เอง จึงไม่
         // ต้องแยกสาขา และฝั่งอ่านใช้ `has()` แยก "ไม่มีค่า" ออกจาก "ค่าเป็น 0" ได้
         put("exitSinceLastSeenMillis", exitSinceLastSeenMillis)
@@ -385,6 +440,7 @@ data class BackgroundRegionStateEvent(
         "state" to state,
         "timestampMillis" to timestampMillis,
         "fromBackgroundProcess" to fromBackgroundProcess,
+        "exitReason" to exitReason,
         "exitSinceLastSeenMillis" to exitSinceLastSeenMillis,
         "exitScheduledAtElapsedMillis" to exitScheduledAtElapsedMillis,
         "exitFiredAtElapsedMillis" to exitFiredAtElapsedMillis,
@@ -400,6 +456,10 @@ data class BackgroundRegionStateEvent(
                 state = state,
                 timestampMillis = json.optLong("timestampMillis"),
                 fromBackgroundProcess = json.optBoolean("fromBackgroundProcess"),
+                // ไม่มีคีย์นี้ (event ที่คิวไว้ก่อนมี ADR-17) = ค่าเริ่มต้นเดียวกับ
+                // ที่ constructor ตั้งไว้อยู่แล้ว `optString(key, default)` ทำสิ่ง
+                // นี้ให้ตรงๆ โดยไม่ต้องแยกสาขา
+                exitReason = json.optString("exitReason", "alarm"),
                 // `optLong` คืน 0 เมื่อไม่มีคีย์ ซึ่งแยกจาก "ค่าเป็น 0 จริง" ไม่ได้
                 // — event ที่คิวไว้ตอนแอปปิดต้องกลับมาเป็นค่าเดิมเป๊ะ ไม่ใช่ 0 ปลอม
                 exitSinceLastSeenMillis = json.optLongOrNull("exitSinceLastSeenMillis"),

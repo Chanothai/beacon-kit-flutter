@@ -24,6 +24,13 @@ class RegionExitAlarmReceiver : BroadcastReceiver() {
         val regionIdentifier =
             intent.getStringExtra(BackgroundRegionMonitor.EXTRA_REGION_IDENTIFIER)
                 ?: return
+        // ADR-17 หัวข้อ 3: ตรวจ**ทุก** region ไม่ใช่แค่ตัวที่ทำให้นาฬิกาปลุกดัง
+        // — ใช้จังหวะที่ process ถูกปลุกอยู่แล้ว (แม้จะปลุกเพื่อ region อื่น)
+        // ตรวจ region ที่เหลือไปด้วยในคราวเดียว สำคัญเพราะถ้าเฝ้าสอง region
+        // พร้อมกันและนาฬิกาปลุกของอันหนึ่งยังทำงานปกติแต่ของอีกอันถูกระงับ
+        // (Doze/App Standby) อันที่ถูกระงับจะไม่มีทาง reconcile ได้เลยถ้าไม่
+        // อาศัยจังหวะที่อีกอันปลุก process ขึ้นมา
+        BackgroundRegionMonitor.reconcile(context)
         BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
     }
 }

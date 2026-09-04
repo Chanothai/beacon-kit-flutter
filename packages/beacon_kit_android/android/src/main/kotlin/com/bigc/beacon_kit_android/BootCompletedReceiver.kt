@@ -48,6 +48,14 @@ class BootCompletedReceiver : BroadcastReceiver() {
         ) {
             return
         }
+        if (action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            // ADR-17 หัวข้อ 3: MY_PACKAGE_REPLACED ไม่ใช่การรีบูต —
+            // `SystemClock.elapsedRealtime()` ไม่รีเซ็ตตอนแอปอัปเดต ต้องให้
+            // reconcile() ประกาศ exit(stale) ก่อน (ถ้ามีจริง) ก่อนที่
+            // restoreAfterBoot() ด้านล่างจะล้างสถานะทิ้งแบบไม่มีเงื่อนไข
+            // ไม่งั้น exit ที่ควรได้จะหายเงียบไปพร้อมกับ clearRegionStates()
+            BackgroundRegionMonitor.reconcile(context)
+        }
         // ผลลัพธ์ (สำเร็จ/ล้มเหลวราย region) ถูกบันทึกโดยผู้สังเกตการณ์ของ host app
         // ผ่าน BackgroundRegionMonitor — ตรงนี้ไม่มีใครให้รายงานถึง
         BackgroundRegionMonitor.restoreAfterBoot(context)

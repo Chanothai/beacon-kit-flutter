@@ -339,6 +339,24 @@ class BackgroundEvidenceLogTest {
     }
 
     /**
+     * `exitReasonField` (ADR-17 หัวข้อ 4) — ล็อกรูปแบบ `exitReason=<ค่า>` ตรงๆ
+     * เพราะเป็น pure function เดียวที่ตัดสินว่าบรรทัด exit หนึ่งมาจากนาฬิกาปลุก
+     * ปกติหรือมาจาก `reconcile()` ที่กู้สถานะ `inside` ที่ค้าง
+     */
+    @Test
+    fun `exitReasonField เขียนออกมาตรงตัว`() {
+        assertEquals("exitReason=alarm", BackgroundEvidenceLog.exitReasonField("alarm"))
+        assertEquals(
+            "exitReason=staleReconcile",
+            BackgroundEvidenceLog.exitReasonField("staleReconcile"),
+        )
+        assertEquals(
+            "exitReason=staleBootMismatch",
+            BackgroundEvidenceLog.exitReasonField("staleBootMismatch"),
+        )
+    }
+
+    /**
      * เหตุผลที่มีช่องว่าง (ข้อความของข้อยกเว้น) ต้องไม่ทำให้คอลัมน์สัญญาณดิบ
      * กลายเป็นหลาย key — ตัวอ่านคั่นค่าด้วยช่องว่าง
      */

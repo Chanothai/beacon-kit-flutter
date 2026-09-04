@@ -88,11 +88,17 @@ class ExampleApplication : Application() {
     }
 
     /**
-     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุก **เฉพาะบรรทัด `exit`**
+     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุกและเหตุผลของ exit **เฉพาะบรรทัด
+     * `exit`**
      *
      * บรรทัด `enter` ไม่มีนาฬิกาปลุกให้พูดถึง การใส่ `n/a` สามช่องทุกบรรทัดจะ
      * ทำให้คอลัมน์สัญญาณดิบยาวขึ้นโดยไม่ได้ข้อมูลเพิ่ม และทำให้ `n/a` เสีย
      * ความหมาย — ค่านั้นถูกใช้แยกสาขา `bootMismatch` ของ exit อยู่
+     *
+     * `exitReasonField` ต่อท้าย `exitTimingField` เสมอ (ADR-17 หัวข้อ 4) —
+     * บอกว่า exit นี้มาจากนาฬิกาปลุกปกติ (`alarm`) หรือมาจาก `reconcile()`
+     * ที่กู้สถานะ `inside` ที่ค้างเพราะนาฬิกาปลุกไม่มาถึง (`staleReconcile` /
+     * `staleBootMismatch`)
      */
     private fun exitTimingSuffix(event: BackgroundRegionStateEvent): String {
         if (event.state != "exit") return ""
@@ -100,7 +106,7 @@ class ExampleApplication : Application() {
             sinceLastSeenMillis = event.exitSinceLastSeenMillis,
             scheduledAtElapsedMillis = event.exitScheduledAtElapsedMillis,
             firedAtElapsedMillis = event.exitFiredAtElapsedMillis,
-        )
+        ) + " " + BackgroundEvidenceLog.exitReasonField(event.exitReason)
     }
 
     /**
@@ -170,8 +176,34 @@ class ExampleApplication : Application() {
                     context = this,
                     state = processState,
                     receiverEntry = false,
-                ) + " " + restoredField,
+                ) + " " + restoredField + " " + deviceIdentityField(),
             ),
         )
+    }
+
+    /**
+     * `manufacturer=<...> model=<...> os=<API level>` — เฉพาะบรรทัด `launch`
+     *
+     * เพิ่มเพราะรอบทดสอบข้ามคืนเจอความต่างของพฤติกรรม Doze/App Standby ระหว่าง
+     * ยี่ห้อ (คำเตือนเรื่อง MIUI ที่กระจายอยู่ทั้งไฟล์นี้เป็นตัวอย่าง) — ไฟล์
+     * หลักฐานที่ไม่ระบุรุ่นเครื่องตรวจสอบย้อนกลับไม่ได้ว่าอาการที่เจอเป็นเรื่อง
+     * ทั่วไปของ Android หรือเฉพาะยี่ห้อนั้น เหมือนกับที่ `battOpt`/`doze` ต้อง
+     * บันทึกทุกบรรทัดเพราะเป็นตัวแปรที่เปลี่ยนผลการทดสอบได้ทั้งรอบ
+     *
+     * ใส่ไว้เฉพาะบรรทัด `launch` (ไม่ใช่ทุกบรรทัด เหมือน `restoredRegions`)
+     * เพราะค่าคงที่ตลอดอายุ process — การเขียนซ้ำทุกบรรทัดจะกินพื้นที่ไฟล์โดย
+     * ไม่ได้ข้อมูลใหม่ ผู้อ่านย้อนกลับไปดูบรรทัด `launch` ของ `procUuid`
+     * เดียวกันได้เสมอ
+     *
+     * `model`/`manufacturer` แทนช่องว่างด้วย `_` (เหมือนที่
+     * [BackgroundEvidenceLog.restoredRegionsField] ทำกับเหตุผลของ read-failed)
+     * — บางรุ่นมีช่องว่างในชื่อ (เช่น `Galaxy A51`) และคอลัมน์สัญญาณดิบคั่นค่า
+     * ด้วยช่องว่าง ถ้าปล่อยผ่านตัวอ่านจะเห็นเป็นหลาย key โดยไม่มีอะไรฟ้อง
+     */
+    private fun deviceIdentityField(): String {
+        fun sanitize(value: String) = value.replace(Regex("\\s+"), "_")
+        return "manufacturer=${sanitize(android.os.Build.MANUFACTURER)} " +
+            "model=${sanitize(android.os.Build.MODEL)} " +
+            "os=${android.os.Build.VERSION.SDK_INT}"
     }
 }
