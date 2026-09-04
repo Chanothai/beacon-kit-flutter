@@ -476,6 +476,16 @@ object BackgroundEvidenceLog {
     fun exitReasonField(reason: String): String = "exitReason=$reason"
 
     /**
+     * `reason=<stillSeen|notInside|notActive>` — **เฉพาะบรรทัด
+     * `exitAlarmDeferred`** (ADR-17 หัวข้อ 6)
+     *
+     * บอกว่าทำไม `onExitAlarm` ถึงเลื่อนนาฬิกาปลุกออกไปแทนการประกาศ exit (หรือ
+     * ทำไมถึง return โดยไม่ทำอะไรเลย) — ปิดช่องว่างที่ทำให้คืน 3-4 ก.ย. 2026
+     * เงียบสนิท 14 ชั่วโมงโดยไม่มีร่องรอยอะไรในไฟล์หลักฐานเลย
+     */
+    fun deferReasonField(reason: String): String = "reason=$reason"
+
+    /**
      * `ignoring` = ผู้ใช้ปลด battery optimization ให้แอปแล้ว
      *
      * บันทึกไว้ทุกบรรทัดเพราะเป็นตัวแปรที่**เปลี่ยนผลการทดสอบได้ทั้งรอบ** — รายงาน

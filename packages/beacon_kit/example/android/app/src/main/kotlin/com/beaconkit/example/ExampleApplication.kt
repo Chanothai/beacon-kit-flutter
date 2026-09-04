@@ -70,43 +70,63 @@ class ExampleApplication : Application() {
                         context = this,
                         state = processState,
                         receiverEntry = true,
-                    ) + exitTimingSuffix(event),
+                    ) + rawSignalsSuffix(event),
                 ),
             )
-            ExampleNotifications.post(
-                context = this,
-                title = "Region ${event.state}: ${event.regionIdentifier}",
-                // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ [BackgroundEvidenceLog.processId]
-                // ไม่ใช่ pid ของ Linux การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat`
-                // หาไม่เจอแล้วสรุปว่า process ไม่ตรงกัน
-                body = "สถานะแอป: ${processState.conclusion} · " +
-                    "procUuid=${BackgroundEvidenceLog.processId}",
-            )
+            // ADR-17 หัวข้อ 6: `exitAlarmDeferred` เป็น diagnostic ล้วนๆ สำหรับ
+            // ไฟล์หลักฐาน ไม่ใช่การเปลี่ยนสถานะที่ผู้ใช้ควรรู้ — แจ้งเตือนแค่
+            // enter/exit จริง ไม่งั้นผู้ใช้จะเห็นการแจ้งเตือนถี่ผิดปกติทุกครั้ง
+            // ที่นาฬิกาปลุกดังแล้วยังไม่ครบเวลาจริง (เกิดซ้ำได้หลายรอบต่อคืน)
+            if (event.state == "enter" || event.state == "exit") {
+                ExampleNotifications.post(
+                    context = this,
+                    title = "Region ${event.state}: ${event.regionIdentifier}",
+                    // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ
+                    // [BackgroundEvidenceLog.processId] ไม่ใช่ pid ของ Linux
+                    // การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat` หาไม่เจอ
+                    // แล้วสรุปว่า process ไม่ตรงกัน
+                    body = "สถานะแอป: ${processState.conclusion} · " +
+                        "procUuid=${BackgroundEvidenceLog.processId}",
+                )
+            }
         }
 
         logLaunch()
     }
 
     /**
-     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุกและเหตุผลของ exit **เฉพาะบรรทัด
-     * `exit`**
+     * ต่อท้ายสัญญาณดิบด้วยเวลาของนาฬิกาปลุกและเหตุผล — **เฉพาะบรรทัด `exit`**
+     * และ `exitAlarmDeferred`
      *
-     * บรรทัด `enter` ไม่มีนาฬิกาปลุกให้พูดถึง การใส่ `n/a` สามช่องทุกบรรทัดจะ
-     * ทำให้คอลัมน์สัญญาณดิบยาวขึ้นโดยไม่ได้ข้อมูลเพิ่ม และทำให้ `n/a` เสีย
-     * ความหมาย — ค่านั้นถูกใช้แยกสาขา `bootMismatch` ของ exit อยู่
+     * บรรทัด `enter`/`launch`/`selftest` ไม่มีนาฬิกาปลุกให้พูดถึง การใส่ `n/a`
+     * สามช่องทุกบรรทัดจะทำให้คอลัมน์สัญญาณดิบยาวขึ้นโดยไม่ได้ข้อมูลเพิ่ม และทำให้
+     * `n/a` เสียความหมาย — ค่านั้นถูกใช้แยกสาขา `bootMismatch` ของ exit อยู่
      *
-     * `exitReasonField` ต่อท้าย `exitTimingField` เสมอ (ADR-17 หัวข้อ 4) —
-     * บอกว่า exit นี้มาจากนาฬิกาปลุกปกติ (`alarm`) หรือมาจาก `reconcile()`
-     * ที่กู้สถานะ `inside` ที่ค้างเพราะนาฬิกาปลุกไม่มาถึง (`staleReconcile` /
-     * `staleBootMismatch`)
+     * - `exit` — `exitTimingField` ต่อด้วย `exitReasonField` (ADR-17 หัวข้อ 4)
+     *   บอกว่า exit นี้มาจากนาฬิกาปลุกปกติ (`alarm`) หรือมาจาก `reconcile()`
+     *   ที่กู้สถานะ `inside` ที่ค้างเพราะนาฬิกาปลุกไม่มาถึง (`staleReconcile` /
+     *   `staleBootMismatch`)
+     * - `exitAlarmDeferred` — `exitTimingField` ต่อด้วย `deferReasonField`
+     *   (ADR-17 หัวข้อ 6) บอกว่าทำไม `onExitAlarm` ถึงเลื่อนนาฬิกาปลุกแทนการ
+     *   ประกาศ exit (หรือ return เฉยๆ)
      */
-    private fun exitTimingSuffix(event: BackgroundRegionStateEvent): String {
-        if (event.state != "exit") return ""
-        return " " + BackgroundEvidenceLog.exitTimingField(
+    private fun rawSignalsSuffix(event: BackgroundRegionStateEvent): String {
+        val timing = BackgroundEvidenceLog.exitTimingField(
             sinceLastSeenMillis = event.exitSinceLastSeenMillis,
             scheduledAtElapsedMillis = event.exitScheduledAtElapsedMillis,
             firedAtElapsedMillis = event.exitFiredAtElapsedMillis,
-        ) + " " + BackgroundEvidenceLog.exitReasonField(event.exitReason)
+        )
+        return when (event.state) {
+            "exit" -> " $timing " + BackgroundEvidenceLog.exitReasonField(event.exitReason)
+            "exitAlarmDeferred" -> " $timing " + BackgroundEvidenceLog.deferReasonField(
+                // ค่า default "unknown" ตรงนี้เป็นแค่ตาข่ายกันคอมไพล์เลื่อน —
+                // ในทางปฏิบัติผู้เรียกเดียว (`BackgroundRegionMonitor
+                // .emitExitAlarmDeferred`) ส่ง reason มาเสมอทุกครั้ง ไม่มีทาง
+                // เป็น null จริง
+                event.deferReason ?: "unknown",
+            )
+            else -> ""
+        }
     }
 
     /**

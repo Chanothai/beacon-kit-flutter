@@ -436,8 +436,18 @@ object BackgroundRegionMonitor {
     fun onExitAlarm(context: Context, regionIdentifier: String) {
         val appContext = context.applicationContext
         val store = BackgroundRegionStore(appContext)
-        if (!store.isActive) return
-        if (!store.isInside(regionIdentifier)) return
+        if (!store.isActive) {
+            // ADR-17 หัวข้อ 6: ทุก return path ของ onExitAlarm ที่ไม่ประกาศ exit
+            // ต้องทิ้งร่องรอยไว้เสมอ — คืนที่ 3-4 ก.ย. 2026 เงียบสนิท 14 ชั่วโมง
+            // เพราะ return path แบบนี้ไม่เคยเขียนอะไรลง log เลยสักบรรทัด ทำให้
+            // แยกไม่ออกว่า "ไม่มีอะไรเกิดขึ้นจริง" กับ "เกิดแล้วแต่ไม่มีร่องรอย"
+            emitExitAlarmDeferred(appContext, regionIdentifier, reason = REASON_NOT_ACTIVE)
+            return
+        }
+        if (!store.isInside(regionIdentifier)) {
+            emitExitAlarmDeferred(appContext, regionIdentifier, reason = REASON_NOT_INSIDE)
+            return
+        }
 
         val timeoutMillis = store.exitTimeoutSeconds * 1000L
         val now = SystemClock.elapsedRealtime()
@@ -474,6 +484,14 @@ object BackgroundRegionMonitor {
             val alarmAt = store.lastSeenElapsedMillis(regionIdentifier) + timeoutMillis
             store.recordExitAlarmScheduled(regionIdentifier, alarmAt)
             scheduleExitAlarm(appContext, regionIdentifier, alarmAt)
+            emitExitAlarmDeferred(
+                appContext,
+                regionIdentifier,
+                reason = REASON_STILL_SEEN,
+                sinceLastSeenMillis = sinceLastSeen,
+                scheduledAtElapsedMillis = scheduledAt,
+                firedAtElapsedMillis = now,
+            )
             return
         }
 
@@ -602,6 +620,11 @@ object BackgroundRegionMonitor {
     private const val REASON_STALE_RECONCILE = "staleReconcile"
     private const val REASON_STALE_BOOT_MISMATCH = "staleBootMismatch"
 
+    /** เหตุผลของบรรทัด `exitAlarmDeferred` (ADR-17 หัวข้อ 6) */
+    private const val REASON_STILL_SEEN = "stillSeen"
+    private const val REASON_NOT_INSIDE = "notInside"
+    private const val REASON_NOT_ACTIVE = "notActive"
+
     /**
      * `null` = ยังไม่ stale — เงื่อนไขทั้งสองข้อของ ADR-17 หัวข้อ 2 แยกกันโดย
      * สิ้นเชิง เช็คบูตมิสแมตช์ก่อนเสมอเพราะเป็นความแน่นอน 100% ไม่ต้องใช้ K
@@ -650,6 +673,47 @@ object BackgroundRegionMonitor {
         runCatching { observer?.onRegionStateEvent(event) }
         if (sink != null) {
             runCatching { sink.onRegionStateEvent(event) }
+        }
+    }
+
+    /**
+     * บันทึกว่า `onExitAlarm` **เลื่อน**นาฬิกาปลุกแทนการประกาศ exit (หรือ
+     * return ไปเฉยๆ โดยไม่ทำอะไรเลย) — ไม่ใช่ event สาธารณะที่ผู้ใช้ SDK ควร
+     * ได้รับ (ตั้งใจไม่ผ่าน [emit]/enqueue/flutterSink เลย) มีไว้เพื่อบันทึก
+     * ลงไฟล์หลักฐานของ host app เท่านั้นผ่าน [observer] ตัวเดียวกับที่บันทึก
+     * enter/exit — **ไม่สร้างเส้นทางเขียนไฟล์ใหม่** (ADR-17 หัวข้อ 6)
+     *
+     * เหตุผลที่ต้องมี: คืน 3-4 ก.ย. 2026 เงียบสนิท 14 ชั่วโมงโดยไม่มีร่องรอย
+     * อะไรเลยในไฟล์หลักฐาน เพราะ return path ที่ไม่ประกาศ exit ของ
+     * `onExitAlarm` ไม่เคยเรียก `emit()` มาก่อน — ตัวนี้ปิดช่องว่างนั้น
+     *
+     * ⚠️ **ตั้งใจไม่ enqueue** ต่างจาก [emitExitAndMarkOutside] — สาขานี้ไม่มี
+     * การเปลี่ยนสถานะใดๆ (ไม่ markOutside) จึงไม่มีอะไรต้องรักษาไว้ให้รอด
+     * ข้าม process หาย เป็นแค่ diagnostic log เฉยๆ ถ้าเขียนไม่สำเร็จ (process
+     * ถูกฆ่าคั่นกลาง) รอบถัดไปที่ปลุก process ขึ้นมาก็จะเขียนบรรทัดใหม่ของ
+     * ตัวเองได้เองอยู่แล้วโดยไม่ต้องพึ่งบรรทัดที่หายไป
+     */
+    private fun emitExitAlarmDeferred(
+        context: Context,
+        regionIdentifier: String,
+        reason: String,
+        sinceLastSeenMillis: Long? = null,
+        scheduledAtElapsedMillis: Long? = null,
+        firedAtElapsedMillis: Long? = null,
+    ) {
+        runCatching {
+            observer?.onRegionStateEvent(
+                BackgroundRegionStateEvent(
+                    regionIdentifier = regionIdentifier,
+                    state = "exitAlarmDeferred",
+                    timestampMillis = System.currentTimeMillis(),
+                    fromBackgroundProcess = !HostProcessInfo.hasEverBeenForeground,
+                    deferReason = reason,
+                    exitSinceLastSeenMillis = sinceLastSeenMillis,
+                    exitScheduledAtElapsedMillis = scheduledAtElapsedMillis,
+                    exitFiredAtElapsedMillis = firedAtElapsedMillis,
+                ),
+            )
         }
     }
 

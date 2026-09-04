@@ -421,6 +421,19 @@ data class BackgroundRegionStateEvent(
 
     /** เวลาที่นาฬิกาปลุก **ดังจริง** — คู่กับ [exitScheduledAtElapsedMillis] */
     val exitFiredAtElapsedMillis: Long? = null,
+
+    /**
+     * เหตุผลที่ `onExitAlarm` เลื่อนนาฬิกาปลุกแทนการประกาศ exit (หรือ return
+     * เฉยๆ โดยไม่ทำอะไรเลย) — มีความหมายเฉพาะ `state == "exitAlarmDeferred"`
+     * เท่านั้น (ADR-17 หัวข้อ 6) ค่าที่เป็นไปได้: `stillSeen` (เห็นอีกครั้งก่อน
+     * ครบเวลาจริง) · `notInside` (region นี้ไม่ได้อยู่ในสถานะ inside อยู่แล้ว)
+     * · `notActive` (การเฝ้าเบื้องหลังถูกสั่งหยุดไปแล้ว)
+     *
+     * ต่างจาก [exitReason] ตรงที่ **ไม่มีค่าเริ่มต้น** เพราะ event ชนิดนี้ไม่
+     * เคยไหลผ่านคิว/JSON เลย (ดู `BackgroundRegionMonitor.emitExitAlarmDeferred`
+     * — ตั้งใจไม่ enqueue) จึงไม่มีปัญหาบรรทัดเก่าที่ไม่มีคีย์นี้ต้องเผื่อ
+     */
+    val deferReason: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("regionIdentifier", regionIdentifier)
@@ -433,6 +446,7 @@ data class BackgroundRegionStateEvent(
         put("exitSinceLastSeenMillis", exitSinceLastSeenMillis)
         put("exitScheduledAtElapsedMillis", exitScheduledAtElapsedMillis)
         put("exitFiredAtElapsedMillis", exitFiredAtElapsedMillis)
+        put("deferReason", deferReason)
     }
 
     fun toMap(): Map<String, Any?> = mapOf(
@@ -444,6 +458,7 @@ data class BackgroundRegionStateEvent(
         "exitSinceLastSeenMillis" to exitSinceLastSeenMillis,
         "exitScheduledAtElapsedMillis" to exitScheduledAtElapsedMillis,
         "exitFiredAtElapsedMillis" to exitFiredAtElapsedMillis,
+        "deferReason" to deferReason,
     )
 
     companion object {
@@ -466,10 +481,14 @@ data class BackgroundRegionStateEvent(
                 exitScheduledAtElapsedMillis =
                     json.optLongOrNull("exitScheduledAtElapsedMillis"),
                 exitFiredAtElapsedMillis = json.optLongOrNull("exitFiredAtElapsedMillis"),
+                deferReason = json.optStringOrNull("deferReason"),
             )
         }
 
         private fun JSONObject.optLongOrNull(key: String): Long? =
             if (has(key) && !isNull(key)) optLong(key) else null
+
+        private fun JSONObject.optStringOrNull(key: String): String? =
+            if (has(key) && !isNull(key)) optString(key) else null
     }
 }

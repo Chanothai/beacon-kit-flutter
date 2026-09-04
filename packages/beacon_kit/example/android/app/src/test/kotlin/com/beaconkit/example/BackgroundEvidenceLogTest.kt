@@ -357,6 +357,18 @@ class BackgroundEvidenceLogTest {
     }
 
     /**
+     * `deferReasonField` (ADR-17 หัวข้อ 6) — ล็อกรูปแบบ `reason=<ค่า>` ตรงๆ
+     * เพราะเป็น pure function เดียวที่อธิบายว่าทำไม onExitAlarm ถึงเลื่อน
+     * นาฬิกาปลุกแทนการประกาศ exit
+     */
+    @Test
+    fun `deferReasonField เขียนออกมาตรงตัว`() {
+        assertEquals("reason=stillSeen", BackgroundEvidenceLog.deferReasonField("stillSeen"))
+        assertEquals("reason=notInside", BackgroundEvidenceLog.deferReasonField("notInside"))
+        assertEquals("reason=notActive", BackgroundEvidenceLog.deferReasonField("notActive"))
+    }
+
+    /**
      * เหตุผลที่มีช่องว่าง (ข้อความของข้อยกเว้น) ต้องไม่ทำให้คอลัมน์สัญญาณดิบ
      * กลายเป็นหลาย key — ตัวอ่านคั่นค่าด้วยช่องว่าง
      */
