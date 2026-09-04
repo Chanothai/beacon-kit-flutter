@@ -686,9 +686,26 @@ object BackgroundRegionMonitor {
      * best-effort (`runCatching`) เหมือนเดิม เพราะมีทางสำรองอยู่แล้ว (ไฟล์
      * หลักฐานเป็นแค่ log ไม่ใช่ source of truth · sink มีคิวดิสก์เป็น fallback)
      *
-     * ⚠️ ลำดับปัจจุบัน (พลิกสถานะ**ก่อน**แจ้ง observer/sink) เหมือนเส้นทางเดิม
-     * ทุกประการ ยังไม่ใช่การแก้บั๊กแฝงเรื่องลำดับ — ดูคอมเมนต์อัปเดตของฟังก์ชัน
-     * นี้ในคอมมิตที่แก้บั๊กนั้นโดยเฉพาะ (สลับให้หลักฐานลงดิสก์ก่อนเปลี่ยนสถานะ)
+     * ## ลำดับ: หลักฐานลงดิสก์ก่อนเปลี่ยนสถานะ — บั๊กแฝงอีกตัวที่พบระหว่าง
+     * implement (แยกจากบั๊กหลักของ ADR-17 แต่โครงสร้างเดียวกันเป๊ะ)
+     *
+     * เส้นทางแรกที่เขียน (ยังไม่ผ่านการแก้นี้) พลิกสถานะ (`markOutside`/
+     * `markOutsideAndEnqueueEvent`) **ก่อน** แจ้ง [observer]/`sink` — ถ้าระบบ
+     * ฆ่า process คั่นกลางระหว่างสองขั้นตอนนี้พอดี ผลคือสถานะพลิกเป็น
+     * `outside` สำเร็จแล้ว **แต่ไม่มีหลักฐานอะไรเลยว่าเคยมี exit** และเพราะ
+     * `isInside` อ่านได้ `false` ไปแล้วตั้งแต่คอมมิตแรก ไม่มีทางกู้คืนข้อมูล
+     * ที่หายไปนั้นได้อีกเลย — เหมือนกับบั๊กหลักของเอกสารนี้เป๊ะ (สถานะพลิกไป
+     * แล้วแต่ไม่มีร่องรอย) เพียงแต่สาเหตุคนละอย่าง (process ตายกลางคัน
+     * ไม่ใช่นาฬิกาปลุกไม่มา)
+     *
+     * **ลำดับที่แก้แล้ว (ด้านล่าง): เรียก [observer] ก่อนเสมอ แล้วค่อยพลิก
+     * สถานะ** — ถ้าตายคั่นกลางในทางกลับกัน จะได้ผลแค่ "หลักฐานบอกว่า exit
+     * แล้ว แต่สถานะยังเป็น `inside`" ซึ่งทำให้รอบถัดไป (`onExitAlarm`/
+     * `reconcile`) เห็น `isInside==true` ค้างอยู่แล้วประกาศ exit ซ้ำอีกครั้ง
+     * — **ผู้อ่าน log ต้องยอมรับ `exit` ซ้ำได้เอง** (dedupe ตามรูปแบบที่
+     * ADR-11 วางไว้แล้วสำหรับ region flapping) เพราะ **`exit` ซ้ำกู้คืนได้
+     * ด้วยการกรองซ้ำ ส่วน `exit` หายไม่มีทางกู้คืนได้เลย** — สองความเสี่ยง
+     * นี้ไม่เท่ากัน จึงเลือกความเสี่ยงที่แก้ไขได้ในฝั่งผู้อ่านเสมอ
      */
     private fun emitExitAndMarkOutside(
         context: Context,
@@ -696,16 +713,14 @@ object BackgroundRegionMonitor {
         regionIdentifier: String,
         event: BackgroundRegionStateEvent,
     ) {
+        runCatching { observer?.onRegionStateEvent(event) }
+
         val sink = flutterSink
         if (sink == null) {
             store.markOutsideAndEnqueueEvent(regionIdentifier, event)
         } else {
-            store.markOutside(regionIdentifier)
-        }
-
-        runCatching { observer?.onRegionStateEvent(event) }
-        if (sink != null) {
             runCatching { sink.onRegionStateEvent(event) }
+            store.markOutside(regionIdentifier)
         }
     }
 
