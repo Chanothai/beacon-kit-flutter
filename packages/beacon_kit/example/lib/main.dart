@@ -22,6 +22,20 @@ import 'log_page.dart';
 /// demo นี้เท่านั้น
 const String _k9pDefaultUuid = '7777772E-6B6B-6D63-6E2E-636F6D000001';
 
+/// UUID ทดสอบของ BigC — **ไม่ใช่ค่าโรงงานของยี่ห้อใด** derive จาก
+/// `uuid5(NAMESPACE_DNS, "www.bigc.co.th")` ตาม RFC 4122 §4.3
+/// (ค่าเต็ม วิธี derive และคำสั่ง verify อยู่ที่ `docs/sources/bigc_provisioning.md`
+/// ซึ่งเป็น single source of truth ตาม ADR-5)
+///
+/// ใช้กับ K9P ที่ **provision ใหม่ 1 ตัว** ให้ broadcast ด้วยค่านี้ เพื่อพิสูจน์ว่า
+/// region แยกสัญญาณของ BigC ออกจาก UUID โรงงานเดิมได้จริง — ต้องเห็น event ของ
+/// `bigc-test` กับ `k9p-default` แยกกันคนละ region ไม่ปนกัน
+///
+/// ⚠️ ไม่ใช่ค่าที่ผูกกับ production build ใด ๆ — `example/` เท่านั้น การนำค่านี้
+/// ไปตั้งใน production ต้องผ่าน config service ตามที่ ADR-5 กำหนด ไม่ใช่ copy
+/// จากไฟล์นี้
+const String _bigcTestUuid = '89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF';
+
 /// Service UUID ของ Eddystone (`0xFEAA`)
 const String _eddystoneServiceUuid = '0000feaa-0000-1000-8000-00805f9b34fb';
 
@@ -71,6 +85,7 @@ class _ScanPageState extends State<ScanPage> {
       GenericIBeaconEddystoneAdapter(
         iBeaconRegions: const [
           IBeaconRegionConfig(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
+          IBeaconRegionConfig(identifier: 'bigc-test', uuid: _bigcTestUuid),
         ],
       );
 
@@ -493,6 +508,7 @@ class _ScanPageState extends State<ScanPage> {
       final result = await beaconKitAndroid.startBackgroundRegionMonitoring(
         regions: const [
           AndroidBeaconRegion(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
+          AndroidBeaconRegion(identifier: 'bigc-test', uuid: _bigcTestUuid),
         ],
         exitTimeoutSeconds: _androidExitTimeoutSeconds,
       );
