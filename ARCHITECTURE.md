@@ -2759,3 +2759,529 @@ open question ในไฟล์เช็คลิสต์เองเป็น
   ใช้จริงเฉพาะสภาพที่แอปยัง `inactive` ตอนเทสต์เริ่มเท่านั้น ซึ่งยังไม่เคยเกิดขึ้น
   ในการรันที่มีอยู่ — ต้องยืนยันว่าแขนนี้ทำงานถูกต้องจริงเมื่อมีโอกาสได้เห็นสภาพ
   แวดล้อมที่ทำให้มันถูกใช้งาน
+
+---
+
+## ADR-18: `reconcile()` — กู้สถานะ `inside` ที่ค้างข้ามคืนเมื่อนาฬิกาปลุกไม่มาถึง (เพิ่ม 4 ก.ย. 2026)
+
+> **สถานะ: ตัดสินใจด้านสถาปัตยกรรมแล้ว — ยังไม่ implement**
+> นี่คือขั้นที่ 1/4 ตาม `PIPELINE.md` (ออกแบบ) เท่านั้น **ห้ามมีโค้ด Kotlin ใน
+> เอกสารนี้** หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev` เมื่อ
+> สถาปัตยกรรมในหัวข้อนี้ถูก sign-off แล้วเท่านั้น
+> **ขอบเขต:** `beacon_kit_android` (`BackgroundRegionMonitor`,
+> `BackgroundRegionStore`, `BeaconScanReceiver`, `RegionExitAlarmReceiver`,
+> `BootCompletedReceiver`, `BeaconKitAndroidPlugin`) และรูปแบบ `rawSignals` /
+> `AndroidBackgroundRegionEvent` ที่เกี่ยวข้อง — **ไม่แตะ iOS** และ **ไม่แตะกฎ 3/4
+> ของการเลื่อนนาฬิกาปลุก · `setAndAllowWhileIdle` · `exitTimeoutSeconds`** ซึ่งเป็น
+> ของ ADR-15 และยังไม่ตัดสิน (ห้ามแตะตามที่โจทย์รอบนี้สั่งไว้ตรง ๆ)
+
+### 0. หมายเหตุเลข ADR — ทำไมกระโดดจาก ADR-16 มา ADR-18
+
+โจทย์ที่สั่งงานรอบนี้อ้างถึง **"บรรทัด wake/alarm ของ ADR-17"** — ตรวจ
+`ARCHITECTURE.md` ทั้งไฟล์แล้ว **ADR-17 ไม่มีอยู่จริง** ADR ล่าสุดก่อนหน้าเอกสารนี้
+คือ ADR-16 (`hasEverBecomeActive` ภายใต้ UIScene lifecycle) งาน "รายงานเวลาที่
+นาฬิกาปลุกได้จริงกลับไปพร้อม event" ที่โจทย์พยายามอ้างถึงคืองานที่มีอยู่จริงใน
+**ADR-15 หัวข้อ 3 ข้อ จ. ("รายงานเวลาที่ได้จริงกลับไปพร้อม event")** ซึ่ง
+**implement แล้วบน `main`** (`BackgroundEvidenceLog.exitTimingField()`,
+`ExampleApplication.exitTimingSuffix`, ดู ADR-14 หัวข้อ 4.2 ส่วนขยายรอบสอง) —
+**ไม่ใช่ ADR-17** เลขที่ใช้ในหัวข้อนี้ (**18**) และหัวข้อถัดไป (**19**) เป็นเลขที่
+เจ้าของโปรเจกต์สั่งให้ใช้ตรง ๆ **ข้ามเลข 17 ไปโดยตั้งใจ** บันทึกไว้ตรงนี้เพื่อไม่ให้
+คนอ่านย้อนหลังคิดว่ามีไฟล์ ADR-17 หายไปหรือเอกสารเสีย — **มันไม่เคยมีอยู่ตั้งแต่ต้น**
+
+### 1. บั๊กที่ต้องแก้ — ยืนยันจากโค้ดจริงในเซสชันนี้
+
+**หลักฐานอุปกรณ์จริง 3-4 ก.ย. 2026:** `enter bigc-test` เวลา 18:00:14 → เงียบสนิท
+ไม่มีบรรทัด log ใด ๆ เลย (ไม่ launch ไม่ exit) จนถึง 08:39 → `launch` ×3 (08:39-08:41
+ไม่มี `enter` ตามมา — process ถูกสร้างใหม่แต่ไม่ได้มาจาก region event) →
+08:42:29 `exit` ทั้งสอง region พร้อม `sinceLastSeenMs≈50000` ซึ่งแปลว่า "เห็น
+ล่าสุด 08:41:37" คือ**หลังกลับเข้าระยะตอนเช้าแล้ว** — exit ของคืนนั้นไม่เคยถูกเขียน
+และ enter ตอนเช้าก็ไม่เคยถูกเขียนเช่นกัน (ผู้ทดสอบยืนยันว่าเอาเครื่องออกนอกระยะ
+ตลอดคืน)
+
+**สาเหตุที่ตรวจยืนยันจากไฟล์จริงแล้ว (ไม่ใช่การเดา):**
+
+1. `BackgroundRegionMonitor.onSighting` (`BackgroundRegionMonitor.kt:386-426`)
+   เมื่อ `wasInside = store.isInside(regionIdentifier)` เป็น `true`
+   (บรรทัด 399) **ไม่มีการตรวจ `now − lastSeenElapsedMillis` เลยตรงจุดนี้** —
+   โค้ดเลื่อนนาฬิกาปลุกไปอีก `timeoutMillis` (บรรทัด 401-412) แล้วจบ ไม่ยิง `enter`
+   เพราะเงื่อนไข `if (!wasInside)` (บรรทัด 415) เป็นเท็จ ผลคือ sighting ตอนเช้าที่
+   มาถึงหลังหายไป 14 ชั่วโมง **ถูกตีความว่าเป็นการอยู่ต่อเนื่องในโซนเดิม** ไม่ใช่
+   การกลับเข้ามาใหม่
+2. `store.markOutside(regionIdentifier)` (`BackgroundRegionStore.kt`,
+   ฟังก์ชัน `markOutside`) ถูกเรียกจาก **`BackgroundRegionMonitor.onExitAlarm`
+   เท่านั้น** สองจุด (`BackgroundRegionMonitor.kt:451` — สาขา boot-mismatch,
+   และ `:478` — สาขาปกติ) สถานะ `inside` จึงมีทางออกได้ทางเดียวคือรอให้
+   `RegionExitAlarmReceiver` ถูกเรียก — ถ้า OS ระงับนาฬิกาปลุกทั้งคืน (Doze /
+   App Standby bucket, ดูหัวข้อ 2 ด้านล่าง) จะไม่มีเส้นทางอื่นเลยที่ทำให้สถานะ
+   หลุดออกจาก `inside=true` ได้
+
+**ผลคือช่องโหว่สองชั้นซ้อนกัน:** (1) ไม่มีใครกู้สถานะเมื่อนาฬิกาปลุกไม่มา และ
+(2) ถึงมี sighting ใหม่มาถึงจริง ก็ยังถูก `onSighting` กลืนเงียบเพราะเช็คแค่
+`wasInside` บูลีนตัวเดียว ไม่เช็คว่าความเงียบก่อนหน้านั้นนานแค่ไหน — `reconcile()`
+ในเอกสารนี้ต้องปิดทั้งสองช่องพร้อมกัน
+
+---
+
+### 2. (a) นิยาม "stale inside" และค่า K
+
+**นิยาม:** region หนึ่งถือว่า **stale** เมื่อเข้าเงื่อนไขข้อใดข้อหนึ่งใน 2 ข้อนี้
+(แยกกันโดยสิ้นเชิง ไม่ใช่เงื่อนไขเดียวกัน):
+
+| เงื่อนไข | ความแน่นอน | เหตุผล |
+|---|---|---|
+| **1. `store.isInside(id) == true` แต่ `store.storedElapsedTimesAreFromThisBoot() == false`** | **แน่นอน — ไม่ต้องใช้ K เลย** | เวลาแบบ `elapsedRealtime` ที่เก็บไว้มาจากคนละรอบบูต เทียบกับ `now` ไม่ได้อยู่แล้ว (`BackgroundRegionStore.kt`, ฟังก์ชัน `storedElapsedTimesAreFromThisBoot`) — นี่คือความแน่นอนระดับเดียวกับสาขา `bootMismatch` ที่ `onExitAlarm` มีอยู่แล้ว (`BackgroundRegionMonitor.kt:448-467`) ไม่ใช่การประมาณ |
+| **2. `store.isInside(id) == true` และ boot token ตรงกัน และ `now − lastSeenElapsedMillis > exitTimeoutSeconds × K`** | **ความน่าจะเป็น — ต้องเลือก K** | นี่คือหัวใจของหัวข้อนี้ |
+
+**ทำไมใช้ `now − lastSeenElapsedMillis` ไม่ใช่ `now − scheduledExitAlarmElapsedMillis`:**
+ค่าหลังบอกแค่ว่า "เราขอให้นาฬิกาปลุกดังตอนไหน" ซึ่งปนสัญญาณของการ batching ของ
+`AlarmManager` เข้าไปด้วย (ADR-15 หัวข้อ 1) ส่วน `lastSeenElapsedMillis` คือความจริง
+ล้วน ๆ ว่า "เห็น beacon ครั้งสุดท้ายเมื่อไร" ซึ่งเป็นค่าเดียวกับที่ `onExitAlarm` เอง
+ใช้ตัดสิน (`BackgroundRegionMonitor.kt:469`) — `reconcile()` ต้องใช้ตรรกะเดียวกัน
+กับเส้นทางที่มีอยู่แล้ว ไม่ใช่ประดิษฐ์เกณฑ์คู่ขนานที่อาจให้คำตอบขัดกัน
+
+**ค่า K ที่เลือก: K = 10** (threshold เริ่มต้น = `30s × 10 = 300s = 5 นาที`
+เมื่อ `exitTimeoutSeconds` เป็นค่าเริ่มต้น — K เป็นตัวคูณ ไม่ใช่ค่าคงที่ตายตัว
+จึงขยับตามค่าที่ผู้ใช้ SDK ตั้งเองด้วย)
+
+**ข้อมูลที่ใช้ตัดสิน (เรียงจากยืนยันได้มากไปน้อย):**
+
+| แหล่ง | ค่า | น้ำหนัก |
+|---|---|---|
+| `docs/test-data/2026-09-01_android_overnight_region_flapping.log` (ADR-15 หัวข้อ 5) — **ยืนยันแล้ว มีไฟล์ในคลัง** | p95 ความเงียบที่วัดได้ (ขอบล่าง): 1 น 36 วิ (doze=false) / 1 น 51 วิ (doze=true) · **สูงสุด: 1 น 36 วิ (doze=false) / 2 น 50 วิ (doze=true)** | สูง — เป็นขอบล่างของ "ความเงียบปกติที่สุดขั้ว" จากคืนจริง |
+| ข้อมูลที่ระบุมาในโจทย์งานนี้โดยตรง ("exit ปกติมาถึงที่ 43-68 วินาที เมื่อ timeout=30" · "alarm ช้าได้ถึง 38 วินาทีในเบื้องหลัง") | 43-68s / +38s | **ยังไม่ยืนยันในเซสชันนี้** — ค้นทั้ง repo แล้ว **ไม่พบไฟล์ log ที่เก็บตัวเลขนี้ไว้** (`grep` `docs/test-data/`, `docs/test-checklists/` ไม่เจอ) รับมาเป็นข้อมูลที่ผู้สั่งงานให้ ไม่ใช่สิ่งที่ตรวจสอบย้อนกลับได้เองในรอบนี้ — บันทึกไว้ตรง ๆ ตามกติกาห้ามเดา ไม่ปัดตกและไม่ยืนยันเกินจริง |
+| App Standby Buckets — official ([developer.android.com/topic/performance/appstandby](https://developer.android.com/topic/performance/appstandby), ดึง 4 ก.ย. 2026) | "**Android 9 (API level 28) and later support App Standby Buckets.**" · "**If an app is in the rare bucket, the system imposes strict restrictions on its ability to run jobs and trigger alarms.**" · bucket `restricted`: "**Your app can invoke one alarm per day.**" | สูง — official first-party — **ยืนยันว่าเพดานบนของความหน่วงไม่ใช่แค่ "ระดับชั่วโมง" แต่เป็นระดับ 1 ครั้ง/วัน** ซึ่งตรงกับขนาดของช่องว่าง 14 ชั่วโมงที่เจอจริง |
+
+**เหตุผลของ K=10 (threshold=5 นาที):**
+
+1. **เผื่อขอบเหนือขอบบนที่วัดได้จริงและยืนยันแล้ว (ADR-15)** — 2 น 50 วิ (170s) ×
+   ~1.76 = คือ margin ที่ threshold 300s ให้ แปลว่า reconcile() **จะไม่ตัดสิน
+   ว่า stale** ในทุกเคสที่วัดได้จริงจากคืน 1 ก.ย. 2026 แม้แต่เคสที่แย่ที่สุด —
+   ไม่สร้าง false positive กับข้อมูลที่มีอยู่แล้วในคลัง
+2. **ใช้ค่าเดียวกับที่ทีมเคยตัดสินใจแล้วสำหรับปัญหาโครงสร้างเดียวกัน** — ADR-11
+   หัวข้อ 7 (session merge) และ ADR-15 หัวข้อ 5 ("เผื่อขอบ = 5 นาที ... ใช้ได้พอดี
+   กับทั้งสองไฟล์") ต่างเลือก 5 นาทีเป็นขอบสำหรับ "ความเงียบที่นานเกินกว่าจะเป็น
+   สัญญาณแกว่งปกติ" อยู่แล้ว — เอกสารนี้ **ใช้ค่าเดิมซ้ำแทนการประดิษฐ์ค่าที่สาม**
+   เพื่อไม่ให้ระบบทั้งหมดมีเกณฑ์ "5 นาทีๆ ที่ไม่เท่ากัน" กระจายอยู่หลายที่
+3. **เทียบกับเพดานของ App Standby bucket ที่ยืนยันแล้ว (ตาราง)** — 5 นาที
+   เทียบกับ "1 ครั้ง/วัน" ของ bucket `restricted` คือ margin ~288 เท่า — เมื่อ
+   reconcile() ถูกกระตุ้นระหว่างที่นาฬิกาปลุกจริงยังไม่ทันมาถึงเพราะติด
+   bucket ที่หน่วงระดับวัน `reconcile()` จะตัดสินว่า stale **ก่อน**เสมอ ซึ่งคือ
+   พฤติกรรมที่ตั้งใจ — นี่คือกรณีที่ตรงกับบั๊กจริงที่ต้องแก้พอดี
+
+**ราคาที่ต้องจ่าย (ต้องบันทึกตรง ๆ ไม่ใช่แค่ประโยชน์):** ถ้า `reconcile()` ถูก
+กระตุ้น (เช่น sighting แผ่วเบามาถึง หรือผู้ใช้เปิดแอป) ในช่วง **170s < ความเงียบจริง
+< 300s** — คือช่วงที่ยังไม่มีข้อมูลจริงยืนยันว่าเคยเกิดขึ้น (170s คือสูงสุดที่วัดได้
+จริง) แต่ยังอยู่ในขอบเขตที่เอกสาร `setAndAllowWhileIdle` **ไม่ปฏิเสธว่าเกิดได้**
+(ไม่มีเพดานบนที่รับประกัน — `docs/sources/android_background_ble.md` หัวข้อ 8) —
+`reconcile()` **จะยังไม่ตัดสินว่า stale** (เพราะ 170-300s ยังอยู่ใต้ threshold) และ
+ปล่อยให้รอนาฬิกาปลุกจริงต่อไป ซึ่งถ้านาฬิกาปลุกนั้นดันไม่มาจริง ๆ ผู้ใช้จะยังเห็น
+สถานะค้างต่อไปอีกจนกว่าจะมี trigger ถัดไปมาเรียก `reconcile()` ซ้ำ — **K=10 จึงลด
+ความเสี่ยง false positive แลกกับความหน่วงในการกู้สถานะที่ยังมีอยู่ในช่วงแคบ ๆ นี้**
+K ที่เล็กกว่านี้ (เช่น K=4, threshold=2 นาที) จะกู้สถานะไวกว่าแต่เข้าใกล้ขอบบนที่
+วัดได้จริง (170s) มากเกินไปจนเสี่ยง flap ปลอมที่ตัวเราเองสร้างขึ้น (รูปแบบเดียวกับ
+ที่ ADR-11 วิเคราะห์ไว้ทั้งฉบับ)
+
+⚠️ **K=10 ยังไม่ได้ทดสอบบนอุปกรณ์จริง** — เป็นค่าที่คำนวณจากข้อมูลที่มีอยู่ ไม่ใช่ค่า
+ที่วัดผลแล้วว่าใช้ได้ ต้องอยู่ใน checklist ทดสอบรอบถัดไป (ดูหัวข้อ 8)
+
+---
+
+### 3. (b) จุดเรียก `reconcile()` — ลำดับ และการรับประกัน idempotency
+
+**หลักการออกแบบ:** `reconcile()` วนตรวจ **ทุก region ใน `store.regions`** เสมอ
+(ไม่ใช่แค่ region เดียวที่เกี่ยวข้องกับ trigger ที่เรียกมัน) เพราะต้นทุนคือแค่การ
+อ่าน `SharedPreferences` สองสามคีย์ต่อ region (ถูกมาก เทียบกับ ADR-8 ที่จำกัด
+region ไว้ไม่เกิน 20 ตัว) — ทุกจังหวะที่ process ตื่นอยู่แล้วด้วยเหตุผลใดก็ตาม
+คือโอกาสถูกที่จะตรวจ region **อื่น** ที่อาจ stale อย่างเป็นอิสระไปด้วย ไม่ต้องรอ
+trigger ของ region นั้นเอง
+
+| ผู้เรียก | ตรวจ region ไหน | ลำดับเทียบกับตรรกะเดิม | เหตุผล |
+|---|---|---|---|
+| `BeaconKitAndroidPlugin.onAttachedToEngine` | ทุก region | **ก่อน** `drainQueuedBackgroundEvents()` (`BeaconKitAndroidPlugin.kt:143`) | ถ้า `reconcile()` สังเคราะห์ `exit(stale)` ขึ้นมาใหม่ ต้องถูก enqueue **ก่อน** การ drain ครั้งนี้ ไม่งั้น event ที่เพิ่งสังเคราะห์จะตกค้างรอรอบเปิดแอปครั้งถัดไป ทั้งที่มันควรไหลออกไปพร้อมคิวเดิมทันที |
+| `BeaconKitAndroidPlugin.onAttachedToActivity` | ทุก region | ไม่ตัดกับ `HostProcessInfo.markForeground()` (`:201`) — ทำก่อน/หลังก็ได้ | แอปขึ้น foreground คือโอกาสที่ CPU ตื่นแน่นอน แม้ผู้ใช้จะไม่ได้เดินเข้าใกล้ beacon เลยก็ตาม |
+| `BeaconScanReceiver.onReceive` → ก่อนเรียก `BackgroundRegionMonitor.onSighting` | เฉพาะ region ที่ได้ผลสแกน | **ก่อน** ตรรกะเดิมทั้งหมดของ `onSighting` | ให้ `onSighting` เห็น `store.isInside()` ที่ถูกกู้แล้วก่อนเช็ค `wasInside` — **`onSighting` เดิมไม่ต้องแก้ตรรกะภายในเลยแม้แต่บรรทัดเดียว** แค่เพิ่มการเรียก `reconcile()` เป็นขั้นแรกก่อนโค้ดเดิมทั้งหมด ถ้า sighting นี้เป็นการกลับเข้ามาใหม่จริง ๆ `reconcile()` จะพลิก `inside` เป็น `false` ให้ก่อน แล้ว `onSighting` เดิมจะเห็น `wasInside=false` เองโดยธรรมชาติและยิง `enter` ให้เองตามโค้ดที่มีอยู่แล้ว |
+| `RegionExitAlarmReceiver.onReceive` → ก่อนเรียก `BackgroundRegionMonitor.onExitAlarm` | **ทุก region** ไม่ใช่แค่ region ของ alarm ที่ดังนี้ | ก่อนตรรกะเดิมของ `onExitAlarm` | ใช้จังหวะที่ process ถูกปลุกอยู่แล้ว (แม้จะปลุกเพื่อ region อื่น) ตรวจ region ที่เหลือไปด้วยในคราวเดียว — สำคัญเพราะนี่คือกรณีตรงกับบั๊กจริง: ถ้า 2 region ถูกเฝ้าพร้อมกันและนาฬิกาปลุกของ region A ยังทำงานปกติแต่ของ region B ถูกระงับ B จะไม่มีทาง reconcile ได้เลยถ้าไม่อาศัยจังหวะที่ A ปลุก process ขึ้นมา |
+| `BootCompletedReceiver.onReceive` (`BOOT_COMPLETED` / `LOCKED_BOOT_COMPLETED`) | — ไม่ต้องเรียกแยก | `restoreAfterBoot()` เดิมล้างสถานะไปแล้วโดยธรรมชาติ | `storedElapsedTimesAreFromThisBoot()` จะเป็น `false` เสมอทันทีหลังบูตจริง ตรงกับเงื่อนไขข้อ 1 ของนิยาม stale ในหัวข้อ 2 อยู่แล้ว — เส้นทางเดิมถูกต้องอยู่แล้วสำหรับเคสนี้เฉพาะ ระบุไว้เพื่อความชัดเจน ไม่ใช่จุดที่ต้องเพิ่มโค้ด |
+| `BootCompletedReceiver.onReceive` (`ACTION_MY_PACKAGE_REPLACED`) | ทุก region | **ก่อน** `clearRegionStates()`/`registerScans()` ของ `restoreAfterBoot()` | **บั๊กแฝงที่พบระหว่างออกแบบรอบนี้ แยกจากบั๊กหลักแต่เกี่ยวเนื่องกันโดยตรง:** `MY_PACKAGE_REPLACED` ไม่ใช่การรีบูต — `SystemClock.elapsedRealtime()` **ไม่รีเซ็ต** ตอนแอปอัปเดต (boot token ยังตรงกันได้ตามปกติ) การเรียก `restoreAfterBoot()` ตรง ๆ แบบที่โค้ดปัจจุบันทำอยู่ (`BootCompletedReceiver.kt`) จึงเรียก `clearRegionStates()` แบบไม่มีเงื่อนไข ซึ่ง**ทิ้งสถานะ `inside=true` ที่ยังถูกต้องอยู่จริงไปเงียบ ๆ โดยไม่มีการรายงาน exit เลย** — ต้องเรียก `reconcile()` ก่อนเพื่อให้ `exit`/`exit(stale)` ที่ควรได้ (ถ้ามี) ถูกยิงออกไปก่อนจะถูกล้างทิ้ง |
+
+**ทำไม `reconcile()` ต้องไม่แก้ตรรกะของ `onSighting`/`onExitAlarm` เอง:**
+ออกแบบให้เป็น **ขั้นตอนก่อนหน้า (pre-step)** ที่แยกเป็นฟังก์ชันของตัวเอง แทนที่จะ
+เขียนเงื่อนไข staleness ปนเข้าไปในทั้งสองฟังก์ชันเดิม — เหตุผล: `onSighting` และ
+`onExitAlarm` มี unit test และพฤติกรรมที่ตรวจสอบแล้ว (แม้จะยัง `unverified` บน
+เครื่องจริงตาม ADR-14 หัวข้อ 6) การไม่แตะตรรกะเดิมเลยทำให้ diff ของรอบ implement
+ถัดไปเล็กและตรวจสอบง่าย และทำให้ `reconcile()` ทดสอบแยกเป็น unit ของตัวเองได้
+โดยไม่ต้อง mock ทั้ง state machine ของ enter/exit
+
+#### 3.1 การรับประกัน idempotency — เรียกซ้ำจากหลายทางพร้อมกันต้องไม่ยิง event ซ้ำ
+
+สามชั้นทำงานร่วมกัน ไม่ใช่ชั้นเดียว:
+
+1. **สถานะบนดิสก์คือความจริงหนึ่งเดียว ไม่ใช่ตัวแปรในหน่วยความจำ** — `reconcile()`
+   อ่าน `store.isInside(id)` เป็นเงื่อนไขแรกเสมอ (เหมือนที่ `onExitAlarm` ทำอยู่แล้ว
+   ที่ `BackgroundRegionMonitor.kt:440`: `if (!store.isInside(regionIdentifier))
+   return`) หลังจากรอบแรกที่พลิกเป็น `markOutside()` สำเร็จ (คือ `commit()` แบบ
+   synchronous ตามที่ `BackgroundRegionStore` ใช้ทั้งไฟล์ ไม่ใช่ `apply()`) ทุกการ
+   เรียกซ้ำถัดไปจะอ่านเจอ `false` ทันทีและ**คืนออกโดยไม่ทำอะไรเลย** — นี่คือกลไก
+   หลักที่ทำให้ปลอดภัยที่จะเรียกจากหลายจุดตามตารางข้างบน
+2. **critical section ระดับ process** — เนื่องจากผู้เรียกในตารางข้างบนอาจทำงานคน
+   ละเธรด (`BroadcastReceiver.onReceive` มาจาก binder thread ส่วน
+   `onAttachedToEngine`/`onAttachedToActivity` มาจาก main thread ของ Flutter
+   engine) มี TOCTOU race ที่เป็นไปได้จริงถ้าสองเธรดอ่าน `isInside==true` พร้อมกัน
+   ก่อนที่ฝ่ายแรกจะ `commit()` เสร็จ — ต้องครอบขั้นตอน "อ่าน → ตัดสิน → เขียน" ของ
+   `reconcile()` ด้วย critical section ระดับ `object BackgroundRegionMonitor`
+   (เช่น `synchronized` บนอ็อบเจกต์ lock เดียว) **นี่ไม่ใช่รูปแบบใหม่ที่ไม่เคยมี
+   บรรทัดฐาน** — `BluetoothLeScanner.java` เองก็ครอบ `mLeScanClients` ด้วย
+   `synchronized` block สำหรับปัญหาชนิดเดียวกัน (`doStartScan`,
+   `~/Library/Android/sdk/sources/android-37.0/android/bluetooth/le/BluetoothLeScanner.java:319`)
+   — โค้ดของแอปนี้ **ยังไม่เคยใช้ `synchronized` เลยสักที่** (ตรวจแล้วในเซสชันนี้)
+   จึงเป็นรูปแบบใหม่ของโค้ดฐานนี้ แต่ไม่ใช่รูปแบบใหม่ของแพลตฟอร์ม — cross-process
+   lock **ไม่จำเป็น** เพราะแอปนี้มี process เดียวตามที่ `BackgroundRegionStore`
+   บันทึกไว้แล้วสำหรับ `sightingCount` (เหตุผลเดียวกันเป๊ะ)
+3. **การเขียนสถานะ+เหตุการณ์ต้องเป็น `commit()` เดียว ไม่ใช่สองครั้งต่อกัน** —
+   ⚠️ **จุดที่ต้องแก้ไปพร้อมกัน แม้จะไม่ใช่บั๊กที่โจทย์ระบุตรง ๆ:** เส้นทางเดิมของ
+   `onExitAlarm` เรียก `store.markOutside(regionIdentifier)` (คอมมิตหนึ่งครั้ง)
+   แล้วค่อยเรียก `emit(...)` ซึ่งถ้าไม่มี Flutter engine จะไปเรียก
+   `store.enqueueEvent(event)` (คอมมิตอีกครั้งแยกกัน) — ถ้า process ถูกระบบฆ่า
+   ระหว่างสองคอมมิตนี้พอดี สถานะจะถูกพลิกเป็น `outside` สำเร็จแล้ว **แต่ event
+   ไม่เคยถูกบันทึกเลย** และเพราะ `isInside` กลายเป็น `false` แล้ว การเรียก
+   `reconcile()`/`onExitAlarm`/`onSighting` ซ้ำในอนาคตจะไม่มีวันรู้ว่าเคยมี exit
+   ที่ควรรายงานแต่หายไป — เป็นความเสี่ยงชนิดเดียวกับบั๊กหลักของเอกสารนี้เป๊ะ เพียง
+   แต่เกิดจากคนละสาเหตุ (process ตายกลางคัน ไม่ใช่นาฬิกาปลุกไม่มา) **ข้อกำหนด
+   สำหรับ `reconcile()`:** การพลิกสถานะ (`markOutside`) กับการทำให้ event รอด
+   (อย่างน้อยที่สุดคือ enqueue ลงดิสก์) **ต้องอยู่ใน `commit()` เดียวกัน** ตาม
+   รูปแบบที่ `recordSighting()` วางไว้แล้วในไฟล์เดียวกัน (คอมเมนต์ของมันเอง:
+   "ต้องเป็นการเขียนครั้งเดียว ไม่ใช่หลายครั้งต่อกัน") — ส่วนการเรียก `observer`
+   (เขียนไฟล์หลักฐานฝั่ง host app) และการส่งเข้า `flutterSink` ยังคงเป็น
+   best-effort ตามเดิม (`runCatching`) เพราะทั้งสองทางนั้นมีทางสำรอง (ไฟล์หลักฐาน
+   เป็นแค่ log ไม่ใช่ source of truth · `flutterSink` มีคิวดิสก์เป็น fallback
+   อยู่แล้ว) มีแค่ "เขียนสถานะแต่ลืม enqueue" เท่านั้นที่ไม่มีทางสำรองเลย
+
+---
+
+### 4. (c) รูปแบบ event ของ `exit` ที่มาจาก `reconcile`
+
+**เลือก: `rawSignals` (คีย์ใหม่) ไม่ใช่ `conclusion`**
+
+เหตุผล: `conclusion` เป็นฟังก์ชันบริสุทธิ์ของ `ProcessState`
+(`foreground`/`background`/`relaunchedFromTerminated` เท่านั้น — ดู
+`ExampleApplication.kt:59` ที่ set `conclusion = processState.conclusion` ตรง ๆ)
+มันตอบคำถาม **"แอปอยู่ในสถานะอะไรตอนเขียนบรรทัดนี้"** ซึ่งเป็นคำถามคนละมิติกับ
+**"exit นี้มาจากเส้นทางไหน"** การยัดค่าที่สามเข้าไปใน `conclusion` จะ:
+
+1. ทำลาย invariant ที่ ADR-14 หัวข้อ 4.2 เขียนกำกับไว้ตรง ๆ ว่า `conclusion` ของ
+   บรรทัด `enter`/`exit`/`selftest` มาจาก `ProcessState` เท่านั้น
+2. ชนกับตรรกะที่มีอยู่แล้วใน `tool/analyze_region_log.dart:364-365` ที่เช็ค
+   `e.conclusion == 'relaunchedFromTerminated'` เพื่อระบุ B5 — การเติมค่าที่สาม
+   เข้าไปในฟิลด์เดียวกันจะทำให้ enum ที่ปิดอยู่แล้ว (3 ค่า) ต้องเปิดใหม่ และเสี่ยง
+   ทำให้ตรรกะเดิมตีความผิดถ้าค่าใหม่บังเอิญไปกระทบเงื่อนไข equality ที่มีอยู่
+
+`rawSignals` เป็น free-form key=value string ที่ทั้ง `tool/analyze_region_log.dart`
+(อ่านทั้งคอลัมน์เป็น string เดียวแล้วค่อย regex เฉพาะคีย์ที่รู้จัก — ดู `uptimeSeconds`
+getter) และฝั่ง native (สร้างด้วย `buildString { append(...) }` ต่อกันเรื่อย ๆ) ต่าง
+ก็ทนต่อการเพิ่มคีย์ใหม่อยู่แล้วโดยไม่ต้องแก้ parser — ตรงกับรูปแบบที่ ADR-15 ข้อ จ.
+ใช้เพิ่ม `sinceLastSeenMs`/`scheduledAtElapsed`/`firedAtElapsed` มาแล้วครั้งหนึ่ง
+
+**คีย์ที่เพิ่ม (เฉพาะบรรทัด `exit`):** `exitReason=<alarm|staleReconcile|staleBootMismatch>`
+วางต่อท้ายชุด `sinceLastSeenMs=... scheduledAtElapsed=... firedAtElapsed=...` ที่
+มีอยู่แล้ว (`exitTimingField`) — `exit` ที่มาจาก `onExitAlarm` ปกติได้ `alarm`,
+`exit` ที่มาจาก `reconcile()` ตามเงื่อนไขข้อ 2 ของนิยาม stale (หัวข้อ 2) ได้
+`staleReconcile`, และตามเงื่อนไขข้อ 1 (boot mismatch) ได้ `staleBootMismatch` —
+**ให้ค่าเริ่มต้นเป็น `alarm` เสมอ ไม่ใช่ปล่อยว่าง** เพื่อให้บรรทัดเก่าที่ยังไม่มี
+คีย์นี้ (ก่อน implement รอบนี้) แยกออกจากบรรทัดใหม่ได้ด้วยการเช็ค "มีคีย์นี้หรือไม่"
+ล้วน ๆ โดยไม่ต้องเดา — ตรงกับรูปแบบ `n/a` ที่ `exitTimingField` วางไว้แล้วสำหรับ
+สาขา boot-mismatch เดิม
+
+**`timestamp` ของบรรทัดนี้ = เวลาที่ `reconcile()` ตัดสิน (`now`) ไม่ใช่เวลาย้อนหลัง
+ไปยังตอนที่ silence เริ่มต้น** — ตรงกับหลักการเดิมของทุก event ในระบบนี้ (event
+timestamp = เวลาที่ native บันทึก ไม่ใช่เวลาที่เหตุการณ์ "ควรจะ" เกิด ดูคอมเมนต์ของ
+`AndroidBackgroundRegionEvent.timestamp` ฝั่ง Dart) **ส่วน `sinceLastSeenMs` ต้อง
+เป็นค่าจริงที่คำนวณจาก `now − lastSeenElapsedMillis` เดิม ซึ่งในเคส stale จะเป็น
+เลขหลักสิบล้าน ms ได้จริง** (14 ชั่วโมง = 50,400,000 ms) — ตรวจแล้วว่าชนิดข้อมูล
+รองรับ: ฝั่ง Kotlin `exitSinceLastSeenMillis: Long?` (`BackgroundRegionStore.kt`)
+รองรับถึง ~9.2×10¹⁸ ไม่มีปัญหา ฝั่ง Dart **ยังไม่มีโมเดลที่ parse ฟิลด์นี้เลยในตอนนี้**
+(`AndroidBackgroundRegionEvent.tryParse` ใน `android_background_region.dart` อ่าน
+แค่ `regionIdentifier`/`state`/`timestampMillis`/`fromBackgroundProcess` — สาม
+ฟิลด์เวลาที่ ADR-15 ข้อ จ. เพิ่มไว้ยังอยู่แค่ใน `toMap()` ของ native และถูกใช้ตรง
+โดยโค้ด native ของ example app เท่านั้น ไม่เคยไหลผ่าน parser ฝั่ง Dart) — ถ้าจะ
+เพิ่ม `exitReason` ต่อจากนี้ให้เพิ่มในจุดเดียวกัน (`toJson`/`toMap` ฝั่ง Kotlin) แต่
+**การเปิดให้ `AndroidBackgroundRegionEvent.tryParse` อ่านฟิลด์กลุ่มนี้เป็นการตัดสินใจ
+ที่ยังไม่ได้ทำในรอบนี้** — บันทึกเป็นคำถามเปิดไว้ (ไม่ใช่ scope ของบั๊กหลัก) เพราะ
+ข้อกำหนดของโจทย์ ("ผู้ใช้ SDK ต้องได้ `exit(stale)` ตามด้วย `enter`") ต้องการแค่ว่า
+**ลำดับและจำนวน event ที่ไหลผ่าน `EventChannel` ต้องถูก** ไม่ได้บังคับว่าต้องมี
+ฟิลด์บอกเหตุผลไหลไปถึง Dart ด้วย — ถ้า Dart `int` ที่ VM ใช้ (64-bit) รองรับเลข
+หลักสิบล้านสบาย ๆ อยู่แล้ว (และแม้จะ compile เป็น JS สักวัน เลขหลักสิบล้านยังอยู่
+ในขอบเขต safe-integer ของ `double` ที่ 2^53) จึงไม่มีความเสี่ยงเรื่องขนาดตัวเลขเลย
+ถ้าวันหนึ่งมีการต่อสายให้ Dart อ่านฟิลด์นี้จริง
+
+**ลำดับที่ `onSighting` ต้องทำเมื่อเจอ stale — ห้ามกลืน `enter`:**
+
+ตามที่ออกแบบไว้ในหัวข้อ 3 (`reconcile()` เป็น pre-step แยกต่างหาก) ลำดับที่
+`BeaconScanReceiver.onReceive` ต้องทำคือ:
+
+1. เรียก `reconcile()` สำหรับ region ที่ได้ผลสแกน **ก่อน**
+   — ถ้าพบว่า stale: `reconcile()` เขียน `commit()` เดียว (หัวข้อ 3.1 ข้อ 3) ที่
+   พลิก `inside → false` พร้อมกับทำให้ event `exit` (`exitReason=staleReconcile`
+   หรือ `staleBootMismatch`) รอดแน่นอน แล้ว `reconcile()` จบการทำงาน — **ยังไม่
+   เรียก `onSighting` เลยในขั้นนี้**
+2. เรียก `BackgroundRegionMonitor.onSighting(...)` ตามเดิม **โดยไม่ต้องแก้โค้ด
+   ภายในเลย** — ฟังก์ชันนี้จะอ่าน `store.isInside(id)` เป็น `wasInside` สดใหม่
+   (จากดิสก์ที่เพิ่งถูก `reconcile()` แก้) ได้ `false` เพราะเพิ่งถูกพลิกไปในขั้นที่
+   1 → เข้าเงื่อนไข `if (!wasInside)` (`BackgroundRegionMonitor.kt:415`) ตาม
+   ตรรกะที่มีอยู่แล้ว → ยิง `enter` ให้เองตามปกติ
+
+ผลคือผู้ใช้ SDK ได้รับ **สอง event เรียงกัน** ในการเรียกครั้งเดียวของ
+`BeaconScanReceiver.onReceive`: `exit(exitReason=staleReconcile)` ตามด้วย
+`enter` — ตรงตามข้อกำหนดของโจทย์เป๊ะ โดยที่ `onSighting` เดิมไม่ต้องรู้จักคำว่า
+"stale" เลยแม้แต่น้อย (แยกความรับผิดชอบสะอาด: `reconcile()` ดูแลอดีต, `onSighting`
+ดูแลปัจจุบัน)
+
+---
+
+### 5. (d) การเรียก `startScan` ซ้ำใน `reconcile` — ปลอดภัยหรือไม่ + ผลของ stopped state
+
+**คำถามที่ต้องตอบ: เรียก `startScan(filters, settings, PendingIntent)` ซ้ำด้วย
+`PendingIntent` เดิม (เทียบเท่าตาม `FLAG_UPDATE_CURRENT`) ปลอดภัยหรือไม่**
+
+ตรวจซอร์สจริงในเครื่องก่อนเอกสารเว็บ (CONTRIBUTING ข้อ 5) —
+`~/Library/Android/sdk/sources/android-37.0/android/bluetooth/le/BluetoothLeScanner.java`,
+เมธอด `doStartScan` (บรรทัด 300-362) — **อธิบายเป็นร้อยแก้วแทนการยกโค้ดมา** ตาม
+ข้อห้ามของเอกสารนี้ (หัวข้อสถานะด้านบน "ห้ามมีโค้ด Kotlin ในเอกสารนี้" ใช้กับ
+การยกโค้ดภาษาอื่นด้วยเจตนาเดียวกัน): เมธอดนี้ครอบทั้งบล็อกด้วย
+`synchronized (mLeScanClients)` แล้วแยกสองเส้นทางตามว่าพารามิเตอร์ `callback`
+เป็น `null` หรือไม่ — **เฉพาะเส้นทางที่ `callback != null`** (คือ
+`ScanCallback`-based scan) เท่านั้นที่มีเงื่อนไขเช็ค
+`mLeScanClients.containsKey(callback)` แล้วคืนค่า
+`ScanCallback.SCAN_FAILED_ALREADY_STARTED` ทันทีถ้าเจอว่าลงทะเบียนซ้ำ (บรรทัด
+319-323) — **เส้นทางที่ `callback == null`** (คือ `PendingIntent`-based scan
+ซึ่งตรงกับที่ `BackgroundRegionMonitor.registerScans` ใช้อยู่ บรรทัด 353-358)
+**ไม่ผ่านเงื่อนไขเช็คซ้ำนั้นเลย** โค้ดเรียก `scan.registerPiAndStartScan(...)`
+ตรงไปยัง Bluetooth stack ผ่าน AIDL (`IBluetoothScan`) ทันทีไม่มีเงื่อนไขใด ๆ
+ก่อนหน้า
+
+**สิ่งที่ยืนยันไม่ได้:** พฤติกรรมฝั่ง server (`registerPiAndStartScan`
+implementation) ว่าจะปฏิบัติกับ `PendingIntent` ที่ `.equals()` กับตัวที่ลงทะเบียน
+ไว้แล้ว (เพราะ `scanPendingIntent(..., create=true)` ใช้ `FLAG_UPDATE_CURRENT` +
+data URI/requestCode เดิม — `BackgroundRegionMonitor.kt:296`) เป็น **"แทนที่ของเดิม
+แบบ idempotent"** หรือ **"สร้าง registration ซ้ำซ้อน"** — โค้ดของ
+`IBluetoothScan`/`registerPiAndStartScan` อยู่ใน Bluetooth APEX module **ไม่ได้
+แจกมากับ Android SDK sources** จึงอ่านยืนยันในเครื่องไม่ได้ ตรงกับที่ ADR-14
+หัวข้อ 2.1 บันทึกไว้แล้วสำหรับกรณี `PendingIntent.send()` ด้วยเหตุผลเดียวกัน
+
+**หลักฐานบุคคลที่สาม (น้ำหนักต่ำกว่าเอกสารทางการ — บันทึกไว้เพื่อความระมัดระวัง
+ไม่ใช่เพื่อสรุปแทนเอกสาร):** GitHub issue
+[`NordicSemiconductor/Android-Scanner-Compat-Library#58`](https://github.com/NordicSemiconductor/Android-Scanner-Compat-Library/issues/58)
+— ผู้รายงาน `paulpv`: *"This means that the code never actually stops any
+PendingIntent started scans. The `pendingIntent` passed to `stopScan` must be
+the exact same one that was passed to `startScan`."* พร้อมอาการที่พบจริง:
+"you can usually only start about 28, max of 32, scans before the OS blocks
+all future scans" — เป็นคนละเงื่อนไขกับคำถามของเรา (เคสนั้นคือ PendingIntent
+**ไม่ตรงกัน** ระหว่าง start/stop ไม่ใช่ start ซ้ำด้วย PendingIntent ที่เท่ากัน)
+แต่ยืนยันข้อสังเกตร่วมกันว่า **ระบบไม่ได้ป้องกันความซ้ำซ้อนของ PendingIntent scan
+ให้อัตโนมัติ** ผู้เรียกต้องรับผิดชอบความถูกต้องเอง — ไม่พบคำตอบจาก Google/AOSP
+maintainer ใน issue นี้
+
+**ผลต่อการตัดสินใจของ `reconcile()`:** เพราะไม่มีหลักฐานยืนยันว่าเรียกซ้ำ
+ปลอดภัย 100% **`reconcile()` ต้องไม่เรียก `startScan()`/`registerScans()` เป็น
+มาตรการป้องกันไว้ก่อน** ในทุกครั้งที่ทำงาน — จำกัดตัวเองไว้แค่การอ่าน/แก้สถานะ
+บนดิสก์ (`inside`, `lastSeenElapsedMillis` → ตัดสิน stale → `markOutside` +
+enqueue event) เท่านั้น เส้นทางเดียวที่ยังเรียกลงทะเบียนสแกนซ้ำคือเส้นทางที่มี
+หลักฐานพิสูจน์แล้วจริง ๆ ว่าการลงทะเบียนหายไป — คือ boot จริง
+(`storedElapsedTimesAreFromThisBoot()==false` ผ่าน `BootCompletedReceiver`
+เท่านั้น) **ไม่ขยายไปเรียกจากทุกจุดที่ `reconcile()` ถูกเรียก**
+
+**สรุปสิ่งที่เอกสารระบุเรื่อง stopped state / force-stop:**
+
+- `ApplicationInfo.java:411-428` (`FLAG_STOPPED`, ยกมาแล้วใน ADR-14 หัวข้อ 1.4):
+  ระบุว่าแอปที่ถูก force-stop "**will not receive implicit broadcasts** unless
+  the sender specifies `FLAG_INCLUDE_STOPPED_PACKAGES`" — พูดถึง**การรับ
+  broadcast** เท่านั้น
+- `AlarmManager.java` (ซอร์สทั้งไฟล์) — **ไม่มีคำว่า "stopped" หรือ "force-stop"
+  แม้แต่ครั้งเดียว** (ตรวจด้วย `grep` ทั้งไฟล์) — ตรงกับที่ ADR-14 หัวข้อ 1.4
+  บันทึกไว้แล้วว่า "ยังไม่ยืนยันเอง" ว่าการลงทะเบียนใน Bluetooth stack (หรือ
+  alarm ที่ตั้งไว้ใน `AlarmManager`) ถูกล้างทิ้งจริงเมื่อ force-stop หรือแค่
+  **หยุดส่ง broadcast ไปหา** — สองอย่างนี้ต่างกันในทางปฏิบัติ (ถ้าแค่หยุดส่ง
+  การลงทะเบียนอาจยังอยู่และกลับมาทำงานได้เองถ้าแอปถูกเปิดโดยไม่ต้องลงทะเบียนใหม่
+  ถ้าถูกล้างทิ้งจริงต้องลงทะเบียนใหม่เสมอ) — **ค้นรอบนี้ก็ยังหาคำตอบไม่ได้เช่นกัน**
+- `docs/sources/android_background_ble.md` มีคำถามพี่น้องค้างอยู่ (ท้ายไฟล์ หัวข้อ
+  "หาแหล่งอ้างอิงไม่ได้"): "เมื่อ Bluetooth ถูกปิด ระบบยกเลิกการลงทะเบียน
+  `startScan(..., PendingIntent)` ทิ้งหรือแค่หยุดส่งผล — หาแหล่งอ้างอิงไม่ได้"
+  — ค้นรอบนี้ (โฟกัสที่ force-stop แทนที่จะเป็น Bluetooth off) **ก็ยังหาคำตอบ
+  ไม่ได้เช่นกัน** เป็นคำถามคนละมิติของปัญหาเดียวกัน ("การลงทะเบียนหายไปเงียบ ๆ
+  ได้จากหลายสาเหตุ แต่ไม่มีเอกสารระบุว่าสาเหตุไหนทำให้หายจริงกับแค่ทำให้เงียบ")
+  — **ทั้งสองข้อยังคงสถานะ "หาแหล่งอ้างอิงไม่ได้" ต่อไป ไม่ได้ปิดในรอบนี้**
+
+⚠️ **ผลต่อ `reconcile()` โดยตรง:** เพราะไม่รู้ว่า force-stop ล้าง registration
+ทิ้งจริงหรือไม่ `reconcile()` จึงออกแบบให้ **ไม่พึ่งพาสมมติฐานเรื่องนี้เลย** — มัน
+ทำงานอยู่บนสมมติฐานเดียวที่พิสูจน์แล้ว (ความเงียบที่ยาวนานผิดปกติ = stale) ไม่ว่า
+สาเหตุที่แท้จริงของความเงียบจะเป็นนาฬิกาปลุกถูก Doze ระงับ, registration หายเงียบ ๆ,
+หรือเหตุอื่นที่ยังไม่รู้จัก — วิธีนี้ทนต่อความไม่รู้ในหัวข้อนี้ได้โดยไม่ต้องรอคำตอบ
+
+---
+
+### 6. (e) ฟิลด์ที่ต้องเพิ่มลง `rawSignals` ทุกบรรทัด
+
+**`standbyBucket=<name>`** จาก `UsageStatsManager.getAppStandbyBucket()`
+(`~/Library/Android/sdk/sources/android-37.0/android/app/usage/UsageStatsManager.java:758`)
+— ค่าที่เป็นไปได้ (จากซอร์สเดียวกัน, บรรทัด 124-175):
+`exempted`/`active`/`workingSet`/`frequent`/`rare`/`restricted`/`never`
+**ไม่พบ annotation จำกัด API level ในซอร์สที่ตรวจได้** (ซอร์สที่มีคือ
+android-37.0 ซึ่งเป็น SDK เวอร์ชันสูงมาก ไม่ได้แปลว่าเมธอดมีมาตั้งแต่ API ต่ำ) —
+หน้าเอกสาร overview ยืนยันแยกต่างหากว่า "**Android 9 (API level 28) and later
+support App Standby Buckets**"
+([developer.android.com/topic/performance/appstandby](https://developer.android.com/topic/performance/appstandby))
+ต้อง guard ด้วย `Build.VERSION.SDK_INT >= Build.VERSION_CODES.P` ก่อนเรียก
+ตามรูปแบบเดียวกับที่ `batteryOptimizationState()` guard ด้วย
+`Build.VERSION_CODES.M` อยู่แล้วในไฟล์เดียวกัน (`BackgroundEvidenceLog.kt:391`)
+— เครื่องต่ำกว่า API 28 ให้เขียน `n/a`
+
+**`lightIdle=<true|false>`** — ⚠️ **แก้ไขชื่อ API ที่โจทย์ระบุมา** โจทย์อ้างถึง
+`isLightDeviceIdleMode` แต่ตรวจซอร์สจริง
+(`~/Library/Android/sdk/sources/android-37.0/android/os/PowerManager.java:2676-2686`)
+พบว่าเมธอดชื่อนั้น **`@Deprecated` + `@hide` + `@UnsupportedAppUsage(maxTargetSdk
+= Build.VERSION_CODES.S)`** — ไม่ใช่ public API ที่เรียกได้จากแอปทั่วไปตั้งแต่
+Android S เป็นต้นไป เมธอด public ตัวจริงที่ยังไม่ deprecate คือ
+**`PowerManager.isDeviceLightIdleMode()`** (บรรทัด 2657-2668):
+
+> "Returns true if the device is currently in light idle mode... **it will
+> return false if the device is in a long-term idle mode but currently
+> running a maintenance window where restrictions have been lifted.**"
+
+**`doze=<true|false>` (ฟิลด์เดิม, `isDeviceIdleMode()`) มีประโยคเดียวกันเป๊ะ**
+(`PowerManager.java:2637-2649`):
+
+> "Returns true if currently in active device idle mode, else false... **it
+> will return false if the device is in a long-term idle mode but currently
+> running a maintenance window where restrictions have been lifted.**"
+
+**นี่คือคำต่อคำที่ต้องใช้เป็นข้อความในหัวข้อ §0.1 ของ
+`docs/test-checklists/android_background_runbook.md`** (ออกแบบไว้ให้
+`beacon-qa` เป็นคนเขียนจริงในขั้นที่ 3 — ไม่แก้ไฟล์นั้นในรอบนี้ตามข้อห้ามของ
+โจทย์): ต้องระบุว่า **`doze=false` ระหว่าง maintenance window ไม่ได้แปลว่า
+เครื่องไม่ได้อยู่ใน Doze** — ตามคำต่อคำของ `isDeviceIdleMode()` เอง อาการ
+"restrictions ถูกยกเว้นชั่วคราวระหว่าง maintenance window" กับ "ออกจาก Doze
+แล้วจริง ๆ" **แยกไม่ออกจากค่านี้ค่าเดียว** ผู้ทดสอบต้องดูควบคู่กับความยาวเวลาที่
+เครื่องไม่มีการโต้ตอบ (§0.1 ข้อ 9 เดิม เรื่องถอดสาย USB) ไม่ใช่เชื่อ `doze=false`
+ว่าปลอดภัยเสมอ
+
+**ประเมินร่องรอยของ "alarm ตื่นแต่ไม่ได้ประกาศ exit" — ควรเพิ่ม:**
+
+ตามที่โจทย์ชี้ไว้ ปัจจุบัน `exitTimingField` มีเฉพาะบรรทัด `exit` เท่านั้น (ADR-15
+ข้อ จ.) สาขาที่ `onExitAlarm` **ตัดสินใจเลื่อนนาฬิกาปลุกออกไปแทนการประกาศ exit**
+(`BackgroundRegionMonitor.kt:469-476`: `if (sinceLastSeen < timeoutMillis) {
+... return }`) **ไม่เรียก `emit()` เลย** จึงไม่มีบรรทัด log ใด ๆ เกิดขึ้น — ตรงกับ
+ที่คืน 3-4 ก.ย. 2026 เงียบสนิท 14 ชั่วโมงโดยไม่มีร่องรอยอะไรให้ตรวจสอบย้อนหลังได้เลย
+
+**ตัดสินใจ: ควรเพิ่ม** — ใช้ค่า `event` แบบใหม่ (ไม่ใช่คอลัมน์ใหม่ ไม่กระทบ
+รูปแบบ 6 คอลัมน์คงที่) เช่น `exitAlarmDeferred` เขียนจากสาขานั้นโดยตรง — มี
+บรรทัดฐานอยู่แล้วในระบบนี้: ตาราง ADR-14 หัวข้อ 4.2 ระบุไว้แล้วว่ามีค่า `event`
+มากกว่าแค่ `enter`/`exit`/`launch` (มี `selftest` อยู่ก่อนแล้ว) —
+`tool/analyze_region_log.dart` กรอง transition ด้วย
+`e.event == 'enter' || e.event == 'exit'` (บรรทัด 364, 429-430, 561 ฯลฯ)
+เท่านั้น จึง**เพิกเฉยค่า `event` ใหม่นี้โดยอัตโนมัติ** โดยไม่ต้องแก้ parser เลย
+— `rawSignals` ของบรรทัดนี้ใช้รูปร่างเดียวกับ `exitTimingField` (`sinceLastSeenMs`
+/ `scheduledAtElapsed` ใหม่ / `firedAtElapsed`=เวลาที่ alarm ดังจริงรอบนี้) เพื่อ
+ให้อ่านได้ทันทีว่าทำไมถึงเลื่อนแทนที่จะประกาศ exit
+
+**ราคาที่ต้องจ่าย (ต้องระบุตรง ๆ):** สาขานี้ถูกออกแบบมาให้เกิดซ้ำได้หลายครั้งใน
+คืนเดียวถ้าเครื่องอยู่ใน Doze นาน (ทุกครั้งที่นาฬิกาปลุกดังแล้วเจอว่ายังไม่ครบเวลา
+จริง จะ reschedule แล้วอาจดังอีกในรอบถัดไป) — ถ้าเขียน log ทุกครั้งไม่มีเพดาน
+ไฟล์หลักฐานอาจโตเร็วผิดปกติในคืนที่มีปัญหาแบบนี้พอดี (ซึ่งเป็นคืนที่ log สำคัญ
+ที่สุด) — **ขนาด/อัตราการเขียนของ event ชนิดนี้ยังไม่ได้กำหนดเพดานในเอกสารนี้**
+บันทึกเป็นคำถามเปิดสำหรับ `flutter-dev` ตัดสินตอน implement ไม่ใช่การตัดสินใจ
+ของเอกสารสถาปัตยกรรมนี้
+
+---
+
+### 7. (f) เปิดหัวข้อ ADR-19 — ยังไม่ตัดสิน
+---
+
+### 8. สิ่งที่ยังพิสูจน์ไม่ได้จนกว่าจะทดสอบบนเครื่อง Android จริง
+
+- **K=10 (threshold 5 นาที)** — คำนวณจากข้อมูลที่มีอยู่ (ADR-15 + เอกสาร App
+  Standby official) ไม่ใช่ค่าที่วัดผลจริงแล้วว่าลด false positive ได้ตามที่
+  ออกแบบไว้ — ต้องมีรอบทดสอบที่ตั้งใจสร้างความเงียบยาวนานหลายระดับ (2-3 นาที,
+  5-10 นาที, ชั่วโมง+) แล้ววัดว่า `reconcile()` ตัดสินถูกในแต่ละระดับหรือไม่
+- **การเรียก `startScan(..., PendingIntent)` ซ้ำด้วย `PendingIntent` เดิมปลอดภัย
+  จริงหรือไม่** — เอกสาร/ซอร์สที่มียืนยันได้แค่ว่า **ฝั่ง SDK ไม่กันให้** ส่วน
+  ฝั่ง Bluetooth stack จริงทำอะไรยังไม่รู้ — แต่ข้อนี้ไม่กระทบการ implement ตาม
+  ADR-18 เพราะ `reconcile()` ถูกออกแบบไม่ให้เรียกซ้ำเลยตามหัวข้อ 5 ไม่ต้องรอ
+  คำตอบข้อนี้ก็ implement ได้
+- **`synchronized` critical section ตามหัวข้อ 3.1 ข้อ 2** — ยังไม่เคยมีในโค้ดฐาน
+  นี้เลย ต้องมี unit test ที่จำลอง concurrent call จริง (สอง thread เรียก
+  `reconcile()` พร้อมกันสำหรับ region เดียวกัน) เพื่อยืนยันว่า event ยิงแค่ครั้ง
+  เดียวจริง ก่อนเชื่อว่าออกแบบถูก
+- **`exitReason=staleReconcile` ตามด้วย `enter` ในไฟล์หลักฐานจริงบนอุปกรณ์** —
+  ยังไม่เคยเห็นบนเครื่องจริงเลยสักครั้ง (เพราะยังไม่ได้ implement) ต้องรอรอบ
+  ทดสอบที่จำลองสถานการณ์ "หายไปนานผิดปกติแล้วกลับมา" จริง
+- **บรรทัด `exitAlarmDeferred` ใหม่ (หัวข้อ 6)** — ปริมาณ log ที่เกิดขึ้นจริงใน
+  คืนที่มี Doze รุนแรง ยังไม่รู้ว่าจะโตแค่ไหน ต้องวัดจากคืนทดสอบจริงก่อนตัดสินใจ
+  เรื่องเพดาน/throttle
+- **MY_PACKAGE_REPLACED + `reconcile()` ก่อน `clearRegionStates()` (หัวข้อ 3)** —
+  เป็นบั๊กแฝงที่พบจากการอ่านโค้ด ยังไม่เคยจำลองสถานการณ์ "อัปเดตแอปขณะอยู่ใน
+  โซน" บนเครื่องจริงเลย ต้องเพิ่มเป็นเคสทดสอบใหม่ทั้งเคส
+- **ข้อ 3 ของ ADR-19** (ว่า broadcast receiver ที่ระบบเรียกเข้ามาเพื่อ
+  `PendingIntent` scan เริ่ม foreground service ได้หรือไม่) — ยังไม่ได้ค้นคว้า
+  เลย เป็นเงื่อนไขตัดสินว่า ADR-19 มีทางเป็นไปได้หรือไม่ตั้งแต่ต้น
+
+
+
+## ADR-19 (ฉบับร่าง — ยังไม่ตัดสิน): foreground service เฉพาะช่วง `inside` เป็นทางเลือกเสริมของ `reconcile()`
+
+> **สถานะ: เปิดหัวข้อ ไม่ใช่ข้อเสนอที่พร้อม implement** — เอกสารนี้มีไว้บันทึก
+> ทางเลือกและ trade-off ที่ต้องพิจารณาต่อ ไม่ใช่การตัดสินใจ ห้ามเริ่ม implement
+> จนกว่าจะมีการตัดสินใจแยกต่างหาก (รอบถัดไป)
+
+**แนวคิด:** เมื่อ `BackgroundRegionMonitor` พลิกสถานะเป็น `inside=true` (จาก
+`enter`) เปิด foreground service ชั่วคราว **เฉพาะช่วงที่ยังอยู่ในโซน** แล้วใช้
+timer ในหน่วยความจำของ service นั้นตรวจ exit แทนที่จะพึ่ง `AlarmManager` เป็น
+กลไกหลัก — ปิด service ทันทีที่ตรวจพบ exit (ไม่ว่าจะจาก timer หรือจาก
+`reconcile()`) โดยให้ `AlarmManager` (กลไกเดิม) ยังคงทำงานเป็น **fallback**
+คู่ขนาน ไม่ใช่แทนที่ — ถ้า service ถูกระบบฆ่าระหว่างทาง (ซึ่งเกิดได้แม้เป็น
+foreground service) นาฬิกาปลุกเดิมยังทำหน้าที่กู้สถานะต่อได้เหมือนที่ ADR-18
+ออกแบบไว้
+
+**ทำไมถึงยังไม่ตัดสิน — ประเด็นที่ต้องชั่งน้ำหนัก:**
+
+1. **UX/notification — ราคาที่ผู้ใช้จ่ายทุกครั้งที่อยู่ในสาขา:** foreground
+   service ตาม
+   [ข้อกำหนดของ Android](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)
+   **ต้องมี notification ที่มองเห็นได้ตลอดเวลาที่ service ทำงาน** — แปลว่า
+   **ทุกครั้งที่ลูกค้าเดินเข้าสาขา** (ซึ่งคือเงื่อนไขปกติของการใช้งาน ไม่ใช่เคส
+   พิเศษ) จะมี notification ค้างอยู่ในแถบแจ้งเตือนตลอดเวลาที่อยู่ในสาขา — ต่างจาก
+   ADR-14 หัวข้อ 3.1 ที่ปฏิเสธ foreground service เป็น**กลไกหลัก**เพราะเหตุผลนี้
+   เป๊ะ ข้อเสนอนี้จำกัดขอบเขตให้เกิดเฉพาะ**ช่วง `inside`** ซึ่งลดความถี่ลงมาก
+   (ไม่ใช่ตลอดเวลาที่แอปเฝ้าอยู่) แต่ **ไม่ได้ทำให้ปัญหา UX หายไป** เพียงลด
+   ขอบเขตเวลาที่ผู้ใช้ต้องเห็นมันเท่านั้น — ยังต้องตัดสินใจว่าลูกค้าที่เดินเข้า
+   ร้านทุกวันเห็น notification แบบนี้ทุกครั้งเป็นสิ่งที่ยอมรับได้หรือไม่
+2. **`foregroundServiceType` ของ Android 14 (API 34):** ตาม ADR-14 หัวข้อ 2.2
+   ที่ค้นไว้แล้ว ชนิดที่ตรงกับ use case คือ **`connectedDevice`** ต้องมี
+   `FOREGROUND_SERVICE_CONNECTED_DEVICE` บวกกับ `BLUETOOTH_SCAN` (มีอยู่แล้ว)
+   — แอปที่ target Android 14 ขึ้นไปที่ **ไม่ประกาศชนิด** จะได้
+   `MissingForegroundServiceTypeException` ทันทีที่เรียก `startForeground()`
+   (อ้างจาก
+   [Foreground service types are required](https://developer.android.com/about/versions/14/changes/fgs-types-required),
+   ยกคำต่อคำไว้แล้วใน ADR-14 หัวข้อ 2.2) — ข้อจำกัดนี้**ใช้ได้กับข้อเสนอนี้เช่น
+   เดียวกับที่ ADR-14 บันทึกไว้** ไม่มีอะไรเปลี่ยน แต่ต้องตรวจซ้ำเมื่อ target
+   API สูงขึ้นจริง (ตามที่ ADR-14 เตือนไว้แล้วว่ารายการข้อจำกัดยาวขึ้นทุกเวอร์ชัน)
+3. **ต้องเริ่ม service จากเบื้องหลังได้จริงหรือไม่ในจังหวะที่ `enter` เกิด** —
+   `enter` ส่วนใหญ่เกิดจาก `BeaconScanReceiver.onReceive` ซึ่งเป็น
+   `BroadcastReceiver` — ADR-14 หัวข้อ 2.2 ยกรายการข้อยกเว้นของ "ห้ามเริ่ม FGS
+   จากเบื้องหลัง" ของ Android 12 ไว้แล้ว ("Your app transitions from a
+   user-visible state" ฯลฯ) **ยังไม่ได้ตรวจว่า broadcast receiver ที่ระบบเรียก
+   เข้ามาเพื่อ `PendingIntent` scan (ไม่ใช่ user-visible transition) เข้าข้อ
+   ยกเว้นข้อไหนหรือไม่** — ถ้าเข้าข้อยกเว้นไม่ได้เลย แนวคิดนี้ **ใช้งานไม่ได้ตั้งแต่
+   ต้น** ไม่ว่าจะตัดสินใจเรื่อง UX/notification อย่างไรก็ตาม ต้องวิจัยข้อนี้ก่อน
+   เป็นอันดับแรกในรอบตัดสินใจถัดไป — **ยังไม่มีคำตอบในเอกสารนี้**
+4. **`MATCH_LOST` เป็นทางเลือกเสริม** — คำนี้เป็นศัพท์ของ
+   `ScanSettings.CALLBACK_TYPE_MATCH_LOST` (Android BLE scanning API) ซึ่ง
+   **ยังไม่ได้ค้นคว้าในรอบนี้เลย** — ต้องวิจัยแยกว่าใช้ร่วมกับ `PendingIntent`-based
+   scan ได้หรือไม่ (`ScanSettings` ที่ใช้ `CALLBACK_TYPE_MATCH_LOST` ต้องมี
+   `setMatchMode`/`setNumOfMatches` กำกับ ซึ่งมีเงื่อนไขของตัวเอง) และให้ความหน่วง
+   เท่าไรเทียบกับกลไก `AlarmManager` เดิม — **ต้องวิจัยเพิ่มก่อน ห้ามสมมติว่าใช้ได้
+   หรือใช้ไม่ได้จนกว่าจะตรวจซอร์ส/เอกสารจริง**
+
+**สิ่งที่ตั้งใจไม่ตัดสินในรอบนี้:** จะใช้แนวคิดนี้เป็นโหมดเสริมที่ผู้ใช้ SDK เลือก
+เปิดเอง (ตามที่ ADR-14 หัวข้อ 3.1 เขียนไว้ล่วงหน้าแล้วว่าเป็นทางเลือกในอนาคต) หรือ
+ไม่ทำเลย, K ค่าไหนควรใช้คู่กับ timer ในหน่วยความจำ (อาจไม่ใช่ K เดียวกับ ADR-18
+เพราะกลไกต่างกัน), และจะแทนที่หรืออยู่คู่กับ `reconcile()` ตลอดไป — ทั้งหมดนี้รอ
+รอบตัดสินใจถัดไปที่มีคำตอบของข้อ 3 ก่อน
