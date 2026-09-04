@@ -2462,12 +2462,9 @@ CoreLocation ยิง `didExitRegion` ให้เอง และ **ADR-11 ค
 ## ADR-16: แหล่งความจริงใหม่ของ `hasEverBecomeActive` ภายใต้ UIScene lifecycle — แก้บั๊ก `everActive` ค้าง `false` ตลอดชีพ process (เพิ่ม 3 ก.ย. 2026)
 
 > **สถานะ: implemented — merged PR #18 (`c24d36b`→`54051b3`)**
-> **verified บน iPhone จริง 3 ก.ย. 2026 เฉพาะ §11a** (เห็น `everActive=true` คู่กับ
-> `state=active` ในไฟล์หลักฐาน = observer ของ `didBecomeActiveNotification` ยิงจริง)
-> **§11b (process ที่ถูกปลุกเบื้องหลังแล้วไม่เคย active ยังให้ `false`) และ §11c
-> (process อายุยืนที่ active กลางทาง แยก `background` จาก `relaunchedFromTerminated`)
-> ยัง unverified** — ขั้นตอนอยู่ที่ `docs/test-checklists/ios_device_test_runbook.md` §11
-> ผลต้องบันทึกที่ `ios_broadcast_scanning.md` เท่านั้น
+> **สถานะการทดสอบบนอุปกรณ์จริงอยู่ที่ `docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 12 เท่านั้น** (กติกาข้อ 8 ของ CONTRIBUTING: สถานะอยู่ไฟล์เดียว) — เอกสารนี้จงใจ
+> ไม่เขียนผลซ้ำ ขั้นตอนการวัดอยู่ที่ `ios_device_test_runbook.md` §11
 > เอกสารหัวข้อนี้เป็นบันทึกการออกแบบ (ขั้นที่ 1/4 ตาม PIPELINE.md) จึงยังไม่มีโค้ด
 > Swift อยู่ในตัวมันเองตามกติกาเดิม — โค้ดจริงอยู่ใน commit ที่อ้างข้างบน
 > **ขอบเขต:** เฉพาะ `packages/beacon_kit/example/ios/Runner/AppDelegate.swift`
