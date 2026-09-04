@@ -424,16 +424,30 @@ object BackgroundEvidenceLog {
         val usageStatsManager =
             context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
                 ?: return "unknown"
-        return when (usageStatsManager.appStandbyBucket) {
-            STANDBY_BUCKET_EXEMPTED_HIDDEN -> "exempted"
-            UsageStatsManager.STANDBY_BUCKET_ACTIVE -> "active"
-            UsageStatsManager.STANDBY_BUCKET_WORKING_SET -> "workingSet"
-            UsageStatsManager.STANDBY_BUCKET_FREQUENT -> "frequent"
-            UsageStatsManager.STANDBY_BUCKET_RARE -> "rare"
-            UsageStatsManager.STANDBY_BUCKET_RESTRICTED -> "restricted"
-            STANDBY_BUCKET_NEVER_HIDDEN -> "never"
-            else -> "other(${usageStatsManager.appStandbyBucket})"
-        }
+        return standbyBucketNameForRawBucket(usageStatsManager.appStandbyBucket)
+    }
+
+    /**
+     * แปลงเลขดิบของ `UsageStatsManager.getAppStandbyBucket()` เป็นชื่อ — **pure
+     * function** แยกออกจาก [standbyBucketName] เพื่อให้ JVM unit test ธรรมดา
+     * (ไม่ต้อง Robolectric) คลุมการแมปทั้ง 7 bucket ได้จริงโดยไม่ต้อง mock
+     * `Context`/`UsageStatsManager` — pattern เดียวกับที่ ADR-17 ใช้แยก
+     * `BackgroundRegionMonitor.staleReason` ออกจาก `staleReasonFor` ที่พึ่ง
+     * `Context` จริง
+     *
+     * การ refactor นี้เป็นเชิงโครงสร้างล้วน ๆ ไม่เปลี่ยนพฤติกรรม — ค่าที่คืนต้อง
+     * เหมือนเดิมทุกกรณีเทียบกับ `when` ที่เคยอยู่ใน [standbyBucketName] ตรง ๆ
+     * ก่อนแยก (รวมค่าดิบ `5`/`50` ของ `@hide @SystemApi` ตามคอมเมนต์เดิมข้างบน)
+     */
+    fun standbyBucketNameForRawBucket(raw: Int): String = when (raw) {
+        STANDBY_BUCKET_EXEMPTED_HIDDEN -> "exempted"
+        UsageStatsManager.STANDBY_BUCKET_ACTIVE -> "active"
+        UsageStatsManager.STANDBY_BUCKET_WORKING_SET -> "workingSet"
+        UsageStatsManager.STANDBY_BUCKET_FREQUENT -> "frequent"
+        UsageStatsManager.STANDBY_BUCKET_RARE -> "rare"
+        UsageStatsManager.STANDBY_BUCKET_RESTRICTED -> "restricted"
+        STANDBY_BUCKET_NEVER_HIDDEN -> "never"
+        else -> "other($raw)"
     }
 
     /**

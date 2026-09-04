@@ -56,6 +56,16 @@ android {
 
                 it.outputs.upToDateWhen { false }
 
+                // Mockito 5.0.0 (mock maker inline ตั้งแต่ค่าเริ่มต้น) ใช้ Byte
+                // Buddy รุ่นที่รองรับทางการถึง Java 20 เท่านั้น — เครื่องพัฒนาที่
+                // ตั้ง JAVA_HOME ไปที่ JBR ของ Android Studio รุ่นใหม่รันบน Java 25
+                // ซึ่งทำให้ Mockito.mock()/mockStatic() ที่ต้อง instrument bytecode
+                // ล้มด้วย "Java 25 is not supported by the current version of Byte
+                // Buddy" — ค่านี้คือ flag ที่ error message ของ Mockito เองแนะนำให้
+                // ตั้งตรง ๆ ไม่ใช่การเพิ่ม dependency ใหม่หรือเปลี่ยนเวอร์ชัน
+                // mockito-core (ยังคง 5.0.0 เท่าเดิม)
+                it.systemProperty("net.bytebuddy.experimental", "true")
+
                 it.testLogging {
                     events("passed", "skipped", "failed", "standardOut", "standardError")
                     showStandardStreams = true

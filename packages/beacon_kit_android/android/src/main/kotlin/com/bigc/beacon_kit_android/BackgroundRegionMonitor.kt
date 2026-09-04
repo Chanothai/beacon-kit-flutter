@@ -661,16 +661,56 @@ object BackgroundRegionMonitor {
     /**
      * `null` = ยังไม่ stale — เงื่อนไขทั้งสองข้อของ ADR-17 หัวข้อ 2 แยกกันโดย
      * สิ้นเชิง เช็คบูตมิสแมตช์ก่อนเสมอเพราะเป็นความแน่นอน 100% ไม่ต้องใช้ K
+     *
+     * แค่ทางผ่านไปยัง [staleReason] (ตรรกะล้วนที่ไม่พึ่ง `BackgroundRegionStore`)
+     * — แยกไว้เป็นเมธอดของตัวเองแค่เพื่ออ่านที่จุดเรียก ([reconcile]) ให้สั้น
      */
     private fun staleReasonFor(
         store: BackgroundRegionStore,
         identifier: String,
         sameBoot: Boolean,
         now: Long,
+    ): String? = staleReason(
+        sameBoot = sameBoot,
+        nowElapsedMillis = now,
+        lastSeenElapsedMillis = store.lastSeenElapsedMillis(identifier),
+        exitTimeoutSeconds = store.exitTimeoutSeconds,
+    )
+
+    /**
+     * **ตรรกะการตัดสิน stale ล้วน (pure)** — แยกออกจาก [staleReasonFor] เพื่อให้
+     * JVM unit test ธรรมดา (ไม่ต้อง Robolectric) คลุมได้จริงโดยไม่ต้องพึ่ง
+     * `BackgroundRegionStore`/`Context` ของจริง (ซึ่งอ่านค่าได้แค่ตอนมี Android
+     * runtime) — pattern เดียวกับที่ `AppDelegate.runContext` ฝั่ง iOS แยก pure
+     * function ออกมาให้ `XCTest` คลุมได้โดยไม่ต้องพึ่ง
+     * `UIApplication.shared.applicationState` ของจริง (ดู `AppDelegate.swift`
+     * ราวบรรทัด 225 — รับพารามิเตอร์แทนการอ่าน property ตรง ๆ ด้วยเหตุผลเดียวกัน)
+     *
+     * รับพารามิเตอร์ดิบทั้งหมดแทนการอ่านจาก `store` ตรง ๆ เพื่อให้เป็น pure
+     * function จริง (input เดียวกัน -> output เดียวกันเสมอ ไม่มี side effect และ
+     * ไม่ต้องสร้าง `BackgroundRegionStore`/`Context` เพื่อเรียก)
+     *
+     * **การ refactor นี้เป็นเชิงโครงสร้างล้วน ๆ ไม่เปลี่ยนพฤติกรรม** — ค่าที่คืน
+     * ต้องเหมือนเดิมทุกกรณีเทียบกับ `staleReasonFor` เดิมก่อนแยก (ADR-17 หัวข้อ 2)
+     *
+     * `null` = ยังไม่ stale — เงื่อนไขทั้งสองข้อของ ADR-17 หัวข้อ 2 แยกกันโดย
+     * สิ้นเชิง เช็คบูตมิสแมตช์ก่อนเสมอเพราะเป็นความแน่นอน 100% ไม่ต้องใช้ K
+     *
+     * ⚠️ **ขอบเขต K=10 เป็น `>` (strictly greater) ไม่ใช่ `>=`** — ที่
+     * `sinceLastSeen == exitTimeoutSeconds × K` เป๊ะ (เช่น 300000ms พอดีเมื่อ
+     * timeout=30s) ผลคือ **`null` ไม่ใช่ `staleReconcile`** ต้องเกินเส้นนี้ไป
+     * อย่างน้อย 1ms ถึงจะ stale — พฤติกรรมนี้มีมาจากโค้ดเดิมก่อนแยกฟังก์ชันนี้แล้ว
+     * (`sinceLastSeen > thresholdMillis`) ไม่ใช่สิ่งที่รอบ refactor นี้เปลี่ยน
+     */
+    internal fun staleReason(
+        sameBoot: Boolean,
+        nowElapsedMillis: Long,
+        lastSeenElapsedMillis: Long,
+        exitTimeoutSeconds: Int,
     ): String? {
         if (!sameBoot) return REASON_STALE_BOOT_MISMATCH
-        val thresholdMillis = store.exitTimeoutSeconds * 1000L * STALE_SILENCE_MULTIPLIER
-        val sinceLastSeen = now - store.lastSeenElapsedMillis(identifier)
+        val thresholdMillis = exitTimeoutSeconds * 1000L * STALE_SILENCE_MULTIPLIER
+        val sinceLastSeen = nowElapsedMillis - lastSeenElapsedMillis
         return if (sinceLastSeen > thresholdMillis) REASON_STALE_RECONCILE else null
     }
 

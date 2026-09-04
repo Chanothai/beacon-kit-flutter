@@ -382,4 +382,37 @@ class BackgroundEvidenceLogTest {
         assertEquals("restoredRegions=<read-failed:IOException:_Permission_denied>", field)
         assertTrue(!field.substringAfter('=').contains(' '))
     }
+
+    /**
+     * `standbyBucketNameForRawBucket` (ADR-17 หัวข้อ 6) — แมปเลขดิบของ
+     * `UsageStatsManager.getAppStandbyBucket()` เป็นชื่อ
+     *
+     * ครบทั้ง 7 bucket ตามที่ยืนยันจากซอร์สจริง (`UsageStatsManager.java:124-175`,
+     * commit `e989d68`): `10`/`20`/`30`/`40`/`45` เรียกผ่านชื่อ constant ปกติได้
+     * (public API) ส่วน `5`/`50` (`exempted`/`never`) ต้องเทียบด้วยเลขดิบเพราะ
+     * `STANDBY_BUCKET_EXEMPTED`/`STANDBY_BUCKET_NEVER` เป็น `@hide @SystemApi`
+     * เรียกผ่านชื่อไม่ได้จริง (ตรวจแล้วว่าคอมไพล์ไม่ผ่านถ้าอ้างชื่อตรงๆ)
+     */
+    @Test
+    fun `standbyBucketNameForRawBucket แมปทั้งเจ็ดค่าที่รู้จัก`() {
+        assertEquals("exempted", BackgroundEvidenceLog.standbyBucketNameForRawBucket(5))
+        assertEquals("active", BackgroundEvidenceLog.standbyBucketNameForRawBucket(10))
+        assertEquals("workingSet", BackgroundEvidenceLog.standbyBucketNameForRawBucket(20))
+        assertEquals("frequent", BackgroundEvidenceLog.standbyBucketNameForRawBucket(30))
+        assertEquals("rare", BackgroundEvidenceLog.standbyBucketNameForRawBucket(40))
+        assertEquals("restricted", BackgroundEvidenceLog.standbyBucketNameForRawBucket(45))
+        assertEquals("never", BackgroundEvidenceLog.standbyBucketNameForRawBucket(50))
+    }
+
+    /**
+     * ค่าที่ไม่รู้จัก (เช่น bucket ใหม่ที่ Android เวอร์ชันถัดไปอาจเพิ่มมา) ต้อง
+     * ไม่ทำให้เทสต์/แอปพัง — คืนชื่อที่ยังบอกเลขดิบไว้ให้สืบย้อนได้ ไม่ใช่โยน
+     * exception หรือคืนค่าที่ดูเหมือนหนึ่งใน 7 บัคเก็ตที่รู้จัก
+     */
+    @Test
+    fun `standbyBucketNameForRawBucket ค่าที่ไม่รู้จักไม่ทำให้พัง และบอกเลขดิบไว้`() {
+        assertEquals("other(999)", BackgroundEvidenceLog.standbyBucketNameForRawBucket(999))
+        assertEquals("other(-1)", BackgroundEvidenceLog.standbyBucketNameForRawBucket(-1))
+        assertEquals("other(0)", BackgroundEvidenceLog.standbyBucketNameForRawBucket(0))
+    }
 }
