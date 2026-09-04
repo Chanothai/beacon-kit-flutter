@@ -85,7 +85,22 @@ adb install -r -t packages/beacon_kit/example/build/app/outputs/flutter-apk/app-
    ถ้าไม่ล้าง สถานะ "อยู่ในโซน" ที่ค้างจาก build เก่าจะทำให้ไม่มี `enter` ออกมาเลย
    และดูเหมือนกลไกพัง ทั้งที่มันแค่คิดว่าเราอยู่ในโซนอยู่แล้ว
 
-2. **ให้สิทธิ์ครบก่อน**
+2. **เปิดแอปแล้วยืนยันว่าไม่ crash ก่อนทำอะไรต่อ** — ห้ามข้ามขั้นนี้
+   ```bash
+   adb logcat -c && adb shell am start -n com.beaconkit.example/.MainActivity
+   adb logcat -d | grep -E "FATAL|AndroidRuntime"   # ต้องไม่เจออะไร
+   ```
+   **ทำไมต้องมีขั้นนี้:** 4 ก.ย. 2026 แอป crash ใน `Application.onCreate` **ทุกครั้ง
+   ที่เปิด** บน Xiaomi M2003J15SC / Android 12 (API 31) เพราะเรียก
+   `PowerManager.isDeviceLightIdleMode()` (`since=33`) ตรง ๆ โดยไม่มี
+   `SDK_INT` guard ทั้งที่ `minSdk=24` (ADR-17) — อาการที่เห็นบนเครื่องคือ
+   **"แอปเด้งออกทันที"** ซึ่งแยกไม่ออกจากปัญหาอื่น (สิทธิ์ไม่ครบ, MIUI บล็อก
+   ฯลฯ) ถ้าไม่ดู `logcat` ก่อน และ **CI เขียวสนิทตลอดช่วงนั้น** เพราะไม่มี job
+   ไหนเปิดแอปจริงบนอุปกรณ์ — ข้ามขั้นนี้แล้วเจอ event ว่างเปล่าทั้งเคส อาจ
+   กำลังไล่ผิดสาเหตุอยู่หลายชั่วโมงโดยไม่รู้ตัวว่าแอปไม่เคยรอดถึงบรรทัดที่จะ
+   ยิง event ด้วยซ้ำ
+
+3. **ให้สิทธิ์ครบก่อน**
    ```bash
    adb shell pm grant com.beaconkit.example android.permission.BLUETOOTH_SCAN
    adb shell pm grant com.beaconkit.example android.permission.ACCESS_FINE_LOCATION
@@ -95,14 +110,14 @@ adb install -r -t packages/beacon_kit/example/build/app/outputs/flutter-apk/app-
    adb shell dumpsys package com.beaconkit.example | grep -A2 "runtime permissions"
    ```
 
-3. **เปิดสวิตช์ Location ของระบบ** (คนละเรื่องกับการ grant `ACCESS_FINE_LOCATION`)
+4. **เปิดสวิตช์ Location ของระบบ** (คนละเรื่องกับการ grant `ACCESS_FINE_LOCATION`)
    ADR-12 หัวข้อ 1 บันทึกไว้ว่า **ยังไม่ยืนยัน**ว่าจำเป็นหรือไม่ — รอบนี้คือรอบที่
    ต้องตอบ ให้ทดสอบทั้งเปิดและปิด แล้วบันทึกความต่าง
    ```bash
    adb shell settings get secure location_mode
    ```
 
-4. **บันทึกสถานะ MIUI ทั้งสองตัวก่อนเริ่ม** — เป็นตัวแปรที่เปลี่ยนผลได้ทั้งรอบ
+5. **บันทึกสถานะ MIUI ทั้งสองตัวก่อนเริ่ม** — เป็นตัวแปรที่เปลี่ยนผลได้ทั้งรอบ
    - Autostart: ตั้งค่า → แอป → จัดการแอป → example → **เริ่มทำงานอัตโนมัติ**
    - Battery saver: หน้าเดียวกัน → **ประหยัดแบตเตอรี่** → เลือก "ไม่จำกัด"
    ```bash
@@ -110,7 +125,7 @@ adb install -r -t packages/beacon_kit/example/build/app/outputs/flutter-apk/app-
    adb shell dumpsys deviceidle whitelist | grep beaconkit
    ```
 
-5. **ยืนยัน App Standby bucket ต้องเป็น `10` (`active`) ก่อนเริ่มเคสพื้นหลังทุกเคส**
+6. **ยืนยัน App Standby bucket ต้องเป็น `10` (`active`) ก่อนเริ่มเคสพื้นหลังทุกเคส**
    (ADR-17 หัวข้อ 2 และ 6 — ค่าดิบยืนยันจาก `UsageStatsManager.java:124-175`:
    `10`=`active` `20`=`workingSet` `30`=`frequent` `40`=`rare` `45`=`restricted`)
    ```bash
@@ -122,11 +137,11 @@ adb install -r -t packages/beacon_kit/example/build/app/outputs/flutter-apk/app-
    ทดสอบ **ยกเว้นเคส §11 (ออกนอกระยะข้ามคืน) ที่ตั้งใจปล่อยให้ bucket เลื่อน
    เองตามธรรมชาติของคืนนั้น** — ห้ามบังคับ bucket กลับมาระหว่างเคสนั้น
 
-6. **กดปุ่ม "เริ่มเฝ้าเบื้องหลัง"** — ไม่ใช่ "Start scan"
+7. **กดปุ่ม "เริ่มเฝ้าเบื้องหลัง"** — ไม่ใช่ "Start scan"
    ปุ่ม scan เป็นเส้นทางก้อนที่ 1 ซึ่งผูกอายุการสแกนไว้กับ subscription
    ถ้ากดผิดปุ่ม เคสที่แอปถูกปิดจะไม่มีทางได้ event เลย
 
-7. **ยืนยันสถานะเริ่มต้นก่อนเริ่มจับเวลา**
+8. **ยืนยันสถานะเริ่มต้นก่อนเริ่มจับเวลา**
    - แผง "เฝ้า region เบื้องหลัง (Android)" แสดง "สั่งเฝ้าอยู่หรือไม่: ใช่"
    - "ผลลงทะเบียนล่าสุด" แสดง **สำเร็จ 2** และไม่มีรายการล้มเหลว
      — **เป็น 2 ตั้งแต่คอมมิต `84d31e3`** ซึ่งเพิ่ม region `bigc-test` (UUID ของ
@@ -140,15 +155,15 @@ adb install -r -t packages/beacon_kit/example/build/app/outputs/flutter-apk/app-
      อุปกรณ์ที่ broadcast ด้วย UUID ของ BigC จริง — **`bigc-test` ที่เงียบไม่ใช่
      ความล้มเหลวของกลไก** ถ้ายังไม่ได้ provision อุปกรณ์ให้
 
-8. **ล้าง log ให้สะอาด** (ปุ่มในหน้า "ดู log") แล้วจดเวลาปัจจุบันไว้
+9. **ล้าง log ให้สะอาด** (ปุ่มในหน้า "ดู log") แล้วจดเวลาปัจจุบันไว้
 
-9. **เตรียมนาฬิกาแยก** (มือถืออีกเครื่อง) จดเวลาทุกครั้งที่ถอด/ใส่แบต K9P
-   — อย่าใช้เครื่องที่กำลังทดสอบจดเวลา เพราะการปลุกจอมีผลกับ Doze โดยตรง
+10. **เตรียมนาฬิกาแยก** (มือถืออีกเครื่อง) จดเวลาทุกครั้งที่ถอด/ใส่แบต K9P
+    — อย่าใช้เครื่องที่กำลังทดสอบจดเวลา เพราะการปลุกจอมีผลกับ Doze โดยตรง
 
-10. **ถอดสาย USB** ยกเว้นขั้นที่ระบุว่าให้เสียบ
+11. **ถอดสาย USB** ยกเว้นขั้นที่ระบุว่าให้เสียบ
     สายที่เสียบอยู่ทำให้เครื่อง**ไม่เข้า Doze เลย** ซึ่งจะทำให้เคส §5 ไร้ความหมาย
 
-11. **นับ beacon ที่อยู่ในระยะ** แล้วจดไว้
+12. **นับ beacon ที่อยู่ในระยะ** แล้วจดไว้
 
 ---
 
@@ -239,7 +254,7 @@ self-test โดยตั้งใจ **เปิดแอปมาให้ด�
 | `everForeground` | process นี้เคยมี Activity ขึ้น resume หรือยัง — **สัญญาณหลักที่เชื่อได้** (คู่แฝดของ `everActive` ฝั่ง iOS) |
 | `state` | `resumed` / `started` / `stopped` / `noActivityEver` — สัญญาณดิบ ไม่ใช่ข้อสรุป |
 | `importance` | ค่าที่ **ระบบ** จัดให้ process นี้ (`foreground` / `foregroundService` / `service` / `cached` …) — สัญญาณอิสระที่ไม่ได้มาจากการนับ Activity ของเราเอง |
-| `doze` | เครื่องอยู่ใน Doze ณ ตอนเขียนบรรทัดหรือไม่ (`PowerManager.isDeviceIdleMode()`) — ⚠️ **`doze=false` ระหว่าง maintenance window ไม่ได้แปลว่าเครื่องไม่ได้อยู่ใน Doze** เอกสารต้นฉบับของเมธอดนี้ (`PowerManager.java:2637-2649`) เขียนตรง ๆ ว่า "it will return false if the device is in a long-term idle mode but currently running a maintenance window where restrictions have been lifted" — `isDeviceLightIdleMode()` มีประโยคเดียวกันเป๊ะ (`:2657-2668`) อาการ "restrictions ถูกยกเว้นชั่วคราว" กับ "ออกจาก Doze แล้วจริง ๆ" **แยกไม่ออกจากค่านี้ค่าเดียว** — ต้องดูควบคู่กับความยาวเวลาที่เครื่องไม่มีการโต้ตอบ (ข้อ 9 ของ §0.1 เรื่องถอดสาย USB) ไม่ใช่เชื่อว่า `doze=false` ปลอดภัยเสมอ (ADR-17 หัวข้อ 6) |
+| `doze` | เครื่องอยู่ใน Doze ณ ตอนเขียนบรรทัดหรือไม่ (`PowerManager.isDeviceIdleMode()`) — ⚠️ **`doze=false` ระหว่าง maintenance window ไม่ได้แปลว่าเครื่องไม่ได้อยู่ใน Doze** เอกสารต้นฉบับของเมธอดนี้ (`PowerManager.java:2637-2649`) เขียนตรง ๆ ว่า "it will return false if the device is in a long-term idle mode but currently running a maintenance window where restrictions have been lifted" — `isDeviceLightIdleMode()` มีประโยคเดียวกันเป๊ะ (`:2657-2668`) อาการ "restrictions ถูกยกเว้นชั่วคราว" กับ "ออกจาก Doze แล้วจริง ๆ" **แยกไม่ออกจากค่านี้ค่าเดียว** — ต้องดูควบคู่กับความยาวเวลาที่เครื่องไม่มีการโต้ตอบ (ข้อ 11 ของ §0.1 เรื่องถอดสาย USB) ไม่ใช่เชื่อว่า `doze=false` ปลอดภัยเสมอ (ADR-17 หัวข้อ 6) |
 | `battOpt` | `ignoring` = ผู้ใช้ปลด battery optimization แล้ว · `optimized` = ยังไม่ปลด |
 | `procUuid` | ตัวระบุ process — **ค่าเดียวกับคอลัมน์ที่ 2 เสมอ** มีซ้ำไว้ให้ `grep` คอลัมน์เดียวได้ครบ |
 | `pid` | pid ของ Linux ไว้เทียบกับ `logcat` (**ถูกใช้ซ้ำได้ ไม่ใช่ตัวระบุ process**) |
@@ -250,8 +265,8 @@ self-test โดยตั้งใจ **เปิดแอปมาให้ด�
 | `exitReason` | **เฉพาะบรรทัด `exit`** (ADR-17 หัวข้อ 4) — `alarm` = `onExitAlarm` ตัดสินตามปกติ (นาฬิกาปลุกดัง เช็คซ้ำแล้วครบเวลาจริง) · `staleReconcile` = `reconcile()` พบว่าเงียบเกิน K=10 เท่าของ `exitTimeoutSeconds` (5 นาทีที่ค่าเริ่มต้น) ทั้งที่นาฬิกาปลุกยังไม่ดัง · `staleBootMismatch` = เทียบเวลาข้ามรอบบูตไม่ได้ (มาจาก `onExitAlarm` หรือ `reconcile()` ก็ได้) — บรรทัดเก่าก่อน ADR-17 ไม่มีคีย์นี้เลย (แยกจากบรรทัดใหม่ได้ด้วยการเช็คว่ามีคีย์นี้หรือไม่) |
 | `reason=` ของบรรทัด `exitAlarmDeferred` | **ไม่ใช่บรรทัด `exit`** — เป็น event วินิจฉัยล้วน (ADR-17 หัวข้อ 6) บอกว่า `onExitAlarm` เลื่อนนาฬิกาปลุกแทนการประกาศ exit เพราะอะไร: `stillSeen` (เห็นอีกครั้งก่อนครบเวลาจริง) · `notInside` (region นี้ไม่ได้อยู่ในสถานะ inside อยู่แล้ว) · `notActive` (การเฝ้าเบื้องหลังถูกสั่งหยุดไปแล้ว) — **ไม่ไหลผ่าน `EventChannel` ไปหา Dart** อยู่ในไฟล์หลักฐานของ host app เท่านั้น |
 | `restoredRegions` | region ที่ **เราเองจำไว้** ณ ตอน launch (มีเฉพาะบรรทัด `launch`) — **ไม่ใช่** `monitoredRegions` ของ iOS ที่ระบบเป็นคนตอบ · `[...]`/`[]` = อ่านไฟล์สถานะได้ · `<read-failed:เหตุผล>` = **อ่านไม่สำเร็จ จึงตอบไม่ได้ว่ามีหรือไม่มี** |
-| `standbyBucket` | App Standby bucket ปัจจุบันของแอป ณ ตอนเขียนบรรทัด (ADR-17 หัวข้อ 6) — `exempted`/`active`/`workingSet`/`frequent`/`rare`/`restricted`/`never` · `n/a` = เครื่อง API ต่ำกว่า 28 (ฟีเจอร์นี้ไม่มีจริง) |
-| `lightIdle` | เครื่องอยู่ใน **light** idle mode หรือไม่ (`PowerManager.isDeviceLightIdleMode()`) — คนละสถานะกับ `doze` (Doze เต็มรูปแบบ) เข้าได้เร็วกว่ามาก แค่จอปิดสั้น ๆ (ADR-17 หัวข้อ 6) |
+| `standbyBucket` | App Standby bucket ปัจจุบันของแอป ณ ตอนเขียนบรรทัด (ADR-17 หัวข้อ 6) — `exempted`/`active`/`workingSet`/`frequent`/`rare`/`restricted`/`never` · `unsupported-api<N>` = เครื่องนี้เป็น Android API `<N>` ซึ่งต่ำกว่า API 28 ที่ `UsageStatsManager.getAppStandbyBucket()` เริ่มมี จึง**ถามระบบไม่ได้เลย** (ค่านี้เดิมเคยเขียนเป็น `n/a` — เปลี่ยนให้เป็นรูปแบบเดียวกับ `lightIdle` ด้านล่างแล้ว หลังบั๊ก 4 ก.ย. 2026) · `unknown` = ขอ `UsageStatsManager` service ไม่ได้ — ⚠️ **`unsupported-api<N>` ไม่ใช่ `active` และไม่ใช่ค่ายืนยันว่า bucket ไม่ได้เป็น `restricted`** เป็นแค่ "ถามไม่ได้" คนละเรื่องกับ "ตอบว่าไม่ใช่" (เทียบกับที่ตารางนี้แยก `restoredRegions=[]` ออกจาก `<read-failed:…>` อยู่แล้ว) |
+| `lightIdle` | เครื่องอยู่ใน **light** idle mode หรือไม่ (`PowerManager.isDeviceLightIdleMode()`, `since=33`/`TIRAMISU`) — คนละสถานะกับ `doze` (Doze เต็มรูปแบบ) เข้าได้เร็วกว่ามาก แค่จอปิดสั้น ๆ (ADR-17 หัวข้อ 6) · `unsupported-api<N>` = เครื่องนี้เป็น Android API `<N>` ซึ่งต่ำกว่า API 33 จึง**ถามระบบไม่ได้เลย** (บั๊ก 4 ก.ย. 2026: เมธอดนี้ถูกเรียกตรง ๆ โดยไม่มี guard บนเครื่อง API 31 → `NoSuchMethodError` → แอป crash ทันทีที่เปิด, ADR-17 — แก้แล้วด้วยการคืนค่านี้แทนการเรียกเมธอดตรง ๆ) · `unknown` = ขอ `PowerManager` service ไม่ได้ — ⚠️ **`unsupported-api<N>` ≠ `false`** ห้ามอ่านว่า "เครื่องไม่ได้อยู่ใน light idle" เป็นแค่ "ถามไม่ได้" คนละเรื่องกับ "ตอบว่าไม่ใช่" (แบบเดียวกับที่ตารางนี้แยก `restoredRegions=[]` ออกจาก `<read-failed:…>`) — **เครื่องทดสอบหลักตอนนี้ (Xiaomi M2003J15SC / Android 12 / API 31) จะได้ `lightIdle=unsupported-api31` ทุกบรรทัดเสมอ ไม่มีข้อมูล light idle ให้ใช้เลยจากเครื่องนี้** ใครจะสรุปเรื่อง light idle ของเคสใดก็ตามต้องหาเครื่อง **Android 13+ (API 33+)** มาทดสอบเพิ่ม จะสรุปจากเครื่องนี้ไม่ได้ |
 
 ### ตารางแปลผล — ใช้ทุกครั้งก่อนสรุปอะไรก็ตาม
 
@@ -689,7 +704,7 @@ Standby bucket) `reconcile()` ยังกู้สถานะ `inside` ที�
 → เงียบสนิท 14 ชม. 14 น. → ไม่มี `exit` ไม่มี `enter` ตอนเช้าจนกว่าจะมีคนเปิดแอป)
 
 ⚠️ **ห้ามบังคับ App Standby bucket กลับมาที่ `active` ระหว่างเคสนี้** (ต่างจาก
-ข้อ 5 ของ §0.1 ที่บังคับให้เป็น `10` ก่อนเริ่ม) — เคสนี้ตั้งใจปล่อยให้ bucket
+ข้อ 6 ของ §0.1 ที่บังคับให้เป็น `10` ก่อนเริ่ม) — เคสนี้ตั้งใจปล่อยให้ bucket
 เลื่อนไปเองตามธรรมชาติของการไม่แตะเครื่องทั้งคืน เพราะนั่นคือเงื่อนไขที่ทำให้
 นาฬิกาปลุกถูกระงับจริง
 
