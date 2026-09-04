@@ -2461,10 +2461,12 @@ CoreLocation ยิง `didExitRegion` ให้เอง และ **ADR-11 ค
 
 ## ADR-16: แหล่งความจริงใหม่ของ `hasEverBecomeActive` ภายใต้ UIScene lifecycle — แก้บั๊ก `everActive` ค้าง `false` ตลอดชีพ process (เพิ่ม 3 ก.ย. 2026)
 
-> **สถานะ: ตัดสินใจด้านสถาปัตยกรรมแล้ว — ยังไม่ implement**
-> นี่คือขั้นที่ 1/4 ตาม PIPELINE.md (ออกแบบ) เท่านั้น ห้ามมีโค้ด Swift ในเอกสารนี้
-> หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev` เมื่อสถาปัตยกรรม
-> ในหัวข้อนี้ถูก sign-off แล้วเท่านั้น
+> **สถานะ: implemented — merged PR #18 (`c24d36b`→`54051b3`)**
+> **สถานะการทดสอบบนอุปกรณ์จริงอยู่ที่ `docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 12 เท่านั้น** (กติกาข้อ 8 ของ CONTRIBUTING: สถานะอยู่ไฟล์เดียว) — เอกสารนี้จงใจ
+> ไม่เขียนผลซ้ำ ขั้นตอนการวัดอยู่ที่ `ios_device_test_runbook.md` §11
+> เอกสารหัวข้อนี้เป็นบันทึกการออกแบบ (ขั้นที่ 1/4 ตาม PIPELINE.md) จึงยังไม่มีโค้ด
+> Swift อยู่ในตัวมันเองตามกติกาเดิม — โค้ดจริงอยู่ใน commit ที่อ้างข้างบน
 > **ขอบเขต:** เฉพาะ `packages/beacon_kit/example/ios/Runner/AppDelegate.swift`
 > (โค้ดวัดผลของ **example app** เหมือน ADR-10 — ไม่แตะ `beacon_kit_ios` SDK,
 > ไม่แตะ Android, ไม่แตะสัญญา Dart)
