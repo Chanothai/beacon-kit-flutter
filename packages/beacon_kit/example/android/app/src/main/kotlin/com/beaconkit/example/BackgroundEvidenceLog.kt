@@ -266,7 +266,9 @@ object BackgroundEvidenceLog {
      * - `doze` — เครื่องอยู่ใน Doze หรือไม่ ณ ตอนเขียนบรรทัด
      * - `battOpt` — แอปถูกยกเว้น battery optimization อยู่หรือไม่
      * - `standbyBucket` — App Standby bucket ปัจจุบัน (ADR-17 หัวข้อ 6)
-     * - `lightIdle` — เครื่องอยู่ใน light idle mode หรือไม่ (ADR-17 หัวข้อ 6)
+     * - `lightIdle` — เครื่องอยู่ใน light idle mode หรือไม่ — `"true"`/`"false"`
+     *   เมื่อถามได้จริง หรือ `"unsupported-apiN"`/`"unknown"` เมื่อถามไม่ได้
+     *   (ADR-17 หัวข้อ 6 · ดู [isDeviceLightIdle])
      *
      * [receiverEntry] ไม่มีค่า default **โดยตั้งใจ** — ผู้เรียกต้องตอบทุกครั้งว่า
      * บรรทัดนี้เขียนจากใน `BroadcastReceiver.onReceive` หรือไม่ ถ้าให้ default ไว้
@@ -398,14 +400,23 @@ object BackgroundEvidenceLog {
      * App Standby bucket ปัจจุบันของแอปนี้เอง — ยิ่ง restrictive เท่าไร ระบบยิ่ง
      * จำกัดจำนวนนาฬิกาปลุกที่ยอมให้ (ADR-17 หัวข้อ 2 และ 6)
      *
-     * **ยืนยันจาก
+     * **API level ที่ต้อง guard ยืนยันจาก `since=` ใน `api-versions.xml` ของ
+     * Android SDK** (`platforms/android-37.0/data/api-versions.xml`, ค้น
+     * `<class name="android/app/usage/UsageStatsManager"` แล้วดู attribute
+     * `since=` ของ `getAppStandbyBucket`) **ไม่ใช่การอ่าน source ของ SDK
+     * ล่าสุดว่ามี annotation จำกัดหรือไม่** — ดูเหตุผลเต็มที่ [isDeviceLightIdle]
+     * ซึ่งเป็นบั๊ก crash จริงที่เกิดจากวิธีตรวจผิดแบบนี้พอดี ค่าที่ยืนยันได้คือ
+     * `UsageStatsManager.getAppStandbyBucket()` — `since=28` ตรงกับที่
      * [developer.android.com/topic/performance/appstandby](https://developer.android.com/topic/performance/appstandby)
-     * (ดึง 4 ก.ย. 2026):** "Android 9 (API level 28) and later support App
-     * Standby Buckets." — ต้อง guard ด้วย `Build.VERSION_CODES.P` ก่อนเรียก
-     * ตามรูปแบบเดียวกับที่ [batteryOptimizationState] guard ด้วย
-     * `Build.VERSION_CODES.M` อยู่แล้วในไฟล์นี้ — เครื่องต่ำกว่า API 28 เขียน
-     * `n/a` (ไม่ใช่ `unknown`) เพราะรู้แน่ชัดว่าฟีเจอร์นี้ไม่มีบนเครื่องนั้น
-     * ไม่ใช่แค่ "หาค่าไม่ได้"
+     * ระบุไว้เช่นกัน: "Android 9 (API level 28) and later support App Standby
+     * Buckets." — `minSdk=24` ของโปรเจกต์นี้ต่ำกว่า 28 จึงต้อง guard ด้วย
+     * `Build.VERSION_CODES.P` ก่อนเรียกเสมอ ตามรูปแบบเดียวกับที่
+     * [batteryOptimizationState] guard ด้วย `Build.VERSION_CODES.M` อยู่แล้ว
+     * ในไฟล์นี้ — เครื่องต่ำกว่า API 28 คืน `"unsupported-api$SDK_INT"`
+     * (ไม่ใช่ `"unknown"` และไม่ใช่ `"n/a"`) เพราะรู้แน่ชัดว่าฟีเจอร์นี้ไม่มีบน
+     * เครื่องนั้น ไม่ใช่แค่ "หาค่าไม่ได้" และค่านี้ยังบอก API level จริงของ
+     * เครื่องไว้ให้สืบย้อนได้ทันทีจากบรรทัด log โดยไม่ต้องเทียบกับ
+     * `manufacturer=`/`model=`/`os=` ของบรรทัด `launch` แยกอีกที
      *
      * ค่าที่เป็นไปได้ยืนยันจาก
      * `~/Library/Android/sdk/sources/android-37.0/android/app/usage/UsageStatsManager.java:124-175`
@@ -420,7 +431,9 @@ object BackgroundEvidenceLog {
      * API เรียกผ่านชื่อได้ตามปกติ
      */
     private fun standbyBucketName(context: Context): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return "n/a"
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return "unsupported-api${Build.VERSION.SDK_INT}"
+        }
         val usageStatsManager =
             context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
                 ?: return "unknown"
@@ -461,23 +474,53 @@ object BackgroundEvidenceLog {
      * พบว่าเมธอดชื่อนั้น **`@Deprecated` + `@hide` +
      * `@UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.S)`** — ไม่ใช่
      * public API ที่เรียกได้จากแอปทั่วไปตั้งแต่ Android S เป็นต้นไป ชื่อที่ถูกคือ
-     * `PowerManager.isDeviceLightIdleMode()` (บรรทัด 2657-2668) ซึ่งไม่มี
-     * annotation จำกัดใดๆ เหมือนกับ [isDeviceIdle] ข้างบนที่เรียก
-     * `isDeviceIdleMode()` โดยไม่ guard เวอร์ชันเช่นกัน จึงเรียกแบบเดียวกัน
-     * ไม่มี `Build.VERSION.SDK_INT` guard
+     * `PowerManager.isDeviceLightIdleMode()` (บรรทัด 2657-2668)
+     *
+     * ⚠️ **บั๊ก crash จริงบนอุปกรณ์ (Xiaomi M2003J15SC / Android 12 · API 31 ·
+     * 4 ก.ย. 2026) — และบทเรียนเรื่องวิธีตรวจ API level ที่ผิด:** เวอร์ชันก่อน
+     * หน้าของคอมเมนต์นี้เคยสรุปว่า `isDeviceLightIdleMode()` "ไม่มี annotation
+     * จำกัดใดๆ" จึง "เรียกแบบเดียวกันไม่มี `Build.VERSION.SDK_INT` guard" ได้ —
+     * สรุปนั้น**ผิด**และเป็นต้นเหตุของ crash นี้ตรงๆ: การอ่าน source ของ SDK
+     * ล่าสุด (`android-37.0`) บอกได้แค่ว่าเมธอดมี/ไม่มี annotation จำกัด ณ
+     * ปัจจุบัน แต่ **ไม่ได้บอกว่าเมธอดนั้นเริ่มมีให้เรียกตั้งแต่ API ระดับใด** —
+     * เป็นคนละคำถามกัน `isDeviceLightIdleMode()` ไม่มี annotation จำกัดก็จริง
+     * แต่ตัวเมธอดเอง **ยังไม่มีอยู่ใน `PowerManager` ของเฟรมเวิร์กก่อน API 33
+     * (Tiramisu) เลย** — เรียกบนเครื่อง API ต่ำกว่านั้น (เช่น API 31 ที่ crash
+     * จริง) ได้ `NoSuchMethodError` ทันที ไม่เกี่ยวกับ annotation
+     *
+     * **แหล่งที่ใช้ตัดสิน API level ที่ถูกต้อง** คือ `since=` ใน
+     * `api-versions.xml` ของ Android SDK
+     * (`platforms/android-37.0/data/api-versions.xml`) หรือ "Added in API
+     * level N" ในเอกสารทางการ — ไม่ใช่การอ่าน source ของ SDK ล่าสุด ตัวเลขจริง
+     * ที่ยืนยันจาก `api-versions.xml` ของทุกเมธอดที่เกี่ยวข้องในไฟล์นี้:
+     * - `PowerManager.isDeviceIdleMode()` — `since=23` (`minSdk=24` ของ
+     *   โปรเจกต์นี้ ≥ 23 จึงเรียกได้โดยไม่ต้อง guard เพิ่ม — ดู [isDeviceIdle])
+     * - `PowerManager.isDeviceLightIdleMode()` — `since=33` (`minSdk=24` < 33
+     *   จึงต้อง guard)
+     * - `UsageStatsManager.getAppStandbyBucket()` — `since=28` (`minSdk=24` <
+     *   28 จึงต้อง guard — ดู [standbyBucketName])
+     *
+     * คืนค่า `"unsupported-api$SDK_INT"` แทนการเดา `Boolean` เมื่อเรียกไม่ได้ —
+     * **ห้ามคืน `"false"`** เพราะจะทำให้ "ไม่ได้อยู่ใน light idle" กับ "ถามไม่ได้
+     * บนเครื่องนี้" กลายเป็นค่าเดียวกัน ผิดแบบเดียวกับที่ไฟล์นี้อุตส่าห์แยก
+     * `restoredRegions=[]` ออกจาก `<read-failed:…>` ไว้แล้ว (ดู
+     * [restoredRegionsField])
      *
      * ทั้งสองเมธอด (`isDeviceIdleMode`/`isDeviceLightIdleMode`) มีประโยคเดียวกัน
      * เป๊ะในเอกสารต้นฉบับ: "it will return false if the device is in a
      * long-term idle mode but currently running a maintenance window where
-     * restrictions have been lifted." — แปลว่า `false` **ไม่ได้แปลว่าออกจาก
+     * restrictions have been lifted." — แปลว่า `"false"` **ไม่ได้แปลว่าออกจาก
      * idle mode แล้วจริงๆ** อาจเป็นแค่ maintenance window ชั่วคราว ผู้อ่าน
-     * ต้องดูควบคู่กับความยาวเวลาที่เครื่องไม่มีการโต้ตอบ ไม่ใช่เชื่อค่า `false`
-     * ว่าปลอดภัยเสมอ
+     * ต้องดูควบคู่กับความยาวเวลาที่เครื่องไม่มีการโต้ตอบ ไม่ใช่เชื่อค่า
+     * `"false"` ว่าปลอดภัยเสมอ
      */
-    private fun isDeviceLightIdle(context: Context): Boolean {
+    private fun isDeviceLightIdle(context: Context): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return "unsupported-api${Build.VERSION.SDK_INT}"
+        }
         val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            ?: return false
-        return power.isDeviceLightIdleMode
+            ?: return "unknown"
+        return power.isDeviceLightIdleMode.toString()
     }
 
     /**
