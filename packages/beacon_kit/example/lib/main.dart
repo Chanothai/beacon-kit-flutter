@@ -39,6 +39,22 @@ const String _bigcTestUuid = '89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF';
 /// Service UUID ของ Eddystone (`0xFEAA`)
 const String _eddystoneServiceUuid = '0000feaa-0000-1000-8000-00805f9b34fb';
 
+// ---- ProximityGate policy (ADR-19) — ตั้งค่าจากฝั่ง example app เอง ----
+//
+// ค่าพวกนี้เป็น**นโยบายของ host app** ไม่ใช่ default ที่ SDK เลือกให้ — ใส่ตรง ๆ
+// เข้าตัวสร้าง ProximityGate แทนที่จะปล่อยให้ใช้ default ของตัวเอง เพื่อให้เห็น
+// ชัดในโค้ดว่า threshold พวกนี้เป็นการตัดสินใจทางธุรกิจที่ host app เป็นเจ้าของ
+// (ADR-19 หัวข้อ 3) — ตัวเลขด้านล่างคือค่าตั้งต้นสำหรับ POC เดียวกับตาราง
+// ADR-19 §8 เป๊ะ **ยังไม่ผ่านการ calibrate กับสาขาจริง** ห้ามใช้เป็นค่า
+// production โดยไม่ผ่านรอบเก็บข้อมูลภาคสนามก่อน (ดู ADR-19 หัวข้อ 7/8)
+const double _proximityEnterMeters = 3.0;
+const double _proximityExitMeters = 5.0;
+const double _proximityImmediateMeters = 1.0;
+const int _proximityWindowSize = 5;
+const int _proximityDwellSamples = 3;
+const double _proximityPathLossExponent = 2.5;
+const Duration _proximityStaleAfter = Duration(seconds: 10);
+
 /// ⚠️ **หนี้ทางเทคนิคชั่วคราว — ตั้งใจให้อยู่ในไฟล์นี้ไฟล์เดียว**
 ///
 /// การแยกตามแพลตฟอร์มอยู่ใน example app เท่านั้น **ห้ามมีใน `beacon_kit`**
@@ -88,6 +104,21 @@ class _ScanPageState extends State<ScanPage> {
           IBeaconRegionConfig(identifier: 'bigc-test', uuid: _bigcTestUuid),
         ],
       );
+
+  /// ADR-19 — ชั้นตัดสินใจ "ใกล้พอหรือยัง" เหนือ ranging/scan ที่มีอยู่แล้ว
+  /// `clock: DateTime.now` ใช้ได้ตรงนี้เพราะเป็นโค้ดของ **host app** (example)
+  /// ไม่ใช่ข้างในตัว `ProximityGate` เอง (ซึ่งห้ามเรียก `DateTime.now()` ตรง ๆ
+  /// ต้องรับผ่าน constructor เท่านั้น — ดู dartdoc ของ `ProximityGate`)
+  final ProximityGate _proximityGate = ProximityGate(
+    clock: DateTime.now,
+    enterMeters: _proximityEnterMeters,
+    exitMeters: _proximityExitMeters,
+    immediateMeters: _proximityImmediateMeters,
+    windowSize: _proximityWindowSize,
+    dwellSamples: _proximityDwellSamples,
+    pathLossExponent: _proximityPathLossExponent,
+    staleAfter: _proximityStaleAfter,
+  );
 
   StreamSubscription<BeaconAdvertisement>? _subscription;
   StreamSubscription<IBeaconRegionStateEvent>? _regionSubscription;
@@ -327,6 +358,10 @@ class _ScanPageState extends State<ScanPage> {
       (advertisement) {
         final key =
             '${advertisement.deviceId.kind}:${advertisement.deviceId.value}';
+        // ADR-19: ป้อนทุก sample เข้า ProximityGate ก่อน — ผลลัพธ์ (transition)
+        // ไม่ได้ใช้โดยตรงตรงนี้ หน้าจอแค่อ่าน currentBucket()/debugSnapshot()
+        // ตอน build() ผ่าน _BeaconTile ซึ่งได้ rebuild อยู่แล้วจาก setState ข้างล่าง
+        _proximityGate.push(advertisement);
         setState(() => _beacons[key] = advertisement);
       },
       onError: (Object error) {
@@ -398,6 +433,10 @@ class _ScanPageState extends State<ScanPage> {
       (advertisement) {
         final key =
             '${advertisement.deviceId.kind}:${advertisement.deviceId.value}';
+        // ADR-19: ป้อนทุก sample เข้า ProximityGate ก่อน — ผลลัพธ์ (transition)
+        // ไม่ได้ใช้โดยตรงตรงนี้ หน้าจอแค่อ่าน currentBucket()/debugSnapshot()
+        // ตอน build() ผ่าน _BeaconTile ซึ่งได้ rebuild อยู่แล้วจาก setState ข้างล่าง
+        _proximityGate.push(advertisement);
         setState(() => _beacons[key] = advertisement);
       },
       onError: (Object error) {
@@ -670,7 +709,7 @@ class _ScanPageState extends State<ScanPage> {
           else
             for (final beacon in beacons) ...[
               const Divider(height: 1),
-              _BeaconTile(beacon),
+              _BeaconTile(beacon, proximityGate: _proximityGate),
             ],
         ],
       ),
@@ -855,9 +894,14 @@ class _EvidenceLogPanel extends StatelessWidget {
 }
 
 class _BeaconTile extends StatelessWidget {
-  const _BeaconTile(this.advertisement);
+  const _BeaconTile(this.advertisement, {required this.proximityGate});
 
   final BeaconAdvertisement advertisement;
+
+  /// ADR-19: อ่านผลของ `ProximityGate` เพื่อแสดง bucket + median เมตรต่อบีคอน —
+  /// widget แค่ render ผลที่ gate ตัดสินไว้แล้วเท่านั้น **ไม่มีตรรกะตัดสินใจใด ๆ
+  /// ในนี้** (ไม่คำนวณระยะเอง ไม่ตัดสิน bucket เอง)
+  final ProximityGate proximityGate;
 
   @override
   Widget build(BuildContext context) {
@@ -878,30 +922,58 @@ class _BeaconTile extends StatelessWidget {
       AdvertisementSource.rawParsed => 'raw ADV (Dart parser ถอด)',
     };
 
+    final lines = <String>[];
+
     if (advertisement.source == AdvertisementSource.osDecoded) {
-      return '$sourceLabel\n'
-          'uuid: ${advertisement.ibeaconUuid}, '
-          'major: ${advertisement.ibeaconMajor}, '
-          'minor: ${advertisement.ibeaconMinor}\n'
-          'proximity: ${advertisement.proximity?.name ?? 'unknown'}';
+      lines.add(sourceLabel);
+      lines.add(
+        'uuid: ${advertisement.ibeaconUuid}, '
+        'major: ${advertisement.ibeaconMajor}, '
+        'minor: ${advertisement.ibeaconMinor}',
+      );
+      lines.add('proximity: ${advertisement.proximity?.name ?? 'unknown'}');
+    } else if (advertisement.ibeaconUuid != null) {
+      // บน Android เส้นทาง raw เห็น iBeacon ได้ (Android ไม่ mask เหมือน iOS)
+      // จึงต้องแสดง uuid/major/minor ตรงนี้ด้วย ไม่งั้นหน้าจอสองเครื่องจะดูไม่
+      // เหมือนกันทั้งที่เป็น beacon ตัวเดียวกัน
+      lines.add(sourceLabel);
+      lines.add(
+        'uuid: ${advertisement.ibeaconUuid}, '
+        'major: ${advertisement.ibeaconMajor}, '
+        'minor: ${advertisement.ibeaconMinor}',
+      );
+      lines.add('txPower: ${advertisement.ibeaconTxPower} dBm');
+    } else if (eddystone != null) {
+      lines.add(sourceLabel);
+      lines.add('eddystone: $eddystone');
+    } else {
+      lines.add(sourceLabel);
     }
 
-    // บน Android เส้นทาง raw เห็น iBeacon ได้ (Android ไม่ mask เหมือน iOS)
-    // จึงต้องแสดง uuid/major/minor ตรงนี้ด้วย ไม่งั้นหน้าจอสองเครื่องจะดูไม่
-    // เหมือนกันทั้งที่เป็น beacon ตัวเดียวกัน
-    if (advertisement.ibeaconUuid != null) {
-      return '$sourceLabel\n'
-          'uuid: ${advertisement.ibeaconUuid}, '
-          'major: ${advertisement.ibeaconMajor}, '
-          'minor: ${advertisement.ibeaconMinor}\n'
-          'txPower: ${advertisement.ibeaconTxPower} dBm';
-    }
+    final proximityLine = _proximityLineFor(advertisement);
+    if (proximityLine != null) lines.add(proximityLine);
 
-    if (eddystone != null) {
-      return '$sourceLabel\neddystone: $eddystone';
-    }
+    return lines.join('\n');
+  }
 
-    return sourceLabel;
+  /// `null` เมื่อ [advertisement] ไม่มี `ibeaconUuid`/`major`/`minor` ครบ (เช่น
+  /// เป็น Eddystone ล้วน) — `ProximityGate` ไม่มีทางสร้าง key ให้ได้เลยในเคสนั้น
+  /// (ดู dartdoc ของ `ProximityGate.push`)
+  String? _proximityLineFor(BeaconAdvertisement advertisement) {
+    final uuid = advertisement.ibeaconUuid;
+    final major = advertisement.ibeaconMajor;
+    final minor = advertisement.ibeaconMinor;
+    if (uuid == null || major == null || minor == null) return null;
+
+    final key = (uuid: uuid, major: major, minor: minor);
+    final bucket = proximityGate.currentBucket(key);
+    final medianMeters = proximityGate.debugSnapshot(key)?.medianMeters;
+
+    final bucketLabel = bucket?.name ?? 'ยังไม่ยืนยัน (รอ dwell/sample เพิ่ม)';
+    final medianLabel = medianMeters == null
+        ? 'N/A (bucket มาจาก OS ตรง ๆ หรือยังไม่มีข้อมูล)'
+        : '~${medianMeters.toStringAsFixed(2)} m';
+    return 'ProximityGate: $bucketLabel · median: $medianLabel';
   }
 }
 
