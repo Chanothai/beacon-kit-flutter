@@ -55,6 +55,12 @@ const int _proximityDwellSamples = 3;
 const double _proximityPathLossExponent = 2.5;
 const Duration _proximityStaleAfter = Duration(seconds: 10);
 
+/// ADR-19: `ProximityGate` ไม่มี `Timer` ในตัวเอง (ต้อง pure/testable) — host
+/// app เป็นคนตั้งเวลาเรียก `sweepStale()` ซ้ำเอง ค่านี้คือความถี่ที่ example
+/// เลือกใช้ (สั้นกว่า `_proximityStaleAfter` มากพอที่จะให้ UI อัปเดตไว ไม่ใช่
+/// ค่าที่ ADR-19 §8 กำหนด — เป็น implementation detail ของ host app ล้วน ๆ)
+const Duration _proximitySweepInterval = Duration(seconds: 1);
+
 /// ⚠️ **หนี้ทางเทคนิคชั่วคราว — ตั้งใจให้อยู่ในไฟล์นี้ไฟล์เดียว**
 ///
 /// การแยกตามแพลตฟอร์มอยู่ใน example app เท่านั้น **ห้ามมีใน `beacon_kit`**
@@ -120,6 +126,12 @@ class _ScanPageState extends State<ScanPage> {
     staleAfter: _proximityStaleAfter,
   );
 
+  /// ADR-19: `ProximityGate.sweepStale()` ต้องมีคนเรียกซ้ำแม้ไม่มี sample ใหม่
+  /// เข้ามาเลย (เคส "ลูกค้าเดินออกจากร้าน") — Timer นี้อยู่ฝั่ง host app เท่านั้น
+  /// (`ProximityGate` เองห้ามมี `Timer` ภายใน ดู dartdoc ของคลาสนั้น) ต้อง
+  /// `cancel()` ใน `dispose()` เสมอ ไม่งั้น timer จะยิงใส่ widget ที่ถูกทิ้งไปแล้ว
+  Timer? _proximitySweepTimer;
+
   StreamSubscription<BeaconAdvertisement>? _subscription;
   StreamSubscription<IBeaconRegionStateEvent>? _regionSubscription;
 
@@ -184,6 +196,13 @@ class _ScanPageState extends State<ScanPage> {
   void initState() {
     super.initState();
     BeaconManager.register(_adapter);
+    // ADR-19: ต้องมีคนเรียก sweepStale() ซ้ำแม้ไม่มี sample ใหม่เข้ามาเลย —
+    // เริ่มตั้งแต่เปิดแอป ไม่รอกดปุ่ม เหมือนกับกลไกอื่นในหน้านี้ที่ต้องพร้อมทำงาน
+    // ทันทีที่เปิดแอป
+    _proximitySweepTimer = Timer.periodic(
+      _proximitySweepInterval,
+      (_) => _sweepProximityStale(),
+    );
     // ดึงตั้งแต่เปิดแอป ไม่รอให้กดปุ่ม — ถ้ารอบเบื้องหลังก่อนหน้าเขียนไฟล์ไม่ได้
     // ผู้ทดสอบต้องเห็นทันทีที่เปิดแอปมาดูผล ไม่ใช่ต้องรู้ว่ามีปุ่มนี้อยู่ก่อน
     unawaited(_refreshLogWriteError());
@@ -201,6 +220,19 @@ class _ScanPageState extends State<ScanPage> {
     _listenToRegionEvents();
     _refreshAuthorizationLevel();
     unawaited(_diagnostics.requestNotificationAuthorization());
+  }
+
+  /// ADR-19: เรียก `ProximityGate.sweepStale()` เพื่อตรวจ key ที่เงียบไปนานเกิน
+  /// `staleAfter` **แม้ไม่มี sample ใหม่เข้ามาเลย** — จำเป็นสำหรับเคส "ลูกค้าเดิน
+  /// ออกจากร้าน" ที่ไม่มีทางมี sample ใหม่มาทำให้ `push()` ตรวจจับความเงียบได้เอง
+  /// ผลลัพธ์ (`ProximityTransition`) ไม่ได้ใช้โดยตรงตรงนี้เหมือนกับ `push()` —
+  /// แค่ต้อง `setState()` เพื่อให้ `_BeaconTile` rebuild แล้วอ่าน
+  /// `currentBucket()`/`debugSnapshot()` ที่ล้างแล้วออกมาแสดงผล
+  void _sweepProximityStale() {
+    if (!mounted) return;
+    final transitions = _proximityGate.sweepStale();
+    if (transitions.isEmpty) return;
+    setState(() {});
   }
 
   void _listenToRegionEvents() {
@@ -596,6 +628,7 @@ class _ScanPageState extends State<ScanPage> {
 
   @override
   void dispose() {
+    _proximitySweepTimer?.cancel();
     _subscription?.cancel();
     _regionSubscription?.cancel();
     // ยกเลิกเฉพาะ **การฟัง** ไม่ได้สั่งหยุดเฝ้า — การเฝ้าเบื้องหลังต้องอยู่ต่อ
