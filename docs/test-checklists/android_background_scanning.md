@@ -71,6 +71,220 @@ grep -c "exitReason=" docs/test-data/2026-09-03_android_overnight_stale_inside.l
 ทั้งสองไฟล์ไม่มีคีย์ `exitReason=` แม้แต่บรรทัดเดียว — ยืนยันว่าเป็นบิลด์ก่อน ADR-17 จริง
 ตามที่คาดไว้ ดูแถว **ข้อ 10 (§11)** ในตารางผลด้านล่าง — สถานะยังคง **ยังไม่ทดสอบ**
 
+### ADR-20 (proximity gate เบื้องหลัง) — `observed` เฉพาะ 4 ข้อ · ค่า `staleAfter` ใหม่ยัง `code-complete, unverified`
+
+**บิลด์ที่ใช้ทดสอบ 9 ก.ย. 2026 (รอบเดิน 12:54-13:08):**
+`sha256 099223dda38c7e63f714144a5a2ce6d1272000e18445ed4f7b072164e08302be` — บิลด์นี้ใช้
+`staleAfterMillis = 10_000L`
+
+**บิลด์รอบเดินที่ 2 (13:30-13:50) — `staleAfterMillis = 60_000L`:**
+`sha256 ea7374ed118359dbcdf02cb29bac3026455bf4fdf0fd0552c245ac49b3f7677a` (build 13:17)
+
+**บิลด์ที่ติดตั้งอยู่บนเครื่องตอนนี้ และที่รอบข้ามคืนคืน 9 ก.ย. จะรันบนมัน:**
+`sha256 222566b794ce869704d18b0ac53087736e254460ed6e82ebb26a50162a0bcad5`
+(`flutter build apk --debug` 9 ก.ย. 2026 13:55) — ต่างจากบิลด์ 13:17 ที่ **ตัวกรอง
+notification ของ `ExampleProximityWatcher` เท่านั้น** (ยิงเฉพาะตอนเข้าสู่ความใกล้จาก
+`far`/ไม่เคยมี bucket ไม่ยิงตอน `near`↔`immediate` ขยับกันเอง) **ไม่แตะตรรกะ SDK เลย**
+· ยังไม่มีรอบเดินซ้ำหลังเปลี่ยน จึงเป็น `code-complete, unverified`
+· ADR-17 ไม่ถูกแตะในบิลด์นี้ (ยืนยันจาก `git diff` — `BackgroundRegionMonitor.kt` 0 บรรทัด)
+รอบข้ามคืนจึงยังนับเป็น**รอบที่ 2 ของ ADR-17**ได้
+
+**ไฟล์หลักฐาน:** [`docs/test-data/2026-09-09_android_proximity_background.log`](../test-data/2026-09-09_android_proximity_background.log)
+— 422 บรรทัด · md5 `84a272e84afcbf9ee0749449e3e55670` · 195 บรรทัด `event=proximity`
+(ครอบทั้งรอบที่ 1 และรอบที่ 2)
+
+| ข้อ | ผล | หลักฐาน |
+|---|---|---|
+| 1. เห็น `enter` ทั้งสอง region | **ผ่าน** | 12:44:21 `bigc-test` · 12:44:22 `k9p-default` |
+| 3. เดินเข้า 2 m → **บรรทัดหลักฐาน**โดยไม่เปิดแอป | **ผ่าน** | 13:05:03 `bigc-test bucket=near from=none reason=closer medianM=1.2 rssi=-53 txPower=-51` ใน process `3ab5154f` ที่ `conclusion=relaunchedFromTerminated` |
+| 3ก. เดินเข้า 2 m → **notification** โดยไม่เปิดแอป | ❌ **ยังพิสูจน์ไม่ได้** | ดูหัวข้อ "notification ถูกระบบบล็อก" ด้านล่าง — `dumpsys notification` รายงาน `numEnqueuedByApp=10 numPostedByApp=0 numBlocked=10` สำหรับแพ็กเกจนี้ |
+| 4. เดินออก → ไม่มี notification ซ้ำ | **ผ่านบางส่วน** | 13:07:52 `bucket=far reason=farther medianM=5.2` ถูกกรองไม่ยิง notification ถูกต้อง **แต่**ตอนยืนนิ่งกลับได้ notification ซ้ำ (ดูข้อ 7 ด้านล่าง) |
+| 5. `event=proximity` + `conclusion=relaunchedFromTerminated` | **ผ่าน** | 12:58:55.830 `uptimeMs=139` · 13:04:01.363 `uptimeMs=192` และอีกหลายบรรทัด |
+| 6. `enter`/`exit` ไม่ regression | **ผ่าน** | 13:00:57 `exit` ทั้งสอง region (`exitReason=alarm` `sinceLastSeenMs=109713`) → 13:01:25 `enter bigc-test` → 13:01:32 `enter k9p-default` ครบวงจรตามปกติ |
+| 2. ปัดแอปทิ้งจาก recent | **ผ่าน** | ทุกบรรทัดตั้งแต่ 12:58:22 เป็นต้นไปมี `everForeground=false activities=0 state=noActivityEver` และ `procUuid` ใหม่ทุกครั้ง |
+
+**รอบเดินที่ 2 (13:30-13:50 · `staleAfter=60s`) — เทียบกับรอบที่ 1 โดยตรง:**
+
+| ตัวชี้วัด | รอบ 1 `staleAfter=10s` (14 นาที) | รอบ 2 `staleAfter=60s` (20 นาที) |
+|---|---|---|
+| `proximity` ต่อนาที | 4.4 | 1.8 |
+| `reason=stale` | 31/62 = 50% | 9/36 = 25% |
+| `from=none` (state ถูกล้าง) | 30/62 = 48% | 9/36 = 25% |
+| transition ที่มี `from` จริง (hysteresis ได้ทำงาน) | **1** | **18** |
+| flap `near`↔`immediate` | 1 | **16** |
+| notification ที่ควรเด้ง | 0.8 ใบ/นาที | 0.8 ใบ/นาที |
+
+การขยับ `staleAfter` **ได้ผลตามที่ตั้งใจ** (สามแถวแรก) และ `reason=stale` ที่เหลือ 9 ครั้ง
+ส่วนใหญ่ถูกต้อง (เกิดหลัง `exit` จริงช่วง 13:34-13:39) · `enter`/`exit` จับคู่ครบ 6/6 คู่
+ไม่มี regression
+
+⚠️ **แต่มันเปิดโปงปัญหาคนละตัวที่ถูกกลบอยู่:** ขอบ `immediate`/`near` **ไม่มี hysteresis**
+(`classify()` ใส่ dead zone เฉพาะขอบ far/close ตาม ADR-19 หัวข้อ 6(ข)) ผู้ทดสอบที่ยืนนิ่ง
+ราว 1 เมตรทำให้ median ข้าม `immediateMeters = 1.0` ไป-กลับทุก batch และทั้งสองทิศยิง
+notification ได้เหมือนกัน → **16 จาก 36 event ของรอบที่ 2** เช่น 13:46:22 `immediate←near
+medianM=0.8` → 13:49:25 `near←immediate medianM=1.7` → 13:49:53 `immediate←near medianM=0.8`
+
+**`proximity_gate.dart` มีพฤติกรรมเดียวกันเป๊ะ** — เป็นช่องว่างของการออกแบบ ไม่ใช่บั๊กของ
+การ port การเติม hysteresis ที่ขอบนี้ต้องเป็น ADR รอบใหม่ที่แก้ทั้ง Dart และ Kotlin พร้อมกัน
+รอบนี้จึงกันที่ชั้นนโยบายของ example app แทน (ยิงเฉพาะตอนเข้าสู่ความใกล้) **ยังไม่มีอะไร
+กันในตัว SDK** และ **ยังไม่ได้ทดสอบซ้ำหลังแก้**
+
+### 🔎 สอบสวนก่อนบันทึก ADR-20 เป็น `observed` — ผลคือ **ยังบันทึกไม่ได้**
+
+ไฟล์ที่สอบสวน: [`docs/test-data/2026-09-09_android_proximity_background_round3.log`](../test-data/2026-09-09_android_proximity_background_round3.log)
+(98 บรรทัด · md5 `4e5cc9ece81ccd4b3b730761929bfa51` · ช่วง 16:41-16:51 ของเครื่องที่ 1)
+
+#### A. `reason=stale` 3 บรรทัดใน 34 ms ที่ `k9p-default` (16:45:20.702/.720/.736)
+
+**ไม่ใช่บั๊ก entry ซ้ำ** — สามบรรทัดมี `from=near`, `from=immediate`, `from=near`
+ซึ่งเป็น `confirmedBucket` ของ **สาม gate key ที่ต่างกัน** (คนละ MAC ใน region
+เดียวกัน ตาม ADR-20 หัวข้อ 3) ไม่ใช่ key เดียวยิงสามครั้ง ยืนยันโครงสร้างด้วยเทสต์
+ใหม่ 2 ตัว: store เก็บเป็น `JSONObject` ที่ key ซ้ำไม่ได้โดยนิยาม (`save()` ซ้ำ 3 รอบ
+→ `load()` ได้ 3 entry ไม่ใช่ 9) และ `sweepStale()` ยิงได้ **key ละครั้งเดียว**
+
+**แต่เจอของจริง 2 อย่างระหว่างสอบสวน:**
+
+1. **บรรทัดหลักฐานแยกบีคอนไม่ออก** — `ProximityChangedEvent` ไม่มีตัวระบุบีคอน
+   (ADR-20 หัวข้อ 5 ไม่ได้นิยามไว้) บรรทัดของคนละบีคอนจึงพิมพ์ออกมาเหมือนกันหมด
+   ทำให้อ่านเหมือนบั๊ก **แก้แล้ว: เพิ่ม `beacon=` (สองไบต์ท้ายของ MAC เท่านั้น
+   ไม่ใช่ที่อยู่เต็ม เพราะไฟล์นี้ถูก commit เข้า repo)**
+2. **`ProximityGateStore.clear()` ไม่มีผู้เรียกแม้แต่รายเดียว** — `stop()` ของ
+   `BackgroundRegionMonitor` เรียก `BackgroundRegionStore.clearAll()` ซึ่งเป็น
+   **store คนละตัว** สถานะชั้น 2 จึงค้างบนดิสก์ข้ามรอบทดสอบตลอดไป แล้วโผล่เป็น
+   `stale` รัว ๆ ตอน sighting แรกของรอบถัดไป — ตรงกับรูปแบบที่เห็นพอดี (process
+   เกิด 16:41:04 · sighting แรก 16:45:20) **แก้แล้ว: `monitorStop` ล้าง store ให้**
+   ⚠️ แก้ที่ example app เพราะรอบนี้ห้ามแตะเส้นทาง region monitoring —
+   **เป็นหนี้ที่ต้องย้ายเข้า `stop()` ของ SDK ในรอบถัดไป**
+
+#### B. `from=none` ที่ 16:47:58 หลัง `bucket=far` ที่ 16:47:14 (process `e61faf74` เดียวกัน)
+
+**บิลด์บนเครื่อง:** `sha256 5cb9d8b9a275e0dde33cf9a38fea6007003f4251710e3899588164700ba52a30`
+· `lastUpdateTime=2026-09-09 15:53:38` — **ไม่ตรงกับบิลด์ใดที่สร้างในเซสชันนี้**
+(สร้างไว้ 12:37 / 13:17 / 13:55 / 14:46) แปลว่ามีการ build+install จากที่อื่นเวลา 15:53
+**แต่ระบุรุ่นได้จากเนื้อ log**: ไฟล์มีบรรทัด `event=notification` ซึ่งมีเฉพาะตั้งแต่
+commit `d217f21` เป็นต้นไป → บิลด์นี้รวม `c66f33b` แล้ว → **`staleAfterMillis = 60_000L`**
+
+ช่องว่าง 16:47:14 → 16:47:58 = **44.5 วินาที < 60 วินาที** จึงไม่ควร stale และไม่ควร
+ได้ `from=none` — เว้นแต่เป็น **คนละ key** ซึ่งเป็นคำอธิบายที่น่าจะใช่ที่สุดเพราะข้อ A
+พิสูจน์แล้วว่า `k9p-default` มีบีคอนอย่างน้อย 3 ตัว
+
+**code path ที่ทำให้ state หายโดยไม่ emit `stale` — มีจริง 3 ทาง (พบจากการอ่านโค้ด):**
+
+| ทาง | ผลลัพธ์ | ร่องรอยเดิม |
+|---|---|---|
+| `load()` โยน exception | `lastError` ถูกตั้ง แล้วคืน map ว่าง → push ถัดไปได้ `from=none` | logcat เท่านั้น |
+| `statesFromJson()` ข้าม key ที่ถอดไม่ออก (`continue`) | key นั้นหายเงียบ ๆ key เดียว | **ไม่มีเลย** |
+| `save()` คืน false / โยน exception | สถานะไม่ลงดิสก์ → process ถัดไปเริ่มจากศูนย์ | logcat เท่านั้น |
+
+ทั้งสามทาง**ไม่เคยปรากฏในไฟล์หลักฐาน** ตอนอ่านผลย้อนหลังจึงแยกจาก "คนละบีคอน" ไม่ได้
+**แก้แล้ว: เพิ่ม `store=ok|<error>` ในบรรทัด `proximity`**
+
+**สรุปข้อ B: อธิบายได้ แต่ยังพิสูจน์ไม่ได้จากไฟล์ที่มี** — ต้องเดินอีกหนึ่งรอบบนบิลด์
+ที่มี `beacon=`/`store=` ถึงจะชี้ขาดว่าเป็นคนละบีคอนหรือเป็น store ล้มเหลว
+
+#### C. มีการรัน `set-standby-bucket` ซ้ำระหว่าง 16:47-16:51 หรือไม่
+
+**ไม่มี** — คำสั่ง `adb` ครั้งสุดท้ายที่ยิงไปยังเครื่องที่ 1 ในเซสชันนี้คือเวลาประมาณ
+14:25 (ก่อนสลับสาย) และ `am set-standby-bucket` ครั้งสุดท้ายบนเครื่องนี้คือหลังการ
+ติดตั้งซ้ำเวลาประมาณ 14:21 · ระหว่าง 16:47-16:51 **ไม่มีคำสั่งใดถูกยิงไปที่เครื่องนี้เลย**
+ค่าที่เห็นในบรรทัด log ช่วงนั้นจึงเป็นค่าที่ระบบกำหนดเอง ไม่ใช่ผลของคำสั่งจากภายนอก
+
+#### D. `event=monitorStart` / `event=monitorStop`
+
+เพิ่มแล้วในไฟล์หลักฐาน (`detail=registered=N failed=M` และ `detail=byUser`) ปิดช่องที่
+ทำให้ "ความเงียบ" แปลได้สองอย่าง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่แรก ·
+`monitorStop` ล้าง `ProximityGateStore` ให้ด้วย (`proximityStoreCleared=true`)
+
+#### E. สถานะของ ADR-20 หลังสอบสวน
+
+**ยังเป็น `code-complete, unverified` ห้ามเลื่อนเป็น `observed`** — ข้อ A มีคำอธิบาย
+ครบและมีเทสต์ล็อกแล้ว แต่**ข้อ B ยังพิสูจน์ไม่ได้** ด้วยไฟล์ที่มีอยู่ และการเลื่อน
+สถานะโดยที่ยังมีบรรทัดที่อธิบายไม่ได้ค้างอยู่ ขัด `CONTRIBUTING.md` ข้อ 4 โดยตรง
+· เงื่อนไขที่จะเลื่อนได้: เดินหนึ่งรอบบนบิลด์ที่มี `beacon=`/`store=` แล้วบรรทัดทุก
+บรรทัดในรอบนั้นอธิบายได้
+
+---
+
+### เครื่องที่ 2 — Xiaomi 11T Pro `21081111RG` (แยกจาก Redmi Note 9 ห้ามปนผล)
+
+| | เครื่องที่ 1 | เครื่องที่ 2 |
+|---|---|---|
+| serial | `0703455c0406` | `fyrg9xf67h9ts84d` |
+| รุ่น | M2003J15SC (Redmi Note 9 · `merlin`) | **21081111RG (Xiaomi 11T Pro · `amber`)** |
+| Android / API | 12 / **31** | 13 / **33** |
+| MIUI | — | **V140 (`V14.0.6.0.TKWMIXM`)** |
+| ใช้ทำอะไร | รอบข้ามคืน ADR-14/ADR-17 | **พิสูจน์ notification บน API 33** |
+| `lightIdle` ในไฟล์ log | `unsupported-api31` เสมอ | **`false` (ค่าจริงครั้งแรก)** |
+
+**⚠️ ผลของสองเครื่องห้ามนำมารวมกันเป็นรอบเดียว** — คนละ API level คนละกลไก
+notification และคนละไฟล์หลักฐาน
+
+#### notification บน API 33 — `observed` (9 ก.ย. 2026 14:47)
+
+สาเหตุที่ notification ไม่ขึ้นบนเครื่องนี้ **คนละเรื่องกับ Redmi**: Android 13 เปลี่ยน
+`POST_NOTIFICATIONS` เป็น runtime permission และ `targetSdk` ของ example (จาก
+`flutter.targetSdkVersion`) ≥ 33 → **ระบบไม่ถามให้เอง** แอปต้องขอเอง แต่โค้ดเดิม
+`requestNotificationAuthorization` คืนแค่ `SDK_INT < 33` = ไม่เคยขอเลยสักครั้ง
+ผลคือ `notify()` เงียบสนิท ไม่ throw ไม่มี error (แก้ใน commit `d217f21`)
+
+**ยืนยันครบ 3 ชั้นตามที่กำหนด:**
+
+| ชั้น | ผล |
+|---|---|
+| เห็นด้วยตา | heads-up ขึ้นบนจอจริง "ทดสอบแจ้งเตือน · ถ้าเห็นใบนี้ = ระบบยอมให้แอปแจ้งเตือนแล้ว" |
+| `dumpsys notification` | `numEnqueuedByApp=18 numPostedByApp=6` (เดิม posted=0) · `NotificationRecord … importance=4` · `effectiveNotificationChannel{mId='beacon_kit_example.region_events_v2', mImportance=4}` · ไม่มี `blocked=true` |
+| ไฟล์หลักฐาน | `14:47:03.945 d7818de7 notification - foreground … lightIdle=false posted=true reason=granted id=1` |
+
+**สภาพแวดล้อมที่ตั้งไว้:** `POST_NOTIFICATIONS` / `BLUETOOTH_SCAN` /
+`ACCESS_FINE_LOCATION` = granted · battery `deviceidle whitelist` = อยู่ในรายการ
+(`user,com.beaconkit.example,10245`) · `standby-bucket = 5 (EXEMPTED)` ·
+build ที่ติดตั้ง `sha256 2f1c5cfa91a9d36c7ec2…`
+
+**ยังไม่ได้ทำบนเครื่องนี้:** MIUI Autostart (ไม่มีคำสั่ง adb ต้องเปิดในแอป Security เอง)
+· รอบเดินทดสอบ proximity ตามขั้น 4 ของ brief · ผล proximity ทั้งหมดในไฟล์นี้ยังเป็นของ
+Redmi Note 9 เท่านั้น
+
+---
+
+### ⛔ notification ถูกระบบบล็อก — ข้อ 3ก ยังพิสูจน์ไม่ได้ (พบ 9 ก.ย. 2026 14:16) · **เครื่องที่ 1 (Redmi Note 9) เท่านั้น**
+
+**ข้อเท็จจริงที่ตรวจได้จากเครื่อง:**
+
+1. `adb shell dumpsys notification` → `AggregatedStats{ key='com.beaconkit.example',
+   numEnqueuedByApp=10, numPostedByApp=0, numBlocked=10 }` — แอป**ยื่น**ครบแต่**ไม่ถูกโพสต์
+   สักใบ**
+2. `AppSettings: com.beaconkit.example (10144)` **ไม่มีฟิลด์ `importance=` และ `userSet=`**
+   ต่างจากแอป sideload ตัวอื่นบนเครื่องเดียวกันที่ผู้ใช้เคยกดอนุญาต เช่น
+   `dev.firebase.appdistribution (10263) importance=DEFAULT userSet=true`
+   → ผู้ใช้**ไม่เคยอนุญาต** notification ให้แอปนี้ และค่าตั้งต้นของ MIUI คือปิด
+3. Settings → Notifications → App notifications → sort **"Turned off"** → **มี `example`
+   อยู่ในรายการนั้นจริง**
+4. หน้า per-app notification settings **เป็นสีเทาทั้งหน้า กดไม่ได้แม้แต่สวิตช์ `Show
+   notifications`** (ยืนยันด้วยการ `adb shell input tap` ที่พิกัดสวิตช์แล้วสถานะไม่เปลี่ยน)
+5. **ไม่ใช่** DND (`zen_mode=0`) · **ไม่ใช่** battery saver (`low_power=0`) · **ไม่ใช่**
+   app suspended (`suspended=false stopped=false`) · `appops POST_NOTIFICATION = allow`
+   · channel `beacon_kit_example.region_events` มีอยู่จริงและ `mImportance=3 mDeleted=false`
+6. ลองติดตั้งใหม่โดยระบุ installer (`adb install -r -i com.android.vending`) แล้ว
+   `installerPackageName=com.android.vending` — **สวิตช์ยังเทาเหมือนเดิม**
+
+**ผลต่อการอ่านผลรอบทดสอบ:** บรรทัดหลักฐานในไฟล์ log **ไม่ได้รับผลกระทบเลย** (เขียนลง
+`filesDir` ตรง ๆ ไม่ผ่าน NotificationManager) ข้อ 1, 2, 3, 4, 5, 6 ที่อ้างบรรทัด log จึงยัง
+ยืนยันได้ตามเดิม — สอดคล้องกับกติกาที่ `ExampleNotifications` เขียนไว้เองว่า "log คือหลักฐาน
+notification ไม่ใช่" **แต่เกณฑ์ "ต้องเห็น notification" ของข้อ 3 ยังพิสูจน์ไม่ได้บนเครื่องนี้**
+และคำบอกเล่าของผู้ทดสอบที่ว่าเห็น notification เด้งระหว่างรอบที่ 1 **ยังอธิบายไม่ได้ด้วย
+ข้อมูลที่มี** (สมมติฐานที่ยังไม่ได้พิสูจน์: MIUI ปิดให้เองหลังแอปยิงถี่ 13 ใบใน 15 นาที)
+— ห้ามนับเป็นหลักฐานจนกว่าจะปลดบล็อกแล้วเดินซ้ำ
+
+**ยังไม่ได้ลอง:** รีบูตเครื่องแล้วดูสวิตช์อีกครั้ง · ถอนแล้วติดตั้งใหม่ทั้งหมด (จะล้างไฟล์
+หลักฐานและต้องเปิดแอปลงทะเบียน region ใหม่ — ก๊อปไฟล์ log ออกมาก่อนทุกครั้ง)
+
+⚠️ **ข้อ 7 (รอบที่ 1) — สิ่งที่พบและแก้ไปแล้วด้วย `staleAfter=60s`:** ผู้ทดสอบได้ notification **13 ใบใน 15 นาที**
+ทั้งที่ยืนอยู่กับที่ (near → immediate → near วน) เพราะ `staleAfter = 10s` สั้นกว่าช่วงห่างระหว่าง
+batch จริง (มัธยฐาน 12.1-17.5 วินาที · เกิน 10 วินาที 38 จาก 52 ช่องว่าง) gate จึงล้าง state ทิ้ง
+ครึ่งหนึ่งของทุก event (31 จาก 63 บรรทัดเป็น `reason=stale`) `from` เป็น `none` แทบทุกครั้ง และ
+**hysteresis 3.0/5.0 ไม่เคยได้ทำงานเลยสักครั้งตลอดรอบ** — แก้ด้วยการขยับ `staleAfterMillis`
+เป็น 60_000L (ADR-20 หัวข้อ 7) ซึ่ง**ยังไม่ได้ทดสอบซ้ำ**
+
 ---
 
 ## หมายเหตุถาวร — วิธีอ่าน `exitReason=staleReconcile` (ADR-17)

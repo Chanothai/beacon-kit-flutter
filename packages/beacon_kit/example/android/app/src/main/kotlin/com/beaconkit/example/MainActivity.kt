@@ -1,6 +1,13 @@
 package com.beaconkit.example
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
+import androidx.core.content.ContextCompat
+import com.bigc.beacon_kit_android.ProximityGateStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -18,6 +25,15 @@ import io.flutter.plugin.common.MethodChannel
  * เฉพาะในเคสที่ไม่ต้องพิสูจน์อะไร ซึ่งเป็นความผิดพลาดเดียวกับที่ ADR-10 แก้ฝั่ง iOS
  */
 class MainActivity : FlutterActivity() {
+
+    /**
+     * `Result` ของ `requestNotificationAuthorization` ที่ยังรอคำตอบจากกล่องขอสิทธิ์
+     *
+     * ต้องเก็บไว้เพราะ `requestPermissions()` เป็น **asynchronous** — คำตอบมาที่
+     * [onRequestPermissionsResult] คนละ callback กัน ถ้าไม่เก็บไว้ ฝั่ง Dart จะ
+     * `await` ค้างตลอดไปโดยไม่มี error ให้เห็น
+     */
+    private var pendingNotificationResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -72,11 +88,42 @@ class MainActivity : FlutterActivity() {
 
             "runEvidenceLogSelfTest" -> result.success(evidenceLogSelfTest())
 
-            "requestNotificationAuthorization" -> {
-                // Android 12 (เครื่องทดสอบ) ยังไม่มี POST_NOTIFICATIONS ให้ขอ —
-                // notification ใช้ได้เลย คืน true ตรงตามความจริงบนเวอร์ชันนี้
-                // ⚠️ ต้องแก้เมื่อรันบน Android 13+ ซึ่งต้องขอสิทธิ์จริง
-                result.success(android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU)
+            "logMonitorLifecycle" -> {
+                val event = call.argument<String>("event")
+                if (event != "monitorStart" && event != "monitorStop") {
+                    result.error(
+                        "INVALID_ARGUMENT",
+                        "event ต้องเป็น monitorStart หรือ monitorStop เท่านั้น",
+                        null,
+                    )
+                } else {
+                    logMonitorLifecycle(event, call.argument<String>("detail"))
+                    result.success(null)
+                }
+            }
+
+            "requestNotificationAuthorization" -> requestNotificationPermission(result)
+
+            "openNotificationSettings" -> {
+                // พาผู้ใช้ไปหน้าตั้งค่า notification ของแอปนี้โดยตรง — จำเป็นเพราะ
+                // เมื่อผู้ใช้กด "ไม่อนุญาต" ครบตามเกณฑ์ของระบบแล้ว
+                // `requestPermissions()` จะไม่แสดงกล่องอีกเลยและคืน DENIED ทันที
+                // ทางเดียวที่เหลือคือให้ผู้ใช้เปิดเองในหน้าตั้งค่า
+                //
+                // และบน MIUI ยังมีชั้นของผู้ผลิตซ้อนอยู่อีกชั้นที่ปิดได้แยกจาก
+                // runtime permission ของ Android — หน้านี้คือที่เดียวที่เห็นทั้งคู่
+                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                runCatching { startActivity(intent) }
+                    .onFailure {
+                        result.error(
+                            "SETTINGS_UNAVAILABLE",
+                            "เปิดหน้าตั้งค่า notification ไม่ได้: ${it.message}",
+                            null,
+                        )
+                        return
+                    }
+                result.success(null)
             }
 
             "postNotification" -> {
@@ -92,6 +139,126 @@ class MainActivity : FlutterActivity() {
 
             else -> result.notImplemented()
         }
+    }
+
+    /**
+     * เขียนบรรทัด `monitorStart` / `monitorStop` ลงไฟล์หลักฐาน
+     *
+     * ## ทำไมต้องมี
+     *
+     * ไฟล์หลักฐานเดิมบอกไม่ได้เลยว่า "ช่วงเวลานี้สั่งเฝ้าอยู่หรือเปล่า" — ความเงียบ
+     * จึงแปลได้สองอย่างที่ต่างกันสิ้นเชิง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่
+     * แรก · บรรทัดคู่นี้ปิดช่องนั้น และเป็นเส้นแบ่งรอบทดสอบที่อ่านย้อนหลังได้จริง
+     *
+     * ## ทำไม `monitorStop` ต้องล้าง [ProximityGateStore] ด้วย
+     *
+     * `BackgroundRegionMonitor.stop()` ล้างเฉพาะสถานะของ**ชั้น 1**
+     * (`BackgroundRegionStore.clearAll()`) — **สถานะของชั้น 2 ไม่มีใครล้างเลย**
+     * `ProximityGateStore.clear()` ไม่มีผู้เรียกแม้แต่รายเดียวก่อนคอมมิตนี้ ผลคือ
+     * key ของบีคอนที่ไม่อยู่แล้วค้างบนดิสก์ข้ามรอบทดสอบ แล้วโผล่เป็น `stale` รัว ๆ
+     * ตอน sighting แรกของรอบถัดไป ซึ่งอ่านเหมือนบั๊กแต่เป็นซากของรอบก่อน
+     *
+     * ล้างที่นี่ (example app) **ไม่ใช่ใน `stop()` ของ SDK** โดยตั้งใจ เพราะรอบนี้
+     * ห้ามแตะเส้นทาง region monitoring แม้แต่บรรทัดเดียว — **นี่คือหนี้ที่ต้องย้าย
+     * เข้า SDK ในรอบถัดไป** ไม่ใช่ตำแหน่งที่ถูกต้องถาวร
+     */
+    private fun logMonitorLifecycle(event: String, detail: String?) {
+        val context = applicationContext
+        if (event == "monitorStop") {
+            runCatching { ProximityGateStore(context).clear() }
+        }
+        BackgroundEvidenceLog.append(
+            context,
+            BackgroundEvidenceLog.line(
+                timestampMillis = System.currentTimeMillis(),
+                event = event,
+                regionIdentifier = "-",
+                conclusion = ExampleApplication.processState.conclusion,
+                // false เสมอ — สองบรรทัดนี้เกิดจากการกดปุ่มบน UI เท่านั้น
+                rawSignals = BackgroundEvidenceLog.rawSignals(
+                    context = context,
+                    state = ExampleApplication.processState,
+                    receiverEntry = false,
+                ) + " detail=${detail?.replace(' ', '_') ?: "n/a"}" +
+                    if (event == "monitorStop") " proximityStoreCleared=true" else "",
+            ),
+        )
+    }
+
+    /**
+     * ขอสิทธิ์ `POST_NOTIFICATIONS` จริง — **ไม่ใช่แค่รายงานเวอร์ชัน OS**
+     *
+     * สามทางที่ตอบต่างกันโดยตั้งใจ:
+     * - **API < 33** → `true` ทันที ระบบยังไม่มี permission นี้ notification ใช้ได้เลย
+     *   (Redmi Note 9 / API 31 ที่ใช้ทดสอบ ADR-14/17 เดินทางนี้ **พฤติกรรมไม่เปลี่ยน**)
+     * - **มีสิทธิ์แล้ว** → `true` ทันที ไม่เด้งกล่องซ้ำให้ผู้ทดสอบรำคาญ
+     * - **ยังไม่มี** → เก็บ [result] ไว้แล้วเรียก `requestPermissions()` คำตอบจริงจะถูก
+     *   ส่งกลับที่ [onRequestPermissionsResult]
+     *
+     * ## ทำไมต้องกัน "เรียกซ้ำระหว่างรอ"
+     *
+     * ฝั่ง Dart เรียกเมธอดนี้สองที่ (ตอนเปิดแอป และก่อนกด "เริ่มเฝ้าเบื้องหลัง")
+     * ถ้าผู้ใช้กดปุ่มขณะกล่องยังค้างอยู่ `pendingNotificationResult` ตัวเดิมจะถูก
+     * เขียนทับ แล้ว `Result` ตัวแรกจะ**ไม่มีวันถูกตอบ** — ฝั่ง Dart `await` ค้าง
+     * ตลอดไปเงียบ ๆ ตอบ `IN_PROGRESS` แทน เพื่อให้ผู้เรียกรู้ว่าเกิดอะไรขึ้น
+     */
+    private fun requestNotificationPermission(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result.success(true)
+            return
+        }
+
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            result.success(true)
+            return
+        }
+
+        if (pendingNotificationResult != null) {
+            result.error(
+                "IN_PROGRESS",
+                "กำลังรอคำตอบของกล่องขอสิทธิ์ notification อยู่แล้ว",
+                null,
+            )
+            return
+        }
+
+        pendingNotificationResult = result
+        requestPermissions(
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_CODE_POST_NOTIFICATIONS,
+        )
+    }
+
+    /**
+     * รับคำตอบของกล่องขอสิทธิ์แล้วส่งต่อให้ `Result` ที่ค้างอยู่
+     *
+     * **ต้องเรียก `super` เสมอ** — `FlutterActivity` ส่งต่อผลไปให้ปลั๊กอินอื่นที่
+     * ขอสิทธิ์ของตัวเองอยู่ (เช่น `beacon_kit_android` ที่ขอ Bluetooth/Location)
+     * ถ้าไม่เรียก ปลั๊กอินเหล่านั้นจะค้างรอคำตอบที่ไม่มีวันมา
+     *
+     * เคลียร์ [pendingNotificationResult] **ก่อน** ตอบเสมอ เพื่อให้การเรียกครั้ง
+     * ถัดไปเริ่มใหม่ได้สะอาด แม้ผู้เรียกฝั่ง Dart จะ throw ระหว่างจัดการคำตอบ
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CODE_POST_NOTIFICATIONS) return
+
+        val pending = pendingNotificationResult ?: return
+        pendingNotificationResult = null
+        // `isNotEmpty()` จำเป็น — ระบบส่ง array ว่างกลับมาเมื่อคำขอถูกยกเลิก
+        // (เช่นผู้ใช้หมุนจอหรือกดออกจากกล่อง) ซึ่ง**ไม่ใช่**การปฏิเสธ แต่ก็ยัง
+        // ไม่ได้สิทธิ์ จึงตอบ false ตามความจริง ไม่ใช่ crash ที่ index 0
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        pending.success(granted)
     }
 
     /**
@@ -173,4 +340,14 @@ class MainActivity : FlutterActivity() {
             "readError" to readError,
         )
     }
+
+    private companion object {
+        /**
+         * request code ของกล่องขอ `POST_NOTIFICATIONS` — ต้องไม่ชนกับของปลั๊กอินอื่น
+         * ที่ใช้ Activity ตัวเดียวกัน (`beacon_kit_android` ขอ Bluetooth/Location
+         * ผ่านเส้นทางของตัวเอง) เลือกเลขที่ไม่ซ้ำกับที่ปลั๊กอินใดในโปรเจกต์ใช้อยู่
+         */
+        const val REQUEST_CODE_POST_NOTIFICATIONS = 4301
+    }
+
 }

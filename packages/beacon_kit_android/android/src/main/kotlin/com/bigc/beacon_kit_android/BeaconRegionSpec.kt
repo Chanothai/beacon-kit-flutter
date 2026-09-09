@@ -29,8 +29,18 @@ data class BeaconRegionSpec(
         /**
          * สอง byte แรกของ manufacturer data ของ iBeacon: `0x02` = type "proximity"
          * `0x15` = ความยาว 21 byte ที่ตามมา — คงที่เสมอสำหรับ iBeacon
+         *
+         * **เปิดจาก `private` เป็น `internal` ในรอบ ADR-20** เพราะ
+         * `BeaconScanReceiver.ibeaconTxPowerFrom()` ต้องเช็ค prefix เดียวกันนี้ก่อน
+         * อ่านไบต์ txPower — ADR-20 หัวข้อ 1 บังคับว่า "ต้องอ้าง constant ตัว
+         * เดียวกับ `scanFilterDataAndMask()` ห้ามเขียนเลขซ้ำเป็นตัวที่สอง" ถ้าเขียน
+         * `0x02, 0x15` ซ้ำอีกที่ วันที่ layout เปลี่ยน จะมีจุดหนึ่งถูกแก้และอีกจุด
+         * ไม่ถูกแก้ โดยอาการที่ออกมาคือ "ไม่มี event" ซึ่งแยกไม่ออกจาก "ไม่มีบีคอน"
+         *
+         * ⚠️ `ByteArray` แก้ไขเนื้อในได้แม้ประกาศเป็น `val` — ผู้อ่านทุกคนใน module
+         * นี้ต้องถือว่าเป็นค่าอ่านอย่างเดียว ห้ามเขียนทับ index ใด
          */
-        private val IBEACON_PREFIX = byteArrayOf(0x02, 0x15)
+        internal val IBEACON_PREFIX = byteArrayOf(0x02, 0x15)
 
         fun fromMap(map: Map<*, *>): BeaconRegionSpec? {
             val identifier = map["identifier"] as? String ?: return null
