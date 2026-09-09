@@ -3756,3 +3756,89 @@ bucket หนึ่งไปอีก bucket" ซึ่งสมมติว่�
   คำเตือนเรื่องค่า default), ADR-14 หัวข้อ 1.3 (ความเงียบไม่ใช่ event), ADR-17
   (`restoredRegions=[]` vs `<read-failed:...>`, `unsupported-api<N>` vs `false`),
   `beacon_advertisement.dart:93-121`
+
+---
+
+## ADR-20: ProximityGate ตอนแอปไม่ทำงาน — port ตรรกะเป็น Kotlin ใน `BeaconScanReceiver` (เพิ่ม 9 ก.ย. 2026)
+
+> **สถานะ: ตัดสินใจแล้ว — ยังไม่ implement**
+> ยังไม่มีโค้ดใดถูกเขียนในรอบนี้ **`flutter-dev` ต้องเปลี่ยนแบนเนอร์นี้เป็น
+> `code-complete, unverified` ในคอมมิตเดียวกับโค้ดที่ implement ADR นี้** ห้ามแยกคอมมิต
+> (กฎ CONTRIBUTING ข้อ 8) **ขอบเขต:** POC time-box บน Android เท่านั้น — ไม่แตะ iOS,
+> ไม่แตะ region enter/exit เดิม (ADR-14/ADR-17), ไม่แตะ `ProximityGate` ฝั่ง Dart
+
+### 1. สองชั้นตาม Apple — แต่ชั้นที่สองบน Android ได้มาฟรี
+
+ชั้น 1 คือ region enter/exit เดิม (`BackgroundRegionMonitor` + `reconcile()`) — **ไม่แตะแม้แต่บรรทัดเดียว**
+ชั้น 2 คือ gate ที่กิน RSSI ของ `ScanResult` ที่ `BeaconScanReceiver` รับมาอยู่แล้ว **โดยต้องเรียก
+*หลัง* `onSighting` เสมอ ห้ามก่อน** และต้องถูกครอบด้วย `try/catch` ทั้งก้อน — ลำดับ
+`reconcile()` → `onSighting()` ของ ADR-17 ห้ามขยับแม้แต่บรรทัดเดียว และ exception ใด ๆ ในชั้น 2
+ห้ามทำให้ enter/exit ของชั้น 1 พัง (log แล้วกลืน) เพราะชั้น 1 คือฟีเจอร์ที่พิสูจน์แล้ว ส่วนชั้น 2 ยังไม่
+โครงสองขั้นนี้ตรงกับที่ Apple เขียนไว้ ("region monitoring → ranging", `docs/sources/apple_proximity_ranging.md`
+หัวข้อ 4) **แต่จุดต่างสำคัญจาก iOS: บน Android ค่า RSSI ตอน background มากับ `ScanResult` อยู่แล้ว ไม่ต้องเปิด
+ranging เป็นขั้นที่สองแยก** เหตุผลเรื่องพลังงานที่ Apple ใช้อธิบายการแยกสองขั้นจึงไม่มีผลกับเส้นทางนี้
+
+`txPower` อ่านจาก**ไบต์สุดท้าย**ของ manufacturer-specific data ตาม layout
+`02 15 | uuid (16) | major (2) | minor (2) | txPower (1)` ที่ยืนยันแล้วใน `BeaconRegionSpec.kt` หัวข้อ
+"รูปแบบของ byte ที่กรอง" **นี่เบี่ยงจากกติกา "ไม่มี parser ฝั่ง Kotlin" (ADR-14 หัวข้อ 4.1) จริง** — เดิม
+ทางนี้ไม่ถอด byte แม้แต่ตัวเดียว รอบนี้ถอด 1 ไบต์ **ที่ยังรับได้เพราะ:** (ก) ไม่ได้ถอด frame ทั้งก้อน
+uuid/major/minor ยังมาจาก `ScanFilter` + `identifier` ของ `PendingIntent` เหมือนเดิม (ข) ไม่สร้าง entity
+ซ้ำกับ `BeaconAdvertisement` จึงไม่เกิด parser ตัวที่สองให้ drift ซึ่งคือความเสี่ยงจริงที่ ADR-14 หลบอยู่
+(ค) offset นี้ถูก `ScanFilter` พึ่งพาอยู่แล้ว ถ้า layout ผิด sighting จะไม่ match มาตั้งแต่แรก **เงื่อนไข:
+ต้องอ้าง constant ตัวเดียวกับ `scanFilterDataAndMask()` ห้ามเขียนเลข offset ซ้ำเป็นตัวที่สอง**
+
+### 2. ทำไมต้อง port เป็น Kotlin ทั้งที่มี Dart อยู่แล้ว
+
+ตอน background **ไม่มี Flutter engine ให้เรียก** (เหตุผลเดียวกับที่ ADR-14 หัวข้อ 4.1 ให้ไว้กับ
+`BeaconScanReceiver`) — ไม่ใช่เรื่องช้าหรือ overhead แต่คือเรียกไม่ได้เลย `proximity_gate.dart` ยังเป็น
+**reference implementation ที่ห้ามแก้ในรอบนี้** ส่วน Kotlin ต้อง **ผ่านเทสชุดเดียวกันด้วยตัวเลขชุดเดียวกัน**
+โดย port เคสต่อเคสจากเทสฝั่ง Dart (ชื่อเคสตรงกัน อ่านคู่กันได้) และ inject clock ได้เหมือนกัน — ไม่งั้น
+สองตัวจะ drift โดยไม่มีอะไรจับได้เลย นี่คือราคาที่ยอมจ่ายแทนการเลี่ยง
+
+### 3. state ต่อบีคอนเก็บลง SharedPreferences (JSON)
+
+key = (`regionIdentifier`, uuid, major, minor) เก็บ window ล่าสุด, สถานะใน/นอก, ตัวนับ dwell และ timestamp
+ล่าสุด **เหตุผล:** OEM แบบ MIUI ฆ่า process ระหว่าง sighting ได้ตลอด และ receiver มีชีวิตแค่ช่วง
+`onReceive` ถ้าเก็บใน memory อย่างเดียว window/dwell จะรีเซ็ตทุกครั้ง แล้ว `dwellSamples = 3` **จะไม่มีวันครบ** — gate
+เงียบตลอดทั้งที่ผู้ใช้ยืนอยู่หน้าชั้นวาง ใช้ pattern เดียวกับ `BackgroundRegionStore` และเขียนให้เสร็จก่อนจบ
+`onReceive` ราคาคือ I/O ทุก sighting ซึ่งรับได้เพราะ sighting เบื้องหลังมาเป็น batch ไม่ถี่แบบ foreground
+
+### 4. ไม่มี timer ในเบื้องหลัง — stale ตรวจตอน receiver ตื่นเท่านั้น
+
+`staleAfter` ประเมินตอนต้น `onReceive` เท่านั้น (หลักการเดียวกับ `reconcile()` ของ ADR-17) **timer เป็นไปไม่ได้
+จริงในเส้นทางนี้** เพราะไม่มี process อยู่ให้ timer เดิน และถ้าปลุกด้วย AlarmManager/WorkManager ก็ไม่มี sample
+ใหม่ให้ประมวลผลอยู่ดี ได้แค่อ่าน state เดิมซ้ำ แลกกับ entry point ใหม่ที่ ADR-18 ยังไม่ตัดสิน **ผลที่ต้องยอมรับ:**
+exit จาก stale ถูกค้นพบตอน sighting ถัดไป ไม่ใช่ที่วินาทีที่ 10 พอดี (ADR-14 หัวข้อ 1.3 — ความเงียบไม่ใช่ event)
+
+### 5. สัญญา event สำหรับ iOS ที่จะตามมาทีหลัง — นิยามวันนี้ ยังไม่ส่งวันนี้
+
+ชื่อ event: `proximityChanged` · payload: `{regionIdentifier, uuid, major, minor, from, to, reason,
+medianMeters?, timestampMillis}` — `medianMeters` เป็น optional เพราะฝั่ง iOS ที่ใช้ `CLProximity` อาจไม่มี
+ตัวเลขเมตร และ Apple เตือนห้ามพึ่งความแม่นยำของมัน **วันนี้ยังไม่ส่งขึ้น Dart — ไม่มี channel ไม่มี stream**
+นิยามไว้เพื่อให้ iOS ทำตามได้โดยไม่ต้องต่อรองสัญญาใหม่ และไม่ให้ POC ล็อก public API ก่อนพิสูจน์จริง
+
+### 6. ยังไม่ทำในรอบนี้ (พร้อมเหตุผลและความเสี่ยงที่ค้างไว้)
+
+| ตัดออก | เหตุผลที่ตัดได้ในรอบนี้ | ความเสี่ยงที่ค้างไว้ |
+|---|---|---|
+| policy hardcode จาก ADR-19 หัวข้อ 8 ไม่มี API ให้ตั้งค่า | POC ต้องพิสูจน์กลไก ไม่ใช่ผิว API และค่ายังไม่ calibrate จึงยังไม่ควรเปิดให้ตั้ง | ปรับค่าหน้างานไม่ได้ ต้อง rebuild ทุกครั้ง |
+| notification ยิงจาก native ใน example app (ต่อจาก `ExampleApplication.kt:81`) | ตอน background ไม่มี Dart ให้ยิง | ตรรกะ presentation อยู่ใน example ถ้าจะย้ายเข้า SDK ต้องออกแบบใหม่ |
+| ไม่มี Dart stream | ตามหัวข้อ 5 — สัญญายังไม่ควรล็อกก่อนพิสูจน์ | แอปจริงยังใช้ฟีเจอร์นี้ไม่ได้ในรอบนี้ |
+| ไม่มี golden JSON — port เทสตรงจาก Dart แทน | golden ต้องมีเจ้าของและ schema ของตัวเอง; port ตรงให้ผลเท่ากันด้วยแรงน้อยกว่า | เมื่อ iOS เป็นตัวที่สาม การเทียบสามทางจะต้องมี golden จริง |
+| ไม่มี eviction ของ state เก่า | จำนวนบีคอนใน POC จำกัดและควบคุมได้ | SharedPreferences โตไม่มีเพดานถ้าเจอบีคอนแปลกหน้าจำนวนมาก ต้องมีก่อน production |
+| cooldown 60 วินาทีอยู่แค่ example app ไม่ใช่ใน SDK | เป็นนโยบายของแอป ไม่ใช่ความสามารถของแพลตฟอร์ม (แนวเดียวกับ ADR-11 เรื่องตำแหน่งของ debounce) | แอปอื่นที่ใช้ SDK ไม่ได้ cooldown ฟรี ต้องทำเอง |
+
+### 7. ข้อยกเว้นค่า POC ที่อนุญาตไว้ล่วงหน้า — ถ้า notification ช้ากว่า 60 วินาที
+
+ถ้าทดสอบบนเครื่องจริงแล้วพบว่า notification มาช้ากว่า 60 วินาทีนับจากเดินเข้าใกล้ **อนุญาตให้ลด
+`windowSize` เป็น 3 และ `dwellSamples` เป็น 2 เฉพาะค่า POC ฝั่ง Kotlin เท่านั้น** และต้องบันทึกการเบี่ยง
+ไว้ในหัวข้อนี้ของ ADR-20 เอง (พร้อมเวลาที่วัดได้จริง) ว่าเบี่ยงจาก ADR-19 หัวข้อ 8 เพราะ **sighting ตอน
+background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วินาทีแบบ foreground ranging** จำนวน sample เท่าเดิมจึงกินเวลาจริง
+นานกว่ามาก **ห้ามลดต่ำกว่านั้น** และ **ห้ามแก้ตารางของ ADR-19 หัวข้อ 8** ซึ่งเป็นของ Dart reference และมี
+กฎของตัวเองว่าต้องมีข้อมูลภาคสนามกำกับก่อนแก้
+
+### อ้างอิง
+
+- ADR-14 หัวข้อ 4.1 + 1.3, ADR-17 (`reconcile()`), ADR-19 หัวข้อ 8 (ตัวเลข policy ทั้งหมด), `proximity_gate.dart`
+  (reference), `docs/sources/apple_proximity_ranging.md` หัวข้อ 4, `BeaconRegionSpec.kt` หัวข้อ "รูปแบบของ byte
+  ที่กรอง", `BackgroundRegionStore.kt` (pattern SharedPreferences + JSON)
