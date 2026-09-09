@@ -183,8 +183,20 @@ class ProximityGate(
     val dwellSamples: Int = 3,
     /** path loss exponent `n` ที่ส่งต่อให้ [estimateDistanceMeters] */
     val pathLossExponent: Double = 2.5,
-    /** เงียบเกินกี่มิลลิวินาทีถึงถือว่า "วัดไม่ได้อีกแล้ว" */
-    val staleAfterMillis: Long = 10_000L,
+    /**
+     * เงียบเกินกี่มิลลิวินาทีถึงถือว่า "วัดไม่ได้อีกแล้ว"
+     *
+     * ⚠️ **60 วินาที — เบี่ยงจาก ADR-19 หัวข้อ 8 (10 วินาที) โดยตั้งใจ ตาม ADR-20
+     * หัวข้อ 7 พร้อมข้อมูลจากเครื่องจริงกำกับ** ค่า 10 วินาทีของ ADR-19 คิดจากอัตรา
+     * ~1 sample/วินาทีของ foreground ranging ฝั่ง Apple (= ยอมให้พลาด ~10 รอบ) แต่
+     * เส้นทางเบื้องหลังของ Android ส่ง sighting มาเป็น **batch ที่ห่างกันมัธยฐาน
+     * 12-17.5 วินาที** (วัดจริงจาก `docs/test-data/2026-09-09_android_proximity_background.log`)
+     * ค่า 10 วินาทีจึงล้าง state ทิ้ง **38 จาก 52 ช่องว่าง** ทำให้ dwell เริ่มนับหนึ่ง
+     * ใหม่ตลอดและ hysteresis ไม่เคยได้ทำงานเลย — 60 วินาทีคือ ~3.5 เท่าของช่วงห่าง
+     * จริง ซึ่งเป็น**ตรรกะเดียวกับ ADR-19 เป๊ะ** (หลายเท่าของอัตรา sample จริง)
+     * เพียงแต่แทนค่าอัตราที่วัดได้จริงของแพลตฟอร์มนี้ลงไป
+     */
+    val staleAfterMillis: Long = 60_000L,
 ) {
     init {
         require(exitMeters > enterMeters) {

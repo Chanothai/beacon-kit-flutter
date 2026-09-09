@@ -71,6 +71,37 @@ grep -c "exitReason=" docs/test-data/2026-09-03_android_overnight_stale_inside.l
 ทั้งสองไฟล์ไม่มีคีย์ `exitReason=` แม้แต่บรรทัดเดียว — ยืนยันว่าเป็นบิลด์ก่อน ADR-17 จริง
 ตามที่คาดไว้ ดูแถว **ข้อ 10 (§11)** ในตารางผลด้านล่าง — สถานะยังคง **ยังไม่ทดสอบ**
 
+### ADR-20 (proximity gate เบื้องหลัง) — `observed` เฉพาะ 4 ข้อ · ค่า `staleAfter` ใหม่ยัง `code-complete, unverified`
+
+**บิลด์ที่ใช้ทดสอบ 9 ก.ย. 2026 (รอบเดิน 12:54-13:08):**
+`sha256 099223dda38c7e63f714144a5a2ce6d1272000e18445ed4f7b072164e08302be` — บิลด์นี้ใช้
+`staleAfterMillis = 10_000L`
+
+**บิลด์ที่ติดตั้งอยู่บนเครื่องตอนนี้ และที่รอบข้ามคืนคืน 9 ก.ย. จะรันบนมัน:**
+`sha256 ea7374ed118359dbcdf02cb29bac3026455bf4fdf0fd0552c245ac49b3f7677a` (`flutter build apk --debug` 9 ก.ย. 2026 13:17) — **ต่างจากบิลด์
+ข้างบนที่ `staleAfterMillis = 60_000L` ตาม ADR-20 หัวข้อ 7 เท่านั้น** ยังไม่มีรอบเดินซ้ำหลัง
+เปลี่ยนค่า ค่านี้จึงเป็น `code-complete, unverified` · ADR-17 ไม่ถูกแตะในบิลด์นี้ (ยืนยันจาก
+`git diff` — `BackgroundRegionMonitor.kt` 0 บรรทัด) รอบข้ามคืนจึงยังนับเป็น**รอบที่ 2 ของ ADR-17**ได้
+
+**ไฟล์หลักฐาน:** [`docs/test-data/2026-09-09_android_proximity_background.log`](../test-data/2026-09-09_android_proximity_background.log)
+— 280 บรรทัด · md5 `1436cd9abacece27e67f697cd45e384f` · 93 บรรทัด `event=proximity`
+
+| ข้อ | ผล | หลักฐาน |
+|---|---|---|
+| 1. เห็น `enter` ทั้งสอง region | **ผ่าน** | 12:44:21 `bigc-test` · 12:44:22 `k9p-default` |
+| 3. เดินเข้า 2 m → notification โดยไม่เปิดแอป | **ผ่าน** | 13:05:03 `bigc-test bucket=near from=none reason=closer medianM=1.2 rssi=-53 txPower=-51` ใน process `3ab5154f` ที่ `conclusion=relaunchedFromTerminated` · ผู้ทดสอบยืนยันว่าเห็น notification จริง |
+| 4. เดินออก → ไม่มี notification ซ้ำ | **ผ่านบางส่วน** | 13:07:52 `bucket=far reason=farther medianM=5.2` ถูกกรองไม่ยิง notification ถูกต้อง **แต่**ตอนยืนนิ่งกลับได้ notification ซ้ำ (ดูข้อ 7 ด้านล่าง) |
+| 5. `event=proximity` + `conclusion=relaunchedFromTerminated` | **ผ่าน** | 12:58:55.830 `uptimeMs=139` · 13:04:01.363 `uptimeMs=192` และอีกหลายบรรทัด |
+| 6. `enter`/`exit` ไม่ regression | **ผ่าน** | 13:00:57 `exit` ทั้งสอง region (`exitReason=alarm` `sinceLastSeenMs=109713`) → 13:01:25 `enter bigc-test` → 13:01:32 `enter k9p-default` ครบวงจรตามปกติ |
+| 2. ปัดแอปทิ้งจาก recent | **ผ่าน** | ทุกบรรทัดตั้งแต่ 12:58:22 เป็นต้นไปมี `everForeground=false activities=0 state=noActivityEver` และ `procUuid` ใหม่ทุกครั้ง |
+
+⚠️ **ข้อ 7 — สิ่งที่รอบนี้พบและยังไม่ได้แก้ให้เห็นผล:** ผู้ทดสอบได้ notification **13 ใบใน 15 นาที**
+ทั้งที่ยืนอยู่กับที่ (near → immediate → near วน) เพราะ `staleAfter = 10s` สั้นกว่าช่วงห่างระหว่าง
+batch จริง (มัธยฐาน 12.1-17.5 วินาที · เกิน 10 วินาที 38 จาก 52 ช่องว่าง) gate จึงล้าง state ทิ้ง
+ครึ่งหนึ่งของทุก event (31 จาก 63 บรรทัดเป็น `reason=stale`) `from` เป็น `none` แทบทุกครั้ง และ
+**hysteresis 3.0/5.0 ไม่เคยได้ทำงานเลยสักครั้งตลอดรอบ** — แก้ด้วยการขยับ `staleAfterMillis`
+เป็น 60_000L (ADR-20 หัวข้อ 7) ซึ่ง**ยังไม่ได้ทดสอบซ้ำ**
+
 ---
 
 ## หมายเหตุถาวร — วิธีอ่าน `exitReason=staleReconcile` (ADR-17)
