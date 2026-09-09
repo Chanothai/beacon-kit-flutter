@@ -3761,11 +3761,13 @@ bucket หนึ่งไปอีก bucket" ซึ่งสมมติว่�
 
 ## ADR-20: ProximityGate ตอนแอปไม่ทำงาน — port ตรรกะเป็น Kotlin ใน `BeaconScanReceiver` (เพิ่ม 9 ก.ย. 2026)
 
-> **สถานะ: ตัดสินใจแล้ว — ยังไม่ implement**
-> ยังไม่มีโค้ดใดถูกเขียนในรอบนี้ **`flutter-dev` ต้องเปลี่ยนแบนเนอร์นี้เป็น
-> `code-complete, unverified` ในคอมมิตเดียวกับโค้ดที่ implement ADR นี้** ห้ามแยกคอมมิต
-> (กฎ CONTRIBUTING ข้อ 8) **ขอบเขต:** POC time-box บน Android เท่านั้น — ไม่แตะ iOS,
-> ไม่แตะ region enter/exit เดิม (ADR-14/ADR-17), ไม่แตะ `ProximityGate` ฝั่ง Dart
+> **สถานะ: code-complete, unverified**
+> โค้ดครบตามหัวข้อ 1-5 แล้ว (`ProximityGate.kt` · `ProximityGateStore.kt` ·
+> `BackgroundProximityMonitor.kt` · hook ใน `BeaconScanReceiver` · observer ใน example app)
+> และผ่าน unit test เดิมทั้งหมด **แต่ยังไม่เคยรันกับ K9P จริงแม้แต่ครั้งเดียว** — ห้ามอ่านว่า
+> "ทำงานได้" จนกว่าจะมีรอบทดสอบบนเครื่องจริงพร้อมไฟล์หลักฐาน (บรรทัด `event=proximity`)
+> **ขอบเขต:** POC time-box บน Android เท่านั้น — ไม่แตะ iOS, ไม่แตะ region enter/exit เดิม
+> (ADR-14/ADR-17), ไม่แตะ `ProximityGate` ฝั่ง Dart
 
 ### 1. สองชั้นตาม Apple — แต่ชั้นที่สองบน Android ได้มาฟรี
 
@@ -3797,8 +3799,12 @@ uuid/major/minor ยังมาจาก `ScanFilter` + `identifier` ของ 
 
 ### 3. state ต่อบีคอนเก็บลง SharedPreferences (JSON)
 
-key = (`regionIdentifier`, uuid, major, minor) เก็บ window ล่าสุด, สถานะใน/นอก, ตัวนับ dwell และ timestamp
-ล่าสุด **เหตุผล:** OEM แบบ MIUI ฆ่า process ระหว่าง sighting ได้ตลอด และ receiver มีชีวิตแค่ช่วง
+key = `"<regionIdentifier>|<ScanResult.device.address>"` (**แก้ตอน implement** จาก (`regionIdentifier`, uuid,
+major, minor) ซึ่งเป็นไปไม่ได้เพราะฝั่ง Kotlin ไม่มี parser จึงไม่มีสามค่านั้นรายเฟรม — MAC แยกบีคอนคนละตัวใน
+region กว้างของ ADR-8 ออกจากกัน ถ้าใช้ `regionIdentifier` เดี่ยว ๆ RSSI ของคนละตัวจะปนกันในหน้าต่างเดียว
+⚠️ **MAC ไม่ใช่ identity ที่ยั่งยืน** ยอมรับเฉพาะ POC นี้ **iOS ต้องใช้ (uuid, major, minor) ตาม ADR-19**
+ส่วน uuid/major/minor ใน payload ดึงจาก region spec ที่ลงทะเบียนไว้) เก็บ window, bucket ที่ยืนยันแล้ว,
+ตัวนับ dwell และ timestamp ล่าสุด **เหตุผล:** OEM แบบ MIUI ฆ่า process ระหว่าง sighting ได้ตลอด และ receiver มีชีวิตแค่ช่วง
 `onReceive` ถ้าเก็บใน memory อย่างเดียว window/dwell จะรีเซ็ตทุกครั้ง แล้ว `dwellSamples = 3` **จะไม่มีวันครบ** — gate
 เงียบตลอดทั้งที่ผู้ใช้ยืนอยู่หน้าชั้นวาง ใช้ pattern เดียวกับ `BackgroundRegionStore` และเขียนให้เสร็จก่อนจบ
 `onReceive` ราคาคือ I/O ทุก sighting ซึ่งรับได้เพราะ sighting เบื้องหลังมาเป็น batch ไม่ถี่แบบ foreground

@@ -91,6 +91,14 @@ class ExampleApplication : Application() {
             }
         }
 
+        // ADR-20 ชั้นที่ 2 (proximity) — **ก้อนใหม่แยกจาก observer เดิมข้างบน
+        // โดยสิ้นเชิง ไม่แตะตรรกะเดิมแม้แต่บรรทัดเดียว** เพราะชั้น 1 คือฟีเจอร์ที่
+        // พิสูจน์แล้วในสนาม ส่วนชั้นนี้ยังเป็น POC ที่ยังไม่เคยรันกับ K9P จริง
+        //
+        // ตั้งที่นี่ด้วยเหตุผลเดียวกับ observer เดิมเป๊ะ: `Application.onCreate()`
+        // คือจุดเดียวที่ทำงานเสมอก่อน `onReceive()` ไม่ว่า process จะเกิดด้วยเหตุใด
+        ExampleProximityWatcher.install(this)
+
         logLaunch()
     }
 
