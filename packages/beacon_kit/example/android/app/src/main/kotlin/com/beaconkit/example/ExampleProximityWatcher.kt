@@ -2,6 +2,7 @@ package com.beaconkit.example
 
 import android.content.Context
 import com.bigc.beacon_kit_android.BackgroundProximityMonitor
+import com.bigc.beacon_kit_android.ProximityBucket
 import com.bigc.beacon_kit_android.ProximityChangedEvent
 import java.util.Locale
 
@@ -69,11 +70,20 @@ object ExampleProximityWatcher {
             ),
         )
 
-        // 2) แล้วค่อย notification (ถ้าไม่ติด cooldown)
+        // 2) notification เฉพาะ transition ที่ยืนยันว่า "ใกล้" — **ตัวกรองอยู่ที่
+        //    แอป ไม่ใช่ที่ SDK** (ADR-20 หัวข้อ 6 แนวเดียวกับตำแหน่งของ cooldown)
+        //    บรรทัดหลักฐานข้างบนเขียนครบทุก transition รวม `farther`/`stale` ด้วย
+        //    เพราะสองอย่างนั้นคือสิ่งเดียวที่ตอบได้ว่า `exitMeters`/`staleAfter`
+        //    ใช้ได้จริงหรือไม่ในรอบทดสอบเครื่องจริง — แต่ผู้ทดสอบไม่ควรได้
+        //    notification ตอนเดินออกจากชั้นวาง เพราะจะกลบสัญญาณที่กำลังจะพิสูจน์
+        val to = event.to
+        if (to != ProximityBucket.NEAR && to != ProximityBucket.IMMEDIATE) return
+
+        // 3) แล้วค่อย notification (ถ้าไม่ติด cooldown)
         val key = cooldownKeyFor(event)
         if (!consumeCooldown(context, key, event.timestampMillis)) return
 
-        val bucket = event.to?.wireName ?: "unknown"
+        val bucket = to.wireName
         ExampleNotifications.post(
             context = context,
             title = "ใกล้ ${event.regionIdentifier} ($bucket)",

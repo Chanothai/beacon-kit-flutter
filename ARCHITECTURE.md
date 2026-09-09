@@ -3775,12 +3775,15 @@ bucket หนึ่งไปอีก bucket" ซึ่งสมมติว่�
 ชั้น 2 คือ gate ที่กิน RSSI ของ `ScanResult` ที่ `BeaconScanReceiver` รับมาอยู่แล้ว **โดยต้องเรียก
 *หลัง* `onSighting` เสมอ ห้ามก่อน** และต้องถูกครอบด้วย `try/catch` ทั้งก้อน — ลำดับ
 `reconcile()` → `onSighting()` ของ ADR-17 ห้ามขยับแม้แต่บรรทัดเดียว และ exception ใด ๆ ในชั้น 2
-ห้ามทำให้ enter/exit ของชั้น 1 พัง (log แล้วกลืน) เพราะชั้น 1 คือฟีเจอร์ที่พิสูจน์แล้ว ส่วนชั้น 2 ยังไม่
+ห้ามทำให้ enter/exit ของชั้น 1 พัง (log แล้วกลืน) เพราะชั้น 1 มีหลักฐานจากอุปกรณ์จริงระดับ `observed`
+แล้ว (ADR-14 — ส่วน `reconcile()` ของ ADR-17 ยัง `code-complete, unverified` ตาม
+`docs/test-checklists/android_background_scanning.md`) ส่วนชั้น 2 ยังไม่เคยรันบนเครื่องจริงเลยแม้แต่ครั้งเดียว และยังไม่
 โครงสองขั้นนี้ตรงกับที่ Apple เขียนไว้ ("region monitoring → ranging", `docs/sources/apple_proximity_ranging.md`
 หัวข้อ 4) **แต่จุดต่างสำคัญจาก iOS: บน Android ค่า RSSI ตอน background มากับ `ScanResult` อยู่แล้ว ไม่ต้องเปิด
 ranging เป็นขั้นที่สองแยก** เหตุผลเรื่องพลังงานที่ Apple ใช้อธิบายการแยกสองขั้นจึงไม่มีผลกับเส้นทางนี้
 
-`txPower` อ่านจาก**ไบต์สุดท้าย**ของ manufacturer-specific data ตาม layout
+`txPower` อ่านจาก**ไบต์ที่ตำแหน่งคงที่ index 22** (= หลัง prefix + uuid + major + minor · **ไม่ใช่
+"ไบต์สุดท้ายของ array"** ซึ่งจะผิดทันทีที่อุปกรณ์ต่อท้ายข้อมูลอื่น) ของ manufacturer-specific data ตาม layout
 `02 15 | uuid (16) | major (2) | minor (2) | txPower (1)` ที่ยืนยันแล้วใน `BeaconRegionSpec.kt` หัวข้อ
 "รูปแบบของ byte ที่กรอง" **นี่เบี่ยงจากกติกา "ไม่มี parser ฝั่ง Kotlin" (ADR-14 หัวข้อ 4.1) จริง** — เดิม
 ทางนี้ไม่ถอด byte แม้แต่ตัวเดียว รอบนี้ถอด 1 ไบต์ **ที่ยังรับได้เพราะ:** (ก) ไม่ได้ถอด frame ทั้งก้อน
@@ -3832,6 +3835,7 @@ medianMeters?, timestampMillis}` — `medianMeters` เป็น optional เพ
 | ไม่มี Dart stream | ตามหัวข้อ 5 — สัญญายังไม่ควรล็อกก่อนพิสูจน์ | แอปจริงยังใช้ฟีเจอร์นี้ไม่ได้ในรอบนี้ |
 | ไม่มี golden JSON — port เทสตรงจาก Dart แทน | golden ต้องมีเจ้าของและ schema ของตัวเอง; port ตรงให้ผลเท่ากันด้วยแรงน้อยกว่า | เมื่อ iOS เป็นตัวที่สาม การเทียบสามทางจะต้องมี golden จริง |
 | ไม่มี eviction ของ state เก่า | จำนวนบีคอนใน POC จำกัดและควบคุมได้ | SharedPreferences โตไม่มีเพดานถ้าเจอบีคอนแปลกหน้าจำนวนมาก ต้องมีก่อน production |
+| ตัวกรอง "event ไหนควรรบกวนผู้ใช้" (`to ∈ {near, immediate}`) อยู่ที่ example app ไม่ใช่ใน SDK | เป็นนโยบายของแอปแบบเดียวกับ cooldown — SDK ยิง observer ครบทุก transition ตามสัญญาหัวข้อ 5 (`closer`/`farther`/`stale`) ไม่งั้นสองแพลตฟอร์มจะให้ผลต่างกันโดยที่สัญญาไม่ได้บอก | แอปอื่นที่ใช้ SDK ต้องกรองเอง ไม่งั้นจะได้ event ตอนเดินออกห่างด้วย |
 | cooldown 60 วินาทีอยู่แค่ example app ไม่ใช่ใน SDK | เป็นนโยบายของแอป ไม่ใช่ความสามารถของแพลตฟอร์ม (แนวเดียวกับ ADR-11 เรื่องตำแหน่งของ debounce) | แอปอื่นที่ใช้ SDK ไม่ได้ cooldown ฟรี ต้องทำเอง |
 
 ### 7. ข้อยกเว้นค่า POC ที่อนุญาตไว้ล่วงหน้า — ถ้า notification ช้ากว่า 60 วินาที

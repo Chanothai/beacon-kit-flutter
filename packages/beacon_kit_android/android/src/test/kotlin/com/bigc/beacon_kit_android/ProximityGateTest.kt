@@ -333,4 +333,72 @@ class ProximityGateTest {
         )
         assertNull(gate.currentBucket(key))
     }
+
+    // ---------------------------------------------------------------------
+    // sweepStale() — เพิ่มจากรีวิว (ไม่มีในโจทย์ขั้นที่ 3)
+    // ---------------------------------------------------------------------
+
+    /**
+     * port จากเทสต์ Dart กลุ่ม "J: [3/4] `sweepStale()` ต้อง emit transition ได้แม้
+     * ไม่มี `push()` เรียกเข้ามาอีกเลย"
+     *
+     * เขียนเพิ่มเพราะรีวิวชี้ว่า `sweepStale()` เป็น**ฟังก์ชันแรก**ที่
+     * `BeaconScanReceiver.processProximity()` เรียกทุก batch และเป็นทางเดียวที่บีคอน
+     * ซึ่งหายไปจะได้ transition — ฝั่ง Dart มีเทสต์คลุมแต่ฝั่ง Kotlin ยังไม่มี ซึ่ง
+     * ขัดเจตนา ADR-20 หัวข้อ 2 ที่บังคับว่า "Kotlin ต้องผ่านเทสชุดเดียวกัน"
+     *
+     * ครอบสองสาขาพร้อมกัน เพราะความต่างของสองสาขานี้คือทั้งหมดของ ADR-19 หัวข้อ 6(ฉ):
+     * key ที่ **เคย confirmed** ต้องได้ `STALE` (มีของให้ประกาศว่าหลุด) ส่วน key ที่
+     * ยังอยู่ระหว่าง dwell ต้องถูกล้าง state **เงียบ ๆ** (ไม่เคยประกาศว่าใกล้ จึงไม่มี
+     * อะไรให้ประกาศว่าหลุด — `from` ที่เป็น `null` จะเป็น transition ที่ไม่มีความหมาย)
+     */
+    @Test
+    fun `sweepStale - key ที่ confirmed แล้วได้ STALE ส่วน key ที่ยัง pending ถูกล้างเงียบ ๆ`() {
+        val clock = FakeClock()
+        val gate = ProximityGate(
+            clock = clock::read,
+            windowSize = 1,
+            pathLossExponent = 2.0,
+            staleAfterMillis = 10_000L,
+        )
+        val confirmedKey = "bigc-test|AA:AA:AA:AA:AA:AA"
+        val pendingKey = "bigc-test|BB:BB:BB:BB:BB:BB"
+        val nearRssi = -48 // ~2.51 m → NEAR
+
+        // key ที่ 1: ยืนยัน NEAR จริง (dwell ครบ 3 sample ติดกัน)
+        repeat(3) { gate.push(key = confirmedKey, rssi = nearRssi, txPower = txPower) }
+        assertEquals(ProximityBucket.NEAR, gate.currentBucket(confirmedKey))
+
+        // key ที่ 2: ค้างอยู่ระหว่าง dwell (2 sample ยังไม่ครบ 3)
+        repeat(2) { gate.push(key = pendingKey, rssi = nearRssi, txPower = txPower) }
+        assertEquals(2, gate.stateOf(pendingKey)?.pendingCloserCount)
+        assertNull(gate.currentBucket(pendingKey), "ยังไม่เคย confirmed")
+
+        clock.advance(11_000L) // เกิน staleAfterMillis — ไม่มี push ใหม่เลยแม้แต่ตัวเดียว
+
+        val transitions = gate.sweepStale()
+
+        assertEquals(
+            1,
+            transitions.size,
+            "ต้องได้ transition จาก key ที่เคย confirmed เท่านั้น",
+        )
+        val transition = transitions.single()
+        assertEquals(confirmedKey, transition.key)
+        assertEquals(ProximityTransitionReason.STALE, transition.reason)
+        assertEquals(ProximityBucket.NEAR, transition.from)
+        assertNull(transition.to, "STALE แปลว่า 'วัดไม่ได้แล้ว' ไม่ใช่ FAR")
+        assertNull(transition.medianMeters)
+
+        // ทั้งสอง key ต้องถูกล้างครบทุกฟิลด์ ไม่ใช่แค่ key ที่ emit ออกมา
+        assertNull(gate.currentBucket(confirmedKey))
+        val pending = assertNotNull(gate.stateOf(pendingKey))
+        assertNull(pending.pendingCloserBucket, "pending dwell ต้องถูกล้างด้วย")
+        assertEquals(0, pending.pendingCloserCount)
+        assertEquals(0, pending.window.size)
+        assertNull(pending.lastSampleAt)
+
+        // เรียกซ้ำทันทีต้องไม่ยิงอะไรอีก — state ถูกล้างแล้ว `lastSampleAt` เป็น null
+        assertEquals(0, gate.sweepStale().size, "ห้ามยิง STALE ซ้ำจาก state ที่ล้างแล้ว")
+    }
 }

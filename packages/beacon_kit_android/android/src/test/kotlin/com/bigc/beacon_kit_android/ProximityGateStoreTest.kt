@@ -141,7 +141,8 @@ class ProximityGateStoreTest {
 
     /**
      * เพิ่มจากโจทย์: ค่าที่เสียหายบนดิสก์ต้องกลายเป็น "เริ่มนับใหม่" ไม่ใช่ exception
-     * ที่ลอยขึ้นไปทำให้ชั้น 1 (region enter/exit ที่พิสูจน์แล้ว) พังไปด้วย — เป็น
+     * ที่ลอยขึ้นไปทำให้ชั้น 1 (region enter/exit ระดับ `observed` ตาม ADR-14) พัง
+     * ไปด้วย — เป็น
      * สัญญาที่ kdoc ของ `ProximityGateStore` ประกาศไว้ตรง ๆ (ADR-20 หัวข้อ 1)
      */
     @Test

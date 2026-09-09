@@ -69,8 +69,11 @@ class BeaconScanReceiver : BroadcastReceiver() {
         // `reconcile()` → `onSighting()` ข้างบนแม้แต่บรรทัดเดียว** (ADR-17)
         //
         // ครอบทั้งก้อนด้วย try/catch แล้ว **กลืน** exception โดยตั้งใจ — ไม่ใช่
-        // ความมักง่าย: ชั้น 1 (region enter/exit) คือฟีเจอร์ที่พิสูจน์แล้วในสนามและ
-        // เป็นเหตุผลเดียวที่ process นี้ถูกปลุกขึ้นมา ส่วนชั้นนี้ยังเป็น POC ที่อ่าน
+        // ความมักง่าย: ชั้น 1 (region enter/exit) มีหลักฐานจากอุปกรณ์จริงระดับ
+        // `observed` แล้ว (ADR-14 — `reconcile()` ของ ADR-17 ยัง `code-complete,
+        // unverified` ตาม `docs/test-checklists/android_background_scanning.md`)
+        // และเป็นเหตุผลเดียวที่ process นี้ถูกปลุกขึ้นมา ส่วนชั้นนี้ยังไม่เคยรันบน
+        // เครื่องจริงเลยแม้แต่ครั้งเดียว และเป็น POC ที่อ่าน
         // ค่าที่เก็บไว้บนดิสก์ (ถอด JSON ได้ไม่ครบ) และแตะ `ScanRecord` ดิบ ถ้า
         // ปล่อยให้ exception ลอยขึ้นไป `onReceive` จะตายทั้งเมธอด แต่งานของชั้น 1
         // ที่ทำไปแล้วข้างบนถูก commit ลงดิสก์เรียบร้อยแล้ว — ผลคือ crash ที่ผู้ใช้
@@ -132,6 +135,11 @@ class BeaconScanReceiver : BroadcastReceiver() {
         }
 
         store.save(gate.snapshotStates())
+
+        // ความล้มเหลวของดิสก์ต้องมีร่องรอย — ถ้า store อ่าน/เขียนไม่สำเร็จทุกครั้ง
+        // dwell จะเริ่มนับหนึ่งใหม่ทุก sighting แล้ว gate จะเงียบตลอด ซึ่งอาการ
+        // เหมือนกับ "ไม่มีบีคอนอยู่ใกล้" เป๊ะ (ดู kdoc ของ `ProximityGateStore`)
+        store.lastError?.let { Log.w(TAG, "ProximityGateStore ล้มเหลว: $it") }
 
         if (pending.isEmpty()) return
 

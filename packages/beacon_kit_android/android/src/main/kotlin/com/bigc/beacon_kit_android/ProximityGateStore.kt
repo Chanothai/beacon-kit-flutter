@@ -23,12 +23,25 @@ import org.json.JSONObject
  *
  * ## ไฟล์ prefs แยกจาก `BackgroundRegionStore` โดยตั้งใจ
  *
- * ชั้น 1 (region enter/exit) คือฟีเจอร์ที่พิสูจน์แล้ว ส่วนชั้น 2 (proximity) ยังเป็น
+ * ชั้น 1 (region enter/exit) มีหลักฐานจากอุปกรณ์จริงระดับ `observed` แล้ว (ADR-14)
+ * ส่วนชั้น 2 (proximity) ยังไม่เคยรันจริงเลย และยังเป็น
  * POC — การเขียนลงคนละไฟล์ทำให้ (ก) ข้อมูลที่เสียหายของชั้น 2 ลาก state ของชั้น 1
  * ลงไปด้วยไม่ได้ และ (ข) ล้างสถานะ POC ทิ้งได้โดยไม่แตะสถานะ enter/exit
  *
  * ทุกเส้นทางอ่าน/เขียนถูกห่อด้วย `runCatching` — ค่าที่เสียหายต้องกลายเป็น "เริ่มนับ
  * ใหม่" ไม่ใช่ exception ที่ลอยขึ้นไปทำให้ชั้น 1 พัง (ADR-20 หัวข้อ 1)
+ *
+ * ## ความล้มเหลว **ถาวร** ต้องมีร่องรอย ไม่ใช่แค่ "เริ่มนับใหม่" เงียบ ๆ
+ *
+ * "เริ่มนับใหม่" เป็นคำตอบที่ถูกกับความเสียหาย**ชั่วคราว**เท่านั้น ถ้าดิสก์เขียนไม่ได้
+ * ทุกครั้งจริง ๆ อาการที่ออกมาคือ dwell เริ่มนับหนึ่งใหม่ทุก sighting → `dwellSamples`
+ * ไม่มีวันครบ → gate เงียบตลอด ซึ่ง **แยกไม่ออกจาก "ไม่มีบีคอนอยู่ใกล้" และ
+ * "receiver ไม่เคยถูกปลุก"** เลยจากไฟล์หลักฐาน — ความล้มเหลวเงียบชนิดเดียวกับที่
+ * ADR-17 ตั้งมาตรฐาน `<read-failed:...>` vs `[]` ขึ้นมาเพื่อกัน
+ *
+ * [lastError] จึงบันทึกเหตุผลของความล้มเหลวล่าสุดไว้ให้ผู้เรียกเอาไป log — เก็บเป็น
+ * ข้อความแทนการเรียก `android.util.Log` ที่นี่โดยตั้งใจ เพราะคลาสนี้ต้องเรียกได้จาก
+ * JVM unit test ที่ `android.util.Log` เป็นสตับซึ่งโยน "not mocked" เสมอ
  */
 class ProximityGateStore(context: Context) {
 
@@ -42,14 +55,41 @@ class ProximityGateStore(context: Context) {
      * สถานะชั่วคราวของหน้าต่าง RSSI ที่หายแล้วสร้างใหม่ได้เองในไม่กี่วินาที
      */
     fun load(): Map<String, ProximityKeyState> {
-        val raw = prefs.getString(KEY_STATES, null) ?: return emptyMap()
-        return statesFromJson(raw)
+        val raw = runCatching { prefs.getString(KEY_STATES, null) }
+            .getOrElse { error ->
+                lastError = "load:${error.javaClass.simpleName}"
+                return emptyMap()
+            } ?: return emptyMap()
+
+        val states = statesFromJson(raw)
+        // ค่าที่เขียนไว้จริงแต่ถอดกลับมาไม่ได้เลยสักตัว = ข้อมูลบนดิสก์เสียหาย
+        // (ต่างจาก `"{}"` ซึ่งคือ "ว่างจริง ๆ" — ความต่างเดียวกับ `[]` vs
+        // `<read-failed:...>` ของ ADR-17)
+        if (states.isEmpty() && raw != EMPTY_JSON) {
+            lastError = "load:unparsable(${raw.length}B)"
+        }
+        return states
     }
+
+    /**
+     * เหตุผลของความล้มเหลวล่าสุดของ [load]/[save] — `null` แปลว่ายังไม่เคยล้ม
+     *
+     * ผู้เรียก (`BeaconScanReceiver`) เป็นคน log ค่านี้ ดู kdoc ของคลาสว่าทำไมถึงไม่
+     * เรียก `android.util.Log` ที่นี่เอง
+     */
+    var lastError: String? = null
+        private set
 
     /** เขียนทับสถานะทั้งหมดใน `commit()` เดียว — ดู kdoc ของคลาสเรื่อง `commit()` */
     fun save(states: Map<String, ProximityKeyState>) {
         runCatching {
-            prefs.edit().putString(KEY_STATES, statesToJson(states)).commit()
+            val committed =
+                prefs.edit().putString(KEY_STATES, statesToJson(states)).commit()
+            // `commit()` คืน false เมื่อเขียนไม่สำเร็จ **โดยไม่โยน exception** —
+            // สาขานี้คือความล้มเหลวเงียบที่ `runCatching` เพียงอย่างเดียวจับไม่ได้
+            if (!committed) lastError = "save:commit-returned-false"
+        }.onFailure { error ->
+            lastError = "save:${error.javaClass.simpleName}"
         }
     }
 
@@ -63,6 +103,9 @@ class ProximityGateStore(context: Context) {
 
         /** ทั้ง map อยู่ในคีย์เดียว — เขียนครั้งเดียวจบ ไม่มีสถานะเหลือครึ่ง ๆ */
         private const val KEY_STATES = "states"
+
+        /** JSON ของ "ไม่มี key เลยจริง ๆ" — ต่างจาก "อ่านแล้วถอดไม่ออก" (ดู [load]) */
+        private const val EMPTY_JSON = "{}"
 
         private const val FIELD_CONFIRMED = "confirmedBucket"
         private const val FIELD_PENDING_BUCKET = "pendingCloserBucket"
@@ -107,7 +150,8 @@ class ProximityGateStore(context: Context) {
         /**
          * ถอด JSON กลับเป็นสถานะ — **key ที่ถอดไม่ออกถูกข้ามไปเงียบ ๆ ไม่ throw**
          * ผลที่แย่ที่สุดคือ key นั้นเริ่มนับ dwell ใหม่ ซึ่งยอมรับได้กว่าการทำให้
-         * ทั้ง batch (รวมชั้น 1 ที่พิสูจน์แล้ว) ล้มเพราะสถานะ POC เสียหายตัวเดียว
+         * ทั้ง batch (รวมชั้น 1 ที่มีหลักฐานระดับ `observed` แล้ว) ล้มเพราะ
+         * สถานะ POC เสียหายตัวเดียว
          */
         internal fun statesFromJson(raw: String): Map<String, ProximityKeyState> {
             val root = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()

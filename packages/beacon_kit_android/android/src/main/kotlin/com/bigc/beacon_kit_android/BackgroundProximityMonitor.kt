@@ -43,7 +43,8 @@ data class ProximityChangedEvent(
  * ทางออกของชั้น proximity (ADR-20 ชั้นที่ 2) ไปยัง host app
  *
  * แยกเป็น `object` ของตัวเองแทนการเพิ่มเมธอดใน `BackgroundRegionMonitor` โดยตั้งใจ:
- * ชั้น 1 (region enter/exit) คือฟีเจอร์ที่พิสูจน์แล้วในสนาม ส่วนชั้นนี้ยังเป็น POC
+ * ชั้น 1 (region enter/exit) มีหลักฐานจากอุปกรณ์จริงระดับ `observed` แล้ว (ADR-14)
+ * ส่วนชั้นนี้ยังไม่เคยรันบนเครื่องจริงเลยแม้แต่ครั้งเดียว จึงยังเป็น POC
  * — การแยกไฟล์ทำให้ `git diff` ของรอบนี้พิสูจน์ได้ทันทีว่า**ไม่มีบรรทัดใดของชั้น 1
  * ถูกแตะ** ซึ่งเป็นเงื่อนไขที่ ADR-20 หัวข้อ 1 บังคับไว้
  *
@@ -71,22 +72,22 @@ object BackgroundProximityMonitor {
     }
 
     /**
-     * ส่ง [event] ให้ observer — **เฉพาะตอนที่ยืนยันว่า "ใกล้" เท่านั้น**
-     * (`to ∈ {NEAR, IMMEDIATE}`)
+     * ส่ง [event] ให้ observer — **ครบทุก transition ไม่กรองอะไรทั้งสิ้น**
      *
-     * ตัวกรองอยู่ตรงนี้จุดเดียว ไม่ใช่ที่ผู้เรียก เพื่อให้มีที่เดียวที่ตัดสินว่า
-     * event ไหน "ควรรบกวนผู้ใช้" — transition ที่ `to` เป็น `FAR` (เดินออกห่าง)
-     * และ `null` (stale, "วัดไม่ได้แล้ว") **ไม่ใช่เหตุการณ์ที่ POC รอบนี้ต้องรายงาน**
-     * และการปล่อยผ่านจะทำให้ผู้ทดสอบได้ notification ตอนเดินออกจากชั้นวางด้วย ซึ่ง
-     * กลบสัญญาณที่กำลังจะพิสูจน์
+     * `closer` / `farther` / `stale` ถูกส่งออกหมดตามสัญญาที่ ADR-20 หัวข้อ 5 นิยาม
+     * ไว้ให้ iOS ทำตาม **การตัดสินว่า event ไหน "ควรรบกวนผู้ใช้" เป็นนโยบายของแอป
+     * ไม่ใช่ความสามารถของแพลตฟอร์ม** จึงอยู่ที่ `ExampleProximityWatcher` แนวเดียว
+     * กับตำแหน่งของ cooldown (ADR-20 หัวข้อ 6 · ADR-11 หัวข้อ 7 เรื่องตำแหน่งของ
+     * debounce) — ถ้ากรองที่นี่ ชั้น 2 จะไม่มีสัญญาณ "ออก/วัดไม่ได้" ให้ใครเลย
+     * ทั้งที่ [ProximityGate.sweepStale] มีอยู่เพื่อสิ่งนี้โดยเฉพาะ และรอบทดสอบบน
+     * เครื่องจริงจะไม่มีบรรทัดหลักฐานที่ตอบได้ว่า `exitMeters`/`staleAfter` ใช้ได้
+     * จริงหรือไม่
      *
      * ห่อ observer ด้วย `runCatching` ด้วยเหตุผลเดียวกับ
      * `BackgroundRegionMonitor.emit()`: โค้ดของ host app ที่ throw ต้องไม่ลาก
      * เส้นทางเบื้องหลังของ SDK ล้มไปด้วย
      */
     fun emit(event: ProximityChangedEvent) {
-        val to = event.to
-        if (to != ProximityBucket.NEAR && to != ProximityBucket.IMMEDIATE) return
         runCatching { observer?.onProximityChanged(event) }
     }
 }
