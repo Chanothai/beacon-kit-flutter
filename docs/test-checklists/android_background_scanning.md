@@ -96,7 +96,8 @@ notification ของ `ExampleProximityWatcher` เท่านั้น** (ย
 | ข้อ | ผล | หลักฐาน |
 |---|---|---|
 | 1. เห็น `enter` ทั้งสอง region | **ผ่าน** | 12:44:21 `bigc-test` · 12:44:22 `k9p-default` |
-| 3. เดินเข้า 2 m → notification โดยไม่เปิดแอป | **ผ่าน** | 13:05:03 `bigc-test bucket=near from=none reason=closer medianM=1.2 rssi=-53 txPower=-51` ใน process `3ab5154f` ที่ `conclusion=relaunchedFromTerminated` · ผู้ทดสอบยืนยันว่าเห็น notification จริง |
+| 3. เดินเข้า 2 m → **บรรทัดหลักฐาน**โดยไม่เปิดแอป | **ผ่าน** | 13:05:03 `bigc-test bucket=near from=none reason=closer medianM=1.2 rssi=-53 txPower=-51` ใน process `3ab5154f` ที่ `conclusion=relaunchedFromTerminated` |
+| 3ก. เดินเข้า 2 m → **notification** โดยไม่เปิดแอป | ❌ **ยังพิสูจน์ไม่ได้** | ดูหัวข้อ "notification ถูกระบบบล็อก" ด้านล่าง — `dumpsys notification` รายงาน `numEnqueuedByApp=10 numPostedByApp=0 numBlocked=10` สำหรับแพ็กเกจนี้ |
 | 4. เดินออก → ไม่มี notification ซ้ำ | **ผ่านบางส่วน** | 13:07:52 `bucket=far reason=farther medianM=5.2` ถูกกรองไม่ยิง notification ถูกต้อง **แต่**ตอนยืนนิ่งกลับได้ notification ซ้ำ (ดูข้อ 7 ด้านล่าง) |
 | 5. `event=proximity` + `conclusion=relaunchedFromTerminated` | **ผ่าน** | 12:58:55.830 `uptimeMs=139` · 13:04:01.363 `uptimeMs=192` และอีกหลายบรรทัด |
 | 6. `enter`/`exit` ไม่ regression | **ผ่าน** | 13:00:57 `exit` ทั้งสอง region (`exitReason=alarm` `sinceLastSeenMs=109713`) → 13:01:25 `enter bigc-test` → 13:01:32 `enter k9p-default` ครบวงจรตามปกติ |
@@ -127,6 +128,38 @@ medianM=0.8` → 13:49:25 `near←immediate medianM=1.7` → 13:49:53 `immediate
 การ port การเติม hysteresis ที่ขอบนี้ต้องเป็น ADR รอบใหม่ที่แก้ทั้ง Dart และ Kotlin พร้อมกัน
 รอบนี้จึงกันที่ชั้นนโยบายของ example app แทน (ยิงเฉพาะตอนเข้าสู่ความใกล้) **ยังไม่มีอะไร
 กันในตัว SDK** และ **ยังไม่ได้ทดสอบซ้ำหลังแก้**
+
+### ⛔ notification ถูกระบบบล็อก — ข้อ 3ก ยังพิสูจน์ไม่ได้ (พบ 9 ก.ย. 2026 14:16)
+
+**ข้อเท็จจริงที่ตรวจได้จากเครื่อง:**
+
+1. `adb shell dumpsys notification` → `AggregatedStats{ key='com.beaconkit.example',
+   numEnqueuedByApp=10, numPostedByApp=0, numBlocked=10 }` — แอป**ยื่น**ครบแต่**ไม่ถูกโพสต์
+   สักใบ**
+2. `AppSettings: com.beaconkit.example (10144)` **ไม่มีฟิลด์ `importance=` และ `userSet=`**
+   ต่างจากแอป sideload ตัวอื่นบนเครื่องเดียวกันที่ผู้ใช้เคยกดอนุญาต เช่น
+   `dev.firebase.appdistribution (10263) importance=DEFAULT userSet=true`
+   → ผู้ใช้**ไม่เคยอนุญาต** notification ให้แอปนี้ และค่าตั้งต้นของ MIUI คือปิด
+3. Settings → Notifications → App notifications → sort **"Turned off"** → **มี `example`
+   อยู่ในรายการนั้นจริง**
+4. หน้า per-app notification settings **เป็นสีเทาทั้งหน้า กดไม่ได้แม้แต่สวิตช์ `Show
+   notifications`** (ยืนยันด้วยการ `adb shell input tap` ที่พิกัดสวิตช์แล้วสถานะไม่เปลี่ยน)
+5. **ไม่ใช่** DND (`zen_mode=0`) · **ไม่ใช่** battery saver (`low_power=0`) · **ไม่ใช่**
+   app suspended (`suspended=false stopped=false`) · `appops POST_NOTIFICATION = allow`
+   · channel `beacon_kit_example.region_events` มีอยู่จริงและ `mImportance=3 mDeleted=false`
+6. ลองติดตั้งใหม่โดยระบุ installer (`adb install -r -i com.android.vending`) แล้ว
+   `installerPackageName=com.android.vending` — **สวิตช์ยังเทาเหมือนเดิม**
+
+**ผลต่อการอ่านผลรอบทดสอบ:** บรรทัดหลักฐานในไฟล์ log **ไม่ได้รับผลกระทบเลย** (เขียนลง
+`filesDir` ตรง ๆ ไม่ผ่าน NotificationManager) ข้อ 1, 2, 3, 4, 5, 6 ที่อ้างบรรทัด log จึงยัง
+ยืนยันได้ตามเดิม — สอดคล้องกับกติกาที่ `ExampleNotifications` เขียนไว้เองว่า "log คือหลักฐาน
+notification ไม่ใช่" **แต่เกณฑ์ "ต้องเห็น notification" ของข้อ 3 ยังพิสูจน์ไม่ได้บนเครื่องนี้**
+และคำบอกเล่าของผู้ทดสอบที่ว่าเห็น notification เด้งระหว่างรอบที่ 1 **ยังอธิบายไม่ได้ด้วย
+ข้อมูลที่มี** (สมมติฐานที่ยังไม่ได้พิสูจน์: MIUI ปิดให้เองหลังแอปยิงถี่ 13 ใบใน 15 นาที)
+— ห้ามนับเป็นหลักฐานจนกว่าจะปลดบล็อกแล้วเดินซ้ำ
+
+**ยังไม่ได้ลอง:** รีบูตเครื่องแล้วดูสวิตช์อีกครั้ง · ถอนแล้วติดตั้งใหม่ทั้งหมด (จะล้างไฟล์
+หลักฐานและต้องเปิดแอปลงทะเบียน region ใหม่ — ก๊อปไฟล์ log ออกมาก่อนทุกครั้ง)
 
 ⚠️ **ข้อ 7 (รอบที่ 1) — สิ่งที่พบและแก้ไปแล้วด้วย `staleAfter=60s`:** ผู้ทดสอบได้ notification **13 ใบใน 15 นาที**
 ทั้งที่ยืนอยู่กับที่ (near → immediate → near วน) เพราะ `staleAfter = 10s` สั้นกว่าช่วงห่างระหว่าง
