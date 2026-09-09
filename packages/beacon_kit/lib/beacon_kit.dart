@@ -23,3 +23,8 @@ export 'src/beacon_adapter.dart';
 export 'src/beacon_manager.dart';
 export 'src/generic_ibeacon_eddystone_adapter.dart';
 export 'src/ibeacon_region_config.dart';
+// ADR-19 (8 ก.ย. 2026): ProximityGate — ชั้นตัดสินใจ "ใกล้พอหรือยัง" ระดับ Dart
+// เหนือ region enter/exit ที่มีอยู่แล้ว ดู dartdoc ของ ProximityGate สำหรับ
+// สัญญาเต็ม ๆ (ไม่แทนที่ region monitoring — ต้องมี sample ไหลเข้ามาก่อนเสมอ)
+export 'src/proximity/distance_estimator.dart';
+export 'src/proximity/proximity_gate.dart';
