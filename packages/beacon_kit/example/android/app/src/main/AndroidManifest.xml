@@ -1,5 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!--
+      POST_NOTIFICATIONS — จำเป็นตั้งแต่ Android 13 (API 33) ซึ่งเปลี่ยน
+      notification จาก "ได้เลย" เป็น runtime permission ที่ต้องขอเอง
+
+      **ระบบไม่ถามให้เอง** เมื่อ targetSdk ≥ 33 (ของ example มาจาก
+      `flutter.targetSdkVersion`) — แอปต้องเรียก `requestPermissions()` เอง ดู
+      `MainActivity.requestNotificationAuthorization` ถ้าไม่ขอ ผลคือ
+      `NotificationManagerCompat.notify()` เงียบสนิท ไม่ throw ไม่มี error ใด ๆ
+      ซึ่งคืออาการที่เจอจริงบน Xiaomi 11T Pro (API 33) เมื่อ 9 ก.ย. 2026
+
+      บนเครื่อง API < 33 (เช่น Redmi Note 9 ที่ใช้ทดสอบ ADR-14/17) การประกาศนี้
+      **ไม่เปลี่ยนพฤติกรรมอะไรเลย** — ระบบมองข้าม permission นี้ทั้งตัว
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
       android:name=".ExampleApplication" — **ไม่ใช้ ${applicationName} ที่ Flutter
       เติมให้** (ค่าปกติคือ android.app.Application)
 

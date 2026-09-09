@@ -192,6 +192,16 @@ class _ScanPageState extends State<ScanPage> {
   /// ไม่งั้นหน้าจอจะแสดง "ไม่มี error" ทั้งที่ยังไม่เคยถาม
   bool _logWriteErrorLoaded = false;
 
+  /// ได้สิทธิ์แจ้งเตือนหรือยัง — `null` = **ยังไม่เคยถาม** ซึ่งต่างจาก `false`
+  /// (ถามแล้วไม่ได้) โดยสิ้นเชิง ถ้ายุบรวมกัน แบนเนอร์เตือนจะขึ้นตั้งแต่วินาทีแรก
+  /// ที่เปิดแอปทุกครั้งทั้งที่ยังไม่รู้อะไรเลย แล้วผู้ทดสอบจะเรียนรู้ที่จะเมินมัน
+  ///
+  /// สำคัญบน **Android 13+ (API 33)** ที่ `POST_NOTIFICATIONS` เป็น runtime
+  /// permission — ถ้าไม่ได้สิทธิ์ `notify()` จะเงียบสนิทไม่ throw อะไรเลย ซึ่งคือ
+  /// อาการที่เจอจริงบน Xiaomi 11T Pro เมื่อ 9 ก.ย. 2026 (บน API < 33 ค่านี้เป็น
+  /// `true` เสมอ แบนเนอร์จึงไม่ขึ้นบน Redmi Note 9 ที่ใช้ทดสอบ ADR-14/17)
+  bool? _notificationAuthorized;
+
   @override
   void initState() {
     super.initState();
@@ -212,6 +222,10 @@ class _ScanPageState extends State<ScanPage> {
       // (ADR-14) จึงแยกไปตั้งต้นคนละทาง ไม่ใช่เรียกของ iOS แล้วหวังว่าจะได้ผล
       _listenToAndroidBackgroundEvents();
       unawaited(_refreshAndroidBackgroundStatus());
+      // ขอสิทธิ์แจ้งเตือนตั้งแต่เปิดแอป **ก่อน**ที่ผู้ทดสอบจะไปกดเริ่มเฝ้า —
+      // ถ้ารอไปขอตอนกดปุ่ม กล่องขอสิทธิ์จะเด้งซ้อนกับกล่องขอ Bluetooth/Location
+      // ซึ่งบน MIUI เคยทำให้กล่องหลังถูกกลืนหายไปเงียบ ๆ
+      unawaited(_ensureNotificationAuthorization());
       return;
     }
     // เริ่มฟัง region event ทันทีตั้งแต่แอปเปิด **ไม่รอให้ผู้ใช้กดปุ่ม** —
@@ -558,8 +572,55 @@ class _ScanPageState extends State<ScanPage> {
   /// แพลตฟอร์มเทียบกันได้ — ไม่ใช่ค่าที่เหมาะกับ production
   static const int _androidExitTimeoutSeconds = 30;
 
+  /// ขอสิทธิ์แจ้งเตือนแล้วจำผลไว้ — เรียกซ้ำได้ปลอดภัย
+  ///
+  /// เรียกสองที่โดยตั้งใจ: ตอนเปิดแอป และอีกครั้งก่อนเริ่มเฝ้าเบื้องหลัง เพราะ
+  /// ผู้ใช้อาจปฏิเสธรอบแรกแล้วเปลี่ยนใจ หรือไปปิดสวิตช์ในหน้าตั้งค่าระหว่างนั้น
+  /// — ฝั่ง native ตอบ `true` ทันทีถ้ามีสิทธิ์อยู่แล้ว จึงไม่เด้งกล่องซ้ำ
+  Future<bool> _ensureNotificationAuthorization() async {
+    final granted = await _diagnostics.requestNotificationAuthorization();
+    if (!mounted) return granted;
+    setState(() => _notificationAuthorized = granted);
+    return granted;
+  }
+
+  /// ยิง notification ทดสอบหนึ่งใบ **ผ่านเส้นทางเดียวกับที่เส้นทางเบื้องหลังใช้**
+  ///
+  /// จุดประสงค์เดียวกับปุ่ม self-test ของไฟล์หลักฐาน: แยก "ระบบบล็อกแจ้งเตือน"
+  /// ออกจาก "ไม่มี event เกิดขึ้น" **ก่อน**เริ่มเดินทดสอบ ไม่ใช่ไปรู้ตอนเดินเสร็จ
+  /// แล้วว่าไม่เห็นอะไรเลยเพราะอะไรกันแน่ — บรรทัด `event=notification` ที่
+  /// `ExampleNotifications.post()` เขียนให้จะบอก `posted=` และ `reason=` ตรง ๆ
+  Future<void> _postTestNotification() async {
+    setState(() => _errorMessage = null);
+    try {
+      await _diagnostics.postNotification(
+        title: 'ทดสอบแจ้งเตือน',
+        body: 'ถ้าเห็นใบนี้ = ระบบยอมให้แอปแจ้งเตือนแล้ว',
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'ยิงแจ้งเตือนทดสอบไม่ได้: $error');
+    }
+    await _refreshLogWriteError();
+  }
+
+  Future<void> _openNotificationSettings() async {
+    try {
+      await _diagnostics.openNotificationSettings();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'เปิดหน้าตั้งค่าแจ้งเตือนไม่ได้: $error');
+    }
+  }
+
   Future<void> _startAndroidBackgroundMonitoring() async {
     setState(() => _errorMessage = null);
+
+    // ขอซ้ำก่อนเริ่มเฝ้า — ไม่บล็อกการเริ่มเฝ้าถ้าไม่ได้สิทธิ์ เพราะ**บรรทัด
+    // หลักฐานในไฟล์ log ไม่ได้พึ่ง notification เลย** รอบทดสอบยังเดินต่อได้
+    // เต็มรูปแบบ แค่ผู้ทดสอบจะไม่เห็นสัญญาณบนจอ (แบนเนอร์ด้านบนบอกไว้แล้ว)
+    await _ensureNotificationAuthorization();
+    if (!mounted) return;
 
     const beaconKitAndroid = BeaconKitAndroid();
     // ต้องมีสิทธิ์ก่อน ไม่งั้นการลงทะเบียนจะล้มเหลวทุก region และผู้ใช้จะเห็นแค่
@@ -673,6 +734,15 @@ class _ScanPageState extends State<ScanPage> {
             onRefreshError: _refreshLogWriteError,
           ),
           Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: OutlinedButton(
+              onPressed: _postTestNotification,
+              child: const Text(
+                'ทดสอบแจ้งเตือน (เขียน event=notification ด้วย)',
+              ),
+            ),
+          ),
+          Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
@@ -692,6 +762,12 @@ class _ScanPageState extends State<ScanPage> {
               ],
             ),
           ),
+          if (_splitByPlatformUntilAdr13Step4 &&
+              _notificationAuthorized == false)
+            _NotificationPermissionBanner(
+              onRetry: _ensureNotificationAuthorization,
+              onOpenSettings: _openNotificationSettings,
+            ),
           if (_splitByPlatformUntilAdr13Step4)
             _AndroidBackgroundPanel(
               status: _androidBackgroundStatus,
@@ -1199,6 +1275,76 @@ class _EventCounter extends StatelessWidget {
 ///
 /// ถ้ายัดสองอย่างนี้ลงแผงเดียวกัน คนอ่านหน้าจอจะสรุปว่าสองแพลตฟอร์มให้ข้อมูล
 /// คุณภาพเดียวกัน ซึ่งเป็นสิ่งที่ ADR-9 สั่งห้ามไว้ตรง ๆ
+/// แถบเตือนว่า **ยังไม่ได้รับสิทธิ์แจ้งเตือน** พร้อมทางแก้ที่กดได้ทันที
+///
+/// ขึ้นเฉพาะเมื่อถามฝั่ง native แล้วได้ `false` จริง ๆ (ไม่ใช่ตอนยังไม่เคยถาม) —
+/// บน Android < 13 จะไม่มีวันขึ้นเพราะ native ตอบ `true` เสมอ
+///
+/// มีสองปุ่มเพราะ **สองสาเหตุนี้แก้คนละทาง**: ถ้าผู้ใช้ยังไม่เคยปฏิเสธถาวร การกด
+/// "ขอสิทธิ์อีกครั้ง" จะเด้งกล่องให้ใหม่ได้ แต่ถ้าปฏิเสธครบตามเกณฑ์ของระบบแล้ว
+/// กล่องจะไม่เด้งอีกเลยและต้องไปเปิดเองในหน้าตั้งค่า — ซึ่งเป็นทางเดียวที่ใช้ได้
+/// กับสวิตช์ของ MIUI ที่ซ้อนอยู่อีกชั้นด้วย
+class _NotificationPermissionBanner extends StatelessWidget {
+  const _NotificationPermissionBanner({
+    required this.onRetry,
+    required this.onOpenSettings,
+  });
+
+  final Future<bool> Function() onRetry;
+  final Future<void> Function() onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      color: theme.colorScheme.errorContainer,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'ยังไม่ได้รับสิทธิ์แจ้งเตือน',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onErrorContainer,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Android 13 ขึ้นไปต้องขอสิทธิ์ POST_NOTIFICATIONS ก่อน ถ้าไม่ได้ '
+              'notification จะเงียบสนิทโดยไม่มี error ให้เห็น\n'
+              'บรรทัดหลักฐานในไฟล์ log ยังถูกเขียนครบตามปกติ — รอบทดสอบเดินต่อได้ '
+              'แต่จะไม่เห็นสัญญาณบนจอ',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onErrorContainer,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => onRetry(),
+                    child: const Text('ขอสิทธิ์อีกครั้ง'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => onOpenSettings(),
+                    child: const Text('เปิดหน้าตั้งค่า'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AndroidBackgroundPanel extends StatelessWidget {
   const _AndroidBackgroundPanel({
     required this.status,

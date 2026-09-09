@@ -226,9 +226,33 @@ class ExampleDiagnostics {
   Future<String?> getLogFileProtection(String fileName) => _channel
       .invokeMethod<String>('getLogFileProtection', {'fileName': fileName});
 
-  Future<bool> requestNotificationAuthorization() async =>
-      await _channel.invokeMethod<bool>('requestNotificationAuthorization') ??
-      false;
+  /// ขอสิทธิ์แจ้งเตือน — **บน Android 13+ จะเด้งกล่องขอสิทธิ์จริง** และ `Future`
+  /// นี้จะยังไม่ resolve จนกว่าผู้ใช้จะตอบ (ดู `MainActivity`)
+  ///
+  /// คืน `false` เมื่อถูกปฏิเสธ **และเมื่อถามไม่ได้** — ผู้เรียกต้องถือว่า `false`
+  /// แปลว่า "ยังไม่มีสิทธิ์" เท่านั้น ห้ามตีความว่า "ผู้ใช้กดปฏิเสธ" เพราะสองอย่าง
+  /// นี้แก้คนละทาง (ดู `reason` ในบรรทัด `event=notification` ของไฟล์หลักฐาน)
+  ///
+  /// `IN_PROGRESS` = มีคำขอค้างอยู่แล้ว (ผู้ใช้ยังไม่ตอบกล่องที่เด้งอยู่) — คืน
+  /// `false` ไปก่อน ไม่ throw เพราะผู้เรียกทั้งสองที่เรียกแบบ fire-and-forget
+  Future<bool> requestNotificationAuthorization() async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'requestNotificationAuthorization',
+          ) ??
+          false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// เปิดหน้าตั้งค่า notification ของแอปนี้โดยตรง
+  ///
+  /// จำเป็นเมื่อ [requestNotificationAuthorization] คืน `false` ถาวร — ระบบจะไม่
+  /// แสดงกล่องขอสิทธิ์อีกหลังผู้ใช้ปฏิเสธครบตามเกณฑ์ และบน MIUI ยังมีสวิตช์ของ
+  /// ผู้ผลิตซ้อนอยู่อีกชั้นที่ปิดได้แยกจาก runtime permission ของ Android
+  Future<void> openNotificationSettings() =>
+      _channel.invokeMethod<void>('openNotificationSettings');
 
   Future<void> postNotification({
     required String title,
