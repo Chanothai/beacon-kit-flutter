@@ -79,7 +79,31 @@ object ExampleProximityWatcher {
         val to = event.to
         if (to != ProximityBucket.NEAR && to != ProximityBucket.IMMEDIATE) return
 
-        // 3) แล้วค่อย notification (ถ้าไม่ติด cooldown)
+        // 3) **ยิงเฉพาะตอน "เข้าสู่ความใกล้" เท่านั้น ไม่ใช่ทุกการขยับภายในความใกล้**
+        //
+        // ## ทำไมต้องมีเงื่อนไขนี้ — ข้อมูลจากรอบทดสอบ 9 ก.ย. 2026 รอบที่ 2
+        //
+        // `ProximityGate.classify()` มี dead zone เฉพาะขอบ far ↔ close
+        // (`enterMeters` 3.0 / `exitMeters` 5.0) ส่วนขอบ `immediate`/`near` เป็น
+        // เกณฑ์เดี่ยว ๆ `median <= immediateMeters (1.0)` **ไม่มีอะไรคั่น** ผู้ทดสอบ
+        // ที่ยืนนิ่งอยู่ราว 1 เมตรจึงทำให้ median ข้าม 1.0 ไป-กลับทุก batch แล้ว
+        // **ทั้งสองทิศผ่านตัวกรองข้างบนได้หมด** (`to` เป็น near หรือ immediate
+        // เหมือนกัน) — วัดได้จริง 16 จาก 36 event ของรอบที่ 2
+        // (`docs/test-data/2026-09-09_android_proximity_background.log`)
+        //
+        // นี่คือ**ช่องว่างของการออกแบบใน ADR-19 หัวข้อ 6(ข) เอง** ซึ่งพูดถึง
+        // hysteresis เฉพาะขอบ far/close — `proximity_gate.dart` มีพฤติกรรมเดียวกัน
+        // เป๊ะ **จึงห้ามแก้ที่ `ProximityGate` ฝั่ง Kotlin เด็ดขาด** เพราะจะ drift
+        // จาก reference impl ซึ่ง ADR-20 หัวข้อ 2 ห้ามไว้ การเติม hysteresis ที่ขอบ
+        // `immediate` ต้องเป็น ADR รอบใหม่ที่แก้ทั้งสองภาษาพร้อมกัน
+        //
+        // รอบนี้จึงกันที่ชั้นนโยบายของแอปแทน ตาม ADR-20 หัวข้อ 6 —
+        // **บรรทัดหลักฐานยังเขียนครบทุก flap** (ข้อ 1 ข้างบน) ข้อมูลที่ต้องใช้
+        // calibrate ขอบ `immediate` จึงไม่หายไปไหน หายแค่การรบกวนผู้ใช้
+        val from = event.from
+        if (from != null && from != ProximityBucket.FAR) return
+
+        // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown)
         val key = cooldownKeyFor(event)
         if (!consumeCooldown(context, key, event.timestampMillis)) return
 

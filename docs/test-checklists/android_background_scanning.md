@@ -77,14 +77,21 @@ grep -c "exitReason=" docs/test-data/2026-09-03_android_overnight_stale_inside.l
 `sha256 099223dda38c7e63f714144a5a2ce6d1272000e18445ed4f7b072164e08302be` — บิลด์นี้ใช้
 `staleAfterMillis = 10_000L`
 
+**บิลด์รอบเดินที่ 2 (13:30-13:50) — `staleAfterMillis = 60_000L`:**
+`sha256 ea7374ed118359dbcdf02cb29bac3026455bf4fdf0fd0552c245ac49b3f7677a` (build 13:17)
+
 **บิลด์ที่ติดตั้งอยู่บนเครื่องตอนนี้ และที่รอบข้ามคืนคืน 9 ก.ย. จะรันบนมัน:**
-`sha256 ea7374ed118359dbcdf02cb29bac3026455bf4fdf0fd0552c245ac49b3f7677a` (`flutter build apk --debug` 9 ก.ย. 2026 13:17) — **ต่างจากบิลด์
-ข้างบนที่ `staleAfterMillis = 60_000L` ตาม ADR-20 หัวข้อ 7 เท่านั้น** ยังไม่มีรอบเดินซ้ำหลัง
-เปลี่ยนค่า ค่านี้จึงเป็น `code-complete, unverified` · ADR-17 ไม่ถูกแตะในบิลด์นี้ (ยืนยันจาก
-`git diff` — `BackgroundRegionMonitor.kt` 0 บรรทัด) รอบข้ามคืนจึงยังนับเป็น**รอบที่ 2 ของ ADR-17**ได้
+`sha256 222566b794ce869704d18b0ac53087736e254460ed6e82ebb26a50162a0bcad5`
+(`flutter build apk --debug` 9 ก.ย. 2026 13:55) — ต่างจากบิลด์ 13:17 ที่ **ตัวกรอง
+notification ของ `ExampleProximityWatcher` เท่านั้น** (ยิงเฉพาะตอนเข้าสู่ความใกล้จาก
+`far`/ไม่เคยมี bucket ไม่ยิงตอน `near`↔`immediate` ขยับกันเอง) **ไม่แตะตรรกะ SDK เลย**
+· ยังไม่มีรอบเดินซ้ำหลังเปลี่ยน จึงเป็น `code-complete, unverified`
+· ADR-17 ไม่ถูกแตะในบิลด์นี้ (ยืนยันจาก `git diff` — `BackgroundRegionMonitor.kt` 0 บรรทัด)
+รอบข้ามคืนจึงยังนับเป็น**รอบที่ 2 ของ ADR-17**ได้
 
 **ไฟล์หลักฐาน:** [`docs/test-data/2026-09-09_android_proximity_background.log`](../test-data/2026-09-09_android_proximity_background.log)
-— 280 บรรทัด · md5 `1436cd9abacece27e67f697cd45e384f` · 93 บรรทัด `event=proximity`
+— 422 บรรทัด · md5 `84a272e84afcbf9ee0749449e3e55670` · 195 บรรทัด `event=proximity`
+(ครอบทั้งรอบที่ 1 และรอบที่ 2)
 
 | ข้อ | ผล | หลักฐาน |
 |---|---|---|
@@ -95,7 +102,33 @@ grep -c "exitReason=" docs/test-data/2026-09-03_android_overnight_stale_inside.l
 | 6. `enter`/`exit` ไม่ regression | **ผ่าน** | 13:00:57 `exit` ทั้งสอง region (`exitReason=alarm` `sinceLastSeenMs=109713`) → 13:01:25 `enter bigc-test` → 13:01:32 `enter k9p-default` ครบวงจรตามปกติ |
 | 2. ปัดแอปทิ้งจาก recent | **ผ่าน** | ทุกบรรทัดตั้งแต่ 12:58:22 เป็นต้นไปมี `everForeground=false activities=0 state=noActivityEver` และ `procUuid` ใหม่ทุกครั้ง |
 
-⚠️ **ข้อ 7 — สิ่งที่รอบนี้พบและยังไม่ได้แก้ให้เห็นผล:** ผู้ทดสอบได้ notification **13 ใบใน 15 นาที**
+**รอบเดินที่ 2 (13:30-13:50 · `staleAfter=60s`) — เทียบกับรอบที่ 1 โดยตรง:**
+
+| ตัวชี้วัด | รอบ 1 `staleAfter=10s` (14 นาที) | รอบ 2 `staleAfter=60s` (20 นาที) |
+|---|---|---|
+| `proximity` ต่อนาที | 4.4 | 1.8 |
+| `reason=stale` | 31/62 = 50% | 9/36 = 25% |
+| `from=none` (state ถูกล้าง) | 30/62 = 48% | 9/36 = 25% |
+| transition ที่มี `from` จริง (hysteresis ได้ทำงาน) | **1** | **18** |
+| flap `near`↔`immediate` | 1 | **16** |
+| notification ที่ควรเด้ง | 0.8 ใบ/นาที | 0.8 ใบ/นาที |
+
+การขยับ `staleAfter` **ได้ผลตามที่ตั้งใจ** (สามแถวแรก) และ `reason=stale` ที่เหลือ 9 ครั้ง
+ส่วนใหญ่ถูกต้อง (เกิดหลัง `exit` จริงช่วง 13:34-13:39) · `enter`/`exit` จับคู่ครบ 6/6 คู่
+ไม่มี regression
+
+⚠️ **แต่มันเปิดโปงปัญหาคนละตัวที่ถูกกลบอยู่:** ขอบ `immediate`/`near` **ไม่มี hysteresis**
+(`classify()` ใส่ dead zone เฉพาะขอบ far/close ตาม ADR-19 หัวข้อ 6(ข)) ผู้ทดสอบที่ยืนนิ่ง
+ราว 1 เมตรทำให้ median ข้าม `immediateMeters = 1.0` ไป-กลับทุก batch และทั้งสองทิศยิง
+notification ได้เหมือนกัน → **16 จาก 36 event ของรอบที่ 2** เช่น 13:46:22 `immediate←near
+medianM=0.8` → 13:49:25 `near←immediate medianM=1.7` → 13:49:53 `immediate←near medianM=0.8`
+
+**`proximity_gate.dart` มีพฤติกรรมเดียวกันเป๊ะ** — เป็นช่องว่างของการออกแบบ ไม่ใช่บั๊กของ
+การ port การเติม hysteresis ที่ขอบนี้ต้องเป็น ADR รอบใหม่ที่แก้ทั้ง Dart และ Kotlin พร้อมกัน
+รอบนี้จึงกันที่ชั้นนโยบายของ example app แทน (ยิงเฉพาะตอนเข้าสู่ความใกล้) **ยังไม่มีอะไร
+กันในตัว SDK** และ **ยังไม่ได้ทดสอบซ้ำหลังแก้**
+
+⚠️ **ข้อ 7 (รอบที่ 1) — สิ่งที่พบและแก้ไปแล้วด้วย `staleAfter=60s`:** ผู้ทดสอบได้ notification **13 ใบใน 15 นาที**
 ทั้งที่ยืนอยู่กับที่ (near → immediate → near วน) เพราะ `staleAfter = 10s` สั้นกว่าช่วงห่างระหว่าง
 batch จริง (มัธยฐาน 12.1-17.5 วินาที · เกิน 10 วินาที 38 จาก 52 ช่องว่าง) gate จึงล้าง state ทิ้ง
 ครึ่งหนึ่งของทุก event (31 จาก 63 บรรทัดเป็น `reason=stale`) `from` เป็น `none` แทบทุกครั้ง และ
