@@ -129,7 +129,48 @@ medianM=0.8` → 13:49:25 `near←immediate medianM=1.7` → 13:49:53 `immediate
 รอบนี้จึงกันที่ชั้นนโยบายของ example app แทน (ยิงเฉพาะตอนเข้าสู่ความใกล้) **ยังไม่มีอะไร
 กันในตัว SDK** และ **ยังไม่ได้ทดสอบซ้ำหลังแก้**
 
-### ⛔ notification ถูกระบบบล็อก — ข้อ 3ก ยังพิสูจน์ไม่ได้ (พบ 9 ก.ย. 2026 14:16)
+### เครื่องที่ 2 — Xiaomi 11T Pro `21081111RG` (แยกจาก Redmi Note 9 ห้ามปนผล)
+
+| | เครื่องที่ 1 | เครื่องที่ 2 |
+|---|---|---|
+| serial | `0703455c0406` | `fyrg9xf67h9ts84d` |
+| รุ่น | M2003J15SC (Redmi Note 9 · `merlin`) | **21081111RG (Xiaomi 11T Pro · `amber`)** |
+| Android / API | 12 / **31** | 13 / **33** |
+| MIUI | — | **V140 (`V14.0.6.0.TKWMIXM`)** |
+| ใช้ทำอะไร | รอบข้ามคืน ADR-14/ADR-17 | **พิสูจน์ notification บน API 33** |
+| `lightIdle` ในไฟล์ log | `unsupported-api31` เสมอ | **`false` (ค่าจริงครั้งแรก)** |
+
+**⚠️ ผลของสองเครื่องห้ามนำมารวมกันเป็นรอบเดียว** — คนละ API level คนละกลไก
+notification และคนละไฟล์หลักฐาน
+
+#### notification บน API 33 — `observed` (9 ก.ย. 2026 14:47)
+
+สาเหตุที่ notification ไม่ขึ้นบนเครื่องนี้ **คนละเรื่องกับ Redmi**: Android 13 เปลี่ยน
+`POST_NOTIFICATIONS` เป็น runtime permission และ `targetSdk` ของ example (จาก
+`flutter.targetSdkVersion`) ≥ 33 → **ระบบไม่ถามให้เอง** แอปต้องขอเอง แต่โค้ดเดิม
+`requestNotificationAuthorization` คืนแค่ `SDK_INT < 33` = ไม่เคยขอเลยสักครั้ง
+ผลคือ `notify()` เงียบสนิท ไม่ throw ไม่มี error (แก้ใน commit `d217f21`)
+
+**ยืนยันครบ 3 ชั้นตามที่กำหนด:**
+
+| ชั้น | ผล |
+|---|---|
+| เห็นด้วยตา | heads-up ขึ้นบนจอจริง "ทดสอบแจ้งเตือน · ถ้าเห็นใบนี้ = ระบบยอมให้แอปแจ้งเตือนแล้ว" |
+| `dumpsys notification` | `numEnqueuedByApp=18 numPostedByApp=6` (เดิม posted=0) · `NotificationRecord … importance=4` · `effectiveNotificationChannel{mId='beacon_kit_example.region_events_v2', mImportance=4}` · ไม่มี `blocked=true` |
+| ไฟล์หลักฐาน | `14:47:03.945 d7818de7 notification - foreground … lightIdle=false posted=true reason=granted id=1` |
+
+**สภาพแวดล้อมที่ตั้งไว้:** `POST_NOTIFICATIONS` / `BLUETOOTH_SCAN` /
+`ACCESS_FINE_LOCATION` = granted · battery `deviceidle whitelist` = อยู่ในรายการ
+(`user,com.beaconkit.example,10245`) · `standby-bucket = 5 (EXEMPTED)` ·
+build ที่ติดตั้ง `sha256 2f1c5cfa91a9d36c7ec2…`
+
+**ยังไม่ได้ทำบนเครื่องนี้:** MIUI Autostart (ไม่มีคำสั่ง adb ต้องเปิดในแอป Security เอง)
+· รอบเดินทดสอบ proximity ตามขั้น 4 ของ brief · ผล proximity ทั้งหมดในไฟล์นี้ยังเป็นของ
+Redmi Note 9 เท่านั้น
+
+---
+
+### ⛔ notification ถูกระบบบล็อก — ข้อ 3ก ยังพิสูจน์ไม่ได้ (พบ 9 ก.ย. 2026 14:16) · **เครื่องที่ 1 (Redmi Note 9) เท่านั้น**
 
 **ข้อเท็จจริงที่ตรวจได้จากเครื่อง:**
 
