@@ -170,4 +170,106 @@ class ProximityGateStoreTest {
         assertNull(state.confirmedBucket)
         assertEquals(7, state.pendingCloserCount, "ฟิลด์อื่นที่ยังอ่านได้ต้องไม่หายไปด้วย")
     }
+
+    /**
+     * **หนึ่ง key = หนึ่ง entry เสมอ ไม่ว่าจะบันทึกซ้ำกี่รอบ** (สอบสวนข้อ A)
+     *
+     * ที่มา: ไฟล์หลักฐาน 9 ก.ย. 2026 มี `reason=stale` สามบรรทัดติดกันภายใน 34 ms
+     * ที่ `regionIdentifier` เดียวกัน (16:45:20.702/.720/.736) ซึ่งอ่านเหมือน store
+     * เก็บ entry ซ้ำต่อ key แล้ว `sweepStale()` ยิงซ้ำตามจำนวนนั้น
+     *
+     * เทสต์นี้ปิดข้อสงสัยนั้นจากสองด้าน:
+     * 1. `save()` ซ้ำหลายรอบด้วย key เดิม → `load()` ต้องได้ **1 entry** เท่านั้น
+     *    (โครงสร้างบนดิสก์เป็น `JSONObject` ที่ key ซ้ำกันไม่ได้อยู่แล้วโดยนิยาม
+     *    — เทสต์นี้ล็อกไว้ไม่ให้ใครเปลี่ยนไปใช้ `JSONArray` แล้วเปิดช่องนั้นขึ้นมา)
+     * 2. `sweepStale()` ที่มีหลาย key ค้างอยู่ ต้องคืน **transition ละ 1 ตัวต่อ key
+     *    และ key ห้ามซ้ำกัน** — สามบรรทัดในไฟล์จริงจึงต้องเป็นบีคอนสามตัว
+     *    (คนละ MAC ใน key เดียวกันไม่ได้) ไม่ใช่ key เดียวยิงสามครั้ง
+     */
+    @Test
+    fun `หนึ่ง key มีได้ entry เดียว และ sweepStale ยิงได้ key ละครั้งเท่านั้น`() {
+        val clock = FakeClock()
+        val prefs = FakeSharedPreferences()
+        val store = ProximityGateStore(mockContext(prefs))
+        val gate = newGate(clock)
+
+        // สาม key ต่างกันเฉพาะส่วน MAC — regionIdentifier เดียวกันทั้งหมด
+        // (เคสเดียวกับ region กว้างของ ADR-8 ที่เห็นบีคอนหลายตัว)
+        val keys = listOf(
+            "k9p-default|AA:AA:AA:AA:AA:01",
+            "k9p-default|AA:AA:AA:AA:AA:02",
+            "k9p-default|AA:AA:AA:AA:AA:03",
+        )
+        for (k in keys) {
+            repeat(3) { gate.push(key = k, rssi = nearRssi, txPower = txPower) }
+            assertEquals(ProximityBucket.NEAR, gate.currentBucket(k), "ต้อง confirm ก่อนถึงจะมี stale ให้ยิง")
+        }
+
+        // บันทึกซ้ำหลายรอบด้วย key ชุดเดิม — entry ต้องไม่งอกตาม
+        repeat(3) { store.save(gate.snapshotStates()) }
+
+        val restored = store.load()
+        assertEquals(3, restored.size, "สาม key ต้องได้สาม entry ไม่ใช่เก้า")
+        assertEquals(keys.toSet(), restored.keys, "key ต้องตรงกันเป๊ะ ไม่มีตัวซ้ำ ไม่มีตัวหาย")
+
+        clock.nowMillis += 61_000L // เกิน staleAfterMillis (60 วินาที)
+
+        val transitions = gate.sweepStale()
+
+        assertEquals(3, transitions.size, "สาม key ที่ confirm ไว้ → สาม transition")
+        assertEquals(
+            keys.toSet(),
+            transitions.map { it.key }.toSet(),
+            "key ของ transition ต้องไม่ซ้ำกันเลย — ถ้าซ้ำแปลว่ายิงซ้ำจริง",
+        )
+        assertTrue(
+            transitions.all { it.reason == ProximityTransitionReason.STALE && it.to == null },
+            "ทุกตัวต้องเป็น STALE ที่ to เป็น null",
+        )
+        assertEquals(0, gate.sweepStale().size, "เรียกซ้ำทันทีต้องไม่ยิงอะไรอีก")
+    }
+
+    /**
+     * `clear()` ต้องล้างจริง — ล็อกสัญญาที่ `monitorStop` ของ example app พึ่งอยู่
+     *
+     * ก่อนคอมมิตนี้ `clear()` **ไม่มีผู้เรียกแม้แต่รายเดียว**: `stop()` ของ
+     * `BackgroundRegionMonitor` ล้างเฉพาะสถานะชั้น 1 (`BackgroundRegionStore`)
+     * ทำให้ key ของบีคอนที่ไม่อยู่แล้วค้างข้ามรอบทดสอบ แล้วโผล่เป็น `stale` รัว ๆ
+     * ตอน sighting แรกของรอบถัดไป — ซึ่งคืออาการที่ถูกสอบสวนในข้อ A พอดี
+     */
+    @Test
+    fun `clear ต้องล้างสถานะทุก key ออกจากดิสก์จริง`() {
+        val clock = FakeClock()
+        val prefs = FakeSharedPreferences()
+        val store = ProximityGateStore(mockContext(prefs))
+        val gate = newGate(clock)
+
+        gate.push(key = key, rssi = farRssi, txPower = txPower)
+        store.save(gate.snapshotStates())
+        assertEquals(1, store.load().size, "ต้องมีของให้ล้างก่อน ไม่งั้นเทสต์ผ่านฟรี")
+
+        store.clear()
+
+        assertTrue(store.load().isEmpty(), "หลัง clear() ต้องไม่เหลือ key ใดเลย")
+        assertNull(store.lastError, "การล้างที่สำเร็จต้องไม่ทิ้ง error ค้างไว้")
+    }
+
+    /**
+     * [beaconTagOf] — ตัวแยกบีคอนในไฟล์หลักฐาน (สอบสวนข้อ A/B)
+     *
+     * ถ้าไม่มีค่านี้ บรรทัด `stale` ของบีคอนคนละตัวใน region เดียวกันจะอ่านเหมือน
+     * บรรทัดซ้ำ และ `from=none` ของ key ที่เพิ่งเจอครั้งแรกจะอ่านเหมือน state หาย
+     */
+    @Test
+    fun `beaconTagOf คืนสองไบต์ท้ายของ MAC และแยก unknown-device ออกได้`() {
+        assertEquals("EE:FF", beaconTagOf("bigc-test|AA:BB:CC:DD:EE:FF"))
+        assertEquals("AA:01", beaconTagOf("k9p-default|AA:AA:AA:AA:AA:01"))
+        assertEquals(
+            "unknown-device",
+            beaconTagOf("bigc-test|unknown-device"),
+            "เคสที่ระบบไม่ส่งที่อยู่มาต้องแยกออกจาก MAC จริงได้ด้วยตาเปล่า",
+        )
+        assertNull(beaconTagOf("ไม่มีตัวคั่นเลย"), "ไม่มีส่วนที่อยู่ = ตอบไม่ได้ ห้ามเดา")
+    }
+
 }

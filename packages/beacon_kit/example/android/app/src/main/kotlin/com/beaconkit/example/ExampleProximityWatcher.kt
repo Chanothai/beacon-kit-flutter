@@ -142,6 +142,14 @@ object ExampleProximityWatcher {
         append(" medianM=${formatMeters(event.medianMeters)}")
         append(" rssi=${event.rssi ?: "n/a"}")
         append(" txPower=${event.txPower ?: "n/a"}")
+        // แยกว่าบรรทัดนี้เป็นของบีคอนตัวไหนใน region เดียวกัน — ถ้าไม่มีค่านี้
+        // `stale` หลายบรรทัดติดกันจะอ่านเหมือนบั๊กยิงซ้ำ และ `from=none` ของ key
+        // ที่เพิ่งเจอครั้งแรกจะอ่านเหมือน state หายไปเอง (เกิดจริง 9 ก.ย. 2026
+        // ช่วง 16:45-16:48 — ดู kdoc ของ ProximityChangedEvent.beaconTag)
+        append(" beacon=${event.beaconTag ?: "n/a"}")
+        // `ok` ไม่ใช่ค่าว่าง — ต้องอ่านออกได้ว่า "ถามแล้วและไม่มี error" ต่างจาก
+        // "ไม่มีคอลัมน์นี้เพราะเป็น log รุ่นเก่า"
+        append(" store=${event.storeError?.replace(' ', '_') ?: "ok"}")
     }
 
     /**

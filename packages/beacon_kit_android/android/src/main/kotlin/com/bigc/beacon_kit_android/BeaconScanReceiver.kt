@@ -135,6 +135,8 @@ class BeaconScanReceiver : BroadcastReceiver() {
         }
 
         store.save(gate.snapshotStates())
+        // อ่านหลัง save เพื่อให้ครอบทั้งความล้มเหลวของ load และ save ในรอบเดียวกัน
+        val storeError = store.lastError
 
         // ความล้มเหลวของดิสก์ต้องมีร่องรอย — ถ้า store อ่าน/เขียนไม่สำเร็จทุกครั้ง
         // dwell จะเริ่มนับหนึ่งใหม่ทุก sighting แล้ว gate จะเงียบตลอด ซึ่งอาการ
@@ -168,6 +170,8 @@ class BeaconScanReceiver : BroadcastReceiver() {
                     timestampMillis = System.currentTimeMillis(),
                     rssi = rssi,
                     txPower = txPower,
+                    beaconTag = beaconTagOf(transition.key),
+                    storeError = storeError,
                 ),
             )
         }
@@ -218,6 +222,20 @@ private const val TAG = "BeaconScanReceiver"
  */
 internal fun proximityKeyFor(regionIdentifier: String, deviceAddress: String?): String =
     "$regionIdentifier|${deviceAddress ?: "unknown-device"}"
+
+/**
+ * ตัวแยกบีคอนสำหรับไฟล์หลักฐาน — **สองไบต์ท้ายของ MAC เท่านั้น**
+ *
+ * ดูเหตุผลเต็มที่ [ProximityChangedEvent.beaconTag] · คืน `null` เมื่อ key ไม่มี
+ * ส่วนที่อยู่ (ไม่ควรเกิด แต่ห้ามเดา) และคืนค่าเดิมทั้งก้อนเมื่อเป็น
+ * `"unknown-device"` เพราะเคสนั้นต้องแยกออกจาก MAC จริงได้ด้วยตาเปล่า
+ */
+internal fun beaconTagOf(key: String): String? {
+    val address = key.substringAfter('|', missingDelimiterValue = "")
+    if (address.isEmpty()) return null
+    if (!address.contains(':')) return address
+    return address.split(':').takeLast(2).joinToString(":")
+}
 
 /**
  * อ่าน `txPower` จาก manufacturer-specific data ของ iBeacon — **pure function**

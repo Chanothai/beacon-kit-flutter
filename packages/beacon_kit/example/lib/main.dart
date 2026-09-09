@@ -644,6 +644,15 @@ class _ScanPageState extends State<ScanPage> {
         ],
         exitTimeoutSeconds: _androidExitTimeoutSeconds,
       );
+      // เขียนบรรทัดหลักฐานทันทีที่ลงทะเบียนเสร็จ **ก่อน** setState — ถ้าระบบฆ่า
+      // process คั่นกลาง สิ่งที่ต้องรอดคือหลักฐานว่ารอบทดสอบเริ่มตอนกี่โมง
+      unawaited(
+        _diagnostics.logMonitorLifecycle(
+          event: 'monitorStart',
+          detail:
+              'registered=${result.registered.length} failed=${result.failed.length}',
+        ),
+      );
       if (!mounted) return;
       setState(() {
         _androidBackgroundStartResult = result;
@@ -664,6 +673,14 @@ class _ScanPageState extends State<ScanPage> {
   Future<void> _stopAndroidBackgroundMonitoring() async {
     try {
       await const BeaconKitAndroid().stopBackgroundRegionMonitoring();
+      // เขียนหลังหยุดสำเร็จเท่านั้น — บรรทัด `monitorStop` ต้องแปลว่า "หยุดแล้วจริง"
+      // ไม่ใช่ "กดปุ่มแล้ว" · ฝั่ง native จะล้าง ProximityGateStore ให้ในจังหวะนี้
+      unawaited(
+        _diagnostics.logMonitorLifecycle(
+          event: 'monitorStop',
+          detail: 'byUser',
+        ),
+      );
       if (!mounted) return;
       setState(() => _androidBackgroundStartResult = null);
     } on Object catch (error) {

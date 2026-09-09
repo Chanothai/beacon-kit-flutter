@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import com.bigc.beacon_kit_android.ProximityGateStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -87,6 +88,20 @@ class MainActivity : FlutterActivity() {
 
             "runEvidenceLogSelfTest" -> result.success(evidenceLogSelfTest())
 
+            "logMonitorLifecycle" -> {
+                val event = call.argument<String>("event")
+                if (event != "monitorStart" && event != "monitorStop") {
+                    result.error(
+                        "INVALID_ARGUMENT",
+                        "event ต้องเป็น monitorStart หรือ monitorStop เท่านั้น",
+                        null,
+                    )
+                } else {
+                    logMonitorLifecycle(event, call.argument<String>("detail"))
+                    result.success(null)
+                }
+            }
+
             "requestNotificationAuthorization" -> requestNotificationPermission(result)
 
             "openNotificationSettings" -> {
@@ -124,6 +139,50 @@ class MainActivity : FlutterActivity() {
 
             else -> result.notImplemented()
         }
+    }
+
+    /**
+     * เขียนบรรทัด `monitorStart` / `monitorStop` ลงไฟล์หลักฐาน
+     *
+     * ## ทำไมต้องมี
+     *
+     * ไฟล์หลักฐานเดิมบอกไม่ได้เลยว่า "ช่วงเวลานี้สั่งเฝ้าอยู่หรือเปล่า" — ความเงียบ
+     * จึงแปลได้สองอย่างที่ต่างกันสิ้นเชิง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่
+     * แรก · บรรทัดคู่นี้ปิดช่องนั้น และเป็นเส้นแบ่งรอบทดสอบที่อ่านย้อนหลังได้จริง
+     *
+     * ## ทำไม `monitorStop` ต้องล้าง [ProximityGateStore] ด้วย
+     *
+     * `BackgroundRegionMonitor.stop()` ล้างเฉพาะสถานะของ**ชั้น 1**
+     * (`BackgroundRegionStore.clearAll()`) — **สถานะของชั้น 2 ไม่มีใครล้างเลย**
+     * `ProximityGateStore.clear()` ไม่มีผู้เรียกแม้แต่รายเดียวก่อนคอมมิตนี้ ผลคือ
+     * key ของบีคอนที่ไม่อยู่แล้วค้างบนดิสก์ข้ามรอบทดสอบ แล้วโผล่เป็น `stale` รัว ๆ
+     * ตอน sighting แรกของรอบถัดไป ซึ่งอ่านเหมือนบั๊กแต่เป็นซากของรอบก่อน
+     *
+     * ล้างที่นี่ (example app) **ไม่ใช่ใน `stop()` ของ SDK** โดยตั้งใจ เพราะรอบนี้
+     * ห้ามแตะเส้นทาง region monitoring แม้แต่บรรทัดเดียว — **นี่คือหนี้ที่ต้องย้าย
+     * เข้า SDK ในรอบถัดไป** ไม่ใช่ตำแหน่งที่ถูกต้องถาวร
+     */
+    private fun logMonitorLifecycle(event: String, detail: String?) {
+        val context = applicationContext
+        if (event == "monitorStop") {
+            runCatching { ProximityGateStore(context).clear() }
+        }
+        BackgroundEvidenceLog.append(
+            context,
+            BackgroundEvidenceLog.line(
+                timestampMillis = System.currentTimeMillis(),
+                event = event,
+                regionIdentifier = "-",
+                conclusion = ExampleApplication.processState.conclusion,
+                // false เสมอ — สองบรรทัดนี้เกิดจากการกดปุ่มบน UI เท่านั้น
+                rawSignals = BackgroundEvidenceLog.rawSignals(
+                    context = context,
+                    state = ExampleApplication.processState,
+                    receiverEntry = false,
+                ) + " detail=${detail?.replace(' ', '_') ?: "n/a"}" +
+                    if (event == "monitorStop") " proximityStoreCleared=true" else "",
+            ),
+        )
     }
 
     /**

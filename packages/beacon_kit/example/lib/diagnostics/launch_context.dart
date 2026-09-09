@@ -246,6 +246,17 @@ class ExampleDiagnostics {
     }
   }
 
+  /// เขียนบรรทัด `monitorStart`/`monitorStop` ลงไฟล์หลักฐาน
+  ///
+  /// ปิดช่องที่ทำให้ "ความเงียบ" ในไฟล์หลักฐานแปลได้สองอย่าง: ระบบไม่ปลุกแอป
+  /// หรือไม่มีใครสั่งเฝ้าตั้งแต่แรก · `monitorStop` จะล้าง `ProximityGateStore`
+  /// ให้ด้วย ไม่งั้นซากของรอบก่อนจะโผล่เป็น `stale` ในรอบถัดไป
+  Future<void> logMonitorLifecycle({required String event, String? detail}) =>
+      _channel.invokeMethod<void>('logMonitorLifecycle', {
+        'event': event,
+        'detail': detail,
+      });
+
   /// เปิดหน้าตั้งค่า notification ของแอปนี้โดยตรง
   ///
   /// จำเป็นเมื่อ [requestNotificationAuthorization] คืน `false` ถาวร — ระบบจะไม่
