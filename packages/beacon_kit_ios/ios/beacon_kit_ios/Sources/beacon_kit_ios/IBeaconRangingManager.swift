@@ -1049,8 +1049,8 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// ## `isForeground == false` แปลว่าอะไร (ADR-22)
   ///
   /// รอบเดินจริง 10 ก.ย. 2026 วัดได้ว่า `didRange` ตอนแอปถูกปลุกเบื้องหลังมาถึง
-  /// **ทุก ~16 วินาที** (เทียบกับ 2 Hz ตอน foreground) และ **67% เป็น `unknown`**
-  /// เหลือ sample ที่ใช้ได้จริง **ต่อ key ราวทุก 84 วินาที** — `dwellSamples = 3`
+  /// **ทุก ~16 วินาที** (เทียบกับ 2 Hz ตอน foreground) และ **65% เป็น `unknown`**
+  /// เหลือ sample ที่ใช้ได้จริง **ต่อ key ราวทุก 77 วินาที** — `dwellSamples = 3`
   /// จึงต้องใช้เวลา **~4 นาที** กว่าจะยืนยัน `near` ได้หนึ่งครั้ง และ
   /// `staleAfterMillis = 10_000` เป็นไปไม่ได้เชิงโครงสร้าง (callback ถัดไปยังมา
   /// ไม่ถึงด้วยซ้ำ) หลักฐาน:

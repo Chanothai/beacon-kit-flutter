@@ -1566,8 +1566,8 @@ final class RangeCounterSuffixTests: XCTestCase {
 /// **ที่มาของทั้งกลุ่ม: `docs/test-data/2026-09-10_ios_proximity_counters.log`**
 ///
 /// ไฟล์นั้นวัดได้ว่าตอนแอปถูกปลุกเบื้องหลัง `didRange` มาถึง **ทุก ~16 วินาที**
-/// (เทียบกับ 2 Hz ตอน foreground) และ **67% ตอบ `unknown`** เหลือ sample ที่ใช้ได้จริง
-/// **ต่อ key ราวทุก 84 วินาที** — ค่าคงที่ของ ADR-19 หัวข้อ 8 (`dwellSamples = 3` ·
+/// (เทียบกับ 2 Hz ตอน foreground) และ **65% ตอบ `unknown`** เหลือ sample ที่ใช้ได้จริง
+/// **ต่อ key ราวทุก 77 วินาที** — ค่าคงที่ของ ADR-19 หัวข้อ 8 (`dwellSamples = 3` ·
 /// `staleAfterMillis = 10_000`) จึงเป็นไปไม่ได้เชิงโครงสร้างในโหมดนั้น
 ///
 /// กลุ่มนี้ล็อกว่าการตัดสินใจ "ไม่เดิน gate ตอน background" อยู่ใน**โค้ด** ไม่ใช่แค่
@@ -1617,7 +1617,7 @@ final class ProximityForegroundOnlyTests: XCTestCase {
     )
   }
 
-  /// `unknown` ตอน background ก็ยังต้องถูกนับแยก — ไม่งั้นตัวเลข 67% ที่ ADR-22
+  /// `unknown` ตอน background ก็ยังต้องถูกนับแยก — ไม่งั้นตัวเลข 65% ที่ ADR-22
   /// ทั้งฉบับตั้งอยู่บนนั้นจะวัดซ้ำไม่ได้ในรอบถัดไป
   func testBackgroundStillSeparatesUnknownFromInArray() {
     let gate = ProximityGate(clock: FakeClock().now)
