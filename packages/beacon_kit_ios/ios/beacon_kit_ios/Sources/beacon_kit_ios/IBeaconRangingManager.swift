@@ -1,5 +1,6 @@
 import CoreLocation
 import Flutter
+import UIKit
 
 /// จัดการ path ของ iBeacon บน iOS ผ่าน **CoreLocation** (`CLLocationManager`) — ไม่ใช่
 /// CoreBluetooth เพราะ iOS mask ข้อมูล iBeacon ทิ้งที่ระดับ CoreBluetooth ทั้งหมด
@@ -687,6 +688,19 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// `applyParsedRegions()` ก็เปิด ranging ค้างไว้ตลอดอยู่แล้วตั้งแต่ก่อนรอบนี้
   /// แต่ **Apple แนะนำให้หยุด ranging เมื่อออกจาก region** (`apple_proximity_ranging.md`
   /// หัวข้อ 9) จึงเป็นหนี้ที่ต้องใช้คืนใน ADR รอบถัดไปพร้อมกับการวัดผลแบตเตอรี่จริง
+  ///
+  /// ## 🔋 หนี้แบตเตอรี่ก้อนนี้ **โตขึ้น** ตั้งแต่ ADR-22 (10 ก.ย. 2026)
+  ///
+  /// รอบเดินจริงวัดได้ว่า ranging เดินต่อเนื่อง **8 นาที 23 วินาที** ในโปรเซสที่ถูก
+  /// ปลุกจากสภาพถูกฆ่า (`docs/test-data/2026-09-10_ios_proximity_counters.log`
+  /// 15:26:55 → 15:35:17) — และตั้งแต่ ADR-22 บังคับให้ชั้นที่ 2 เดินเฉพาะตอน
+  /// `.active` **ผลของ ranging ในหน้าต่างนั้นไม่ถูกใช้ตัดสินอะไรอีกแล้ว** เหลือแค่
+  /// เดินตัวนับ
+  ///
+  /// **ยังเก็บไว้โดยตั้งใจ** เพราะตัวนับชุดนั้นคือ**เครื่องมือวัดชิ้นเดียว**ที่จะบอก
+  /// ADR-22 ได้ว่าโหมด background ที่ทำงานจริงควรมีหน้าตาอย่างไร (Apple เองก็แนะนำ
+  /// ให้ ranging ในหน้าต่างที่ถูกปลุก) — แต่ **ห้ามปล่อยไว้ถึง production โดยไม่วัดแบต**
+  /// เงื่อนไขปลดหนี้: วัดแบตเทียบระหว่างเปิด/ปิด ranging ในหน้าต่างนี้ แล้วจึงตัดสิน
   private func ensureRangingStarted(for region: CLRegion) {
     guard let beaconRegion = region as? CLBeaconRegion else { return }
 
@@ -965,48 +979,125 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       rangeCallbackCount += 1
     }
 
-    proximityStore.resetLastError()
+    let samples = beacons.map { beacon in
+      ProximitySample(
+        key: ProximityKeyCodec.key(
+          regionIdentifier: regionIdentifier,
+          uuid: beacon.uuid.uuidString.lowercased(),
+          major: beacon.major.uint16Value,
+          minor: beacon.minor.uint16Value
+        ),
+        // ส่ง `nil` ตามจริงเมื่อ OS ตอบว่า `unknown` — **ห้ามแปลงเป็น `.far`**
+        // ("วัดไม่ได้" ไม่เท่ากับ "ไกล" — ADR-19 หัวข้อ 6(ง))
+        bucket: Self.proximityBucket(beacon.proximity)
+      )
+    }
+
+    // ---- ADR-22: ชั้นที่ 2 เดินเฉพาะตอน process `.active` ----
+    let isForeground = isApplicationActive()
+
+    if isForeground {
+      proximityStore.resetLastError()
+    }
+
+    // กู้ gate แม้ตอน background — **ไม่ใช่เพื่อ push** แต่เพราะ `didExitRegion`
+    // ยังต้องล้าง state ได้ในรอบที่ถูกปลุก และการกู้เกิดครั้งเดียวต่อ process
+    // (ค่าใช้จ่ายคือการอ่านดิสก์หนึ่งครั้ง ไม่ใช่ทุก callback)
     let gate = proximityGateRestoringIfNeeded()
 
+    let outcome = Self.stepProximityBatch(
+      samples: samples,
+      gate: gate,
+      counters: sampleCountersByKey,
+      isForeground: isForeground
+    )
+    sampleCountersByKey = outcome.counters
+
+    if isForeground {
+      proximityStore.save(gate.snapshotStates())
+      // อ่านหลัง save เพื่อให้ครอบทั้งความล้มเหลวของ load และ save ในรอบเดียวกัน
+      let storeError = proximityStore.lastError
+
+      emitProximityTransitions(
+        outcome.transitions,
+        fallbackRegionIdentifier: regionIdentifier,
+        storeError: storeError
+      )
+    }
+
+    // **บรรทัด `rangetick` ยิงทั้งสองโหมด** — ตัวนับคือสิ่งเดียวที่ยังทำงานตอน
+    // background และเป็นเครื่องมือที่วัดอัตรา callback ให้ ADR-22 ในรอบถัดไป
+    if fromRangeCallback {
+      emitRangeTickIfDue(regionIdentifier: regionIdentifier)
+    }
+  }
+
+  /// sample หนึ่งตัวที่ถอดจาก `CLBeacon` แล้ว — **ตัวกลางที่ทำให้ batch ทดสอบได้**
+  ///
+  /// `CLBeacon` สร้างเองในเทสต์ไม่ได้ (Apple ไม่เปิด initializer ให้) การแปลงเป็น
+  /// ชนิดของเราเองก่อนจึงเป็นเงื่อนไขเดียวที่ทำให้ [stepProximityBatch] เป็น
+  /// pure function ที่ XCTest เรียกตรง ๆ ได้ — หลักการเดียวกับ
+  /// `allowsBackgroundLocationUpdates(backgroundModes:)`
+  struct ProximitySample: Equatable {
+    let key: String
+    /// `nil` = `CLProximity.unknown` ("วัดไม่ได้" ไม่ใช่ "ไกล" — ADR-19 หัวข้อ 6(ง))
+    let bucket: ProximityBucket?
+  }
+
+  /// เดิน batch หนึ่งชุด — **pure** (ไม่แตะดิสก์ ไม่แตะ observer ไม่อ่านนาฬิกาเอง)
+  ///
+  /// ## `isForeground == false` แปลว่าอะไร (ADR-22)
+  ///
+  /// รอบเดินจริง 10 ก.ย. 2026 วัดได้ว่า `didRange` ตอนแอปถูกปลุกเบื้องหลังมาถึง
+  /// **ทุก ~16 วินาที** (เทียบกับ 2 Hz ตอน foreground) และ **67% เป็น `unknown`**
+  /// เหลือ sample ที่ใช้ได้จริง **ต่อ key ราวทุก 84 วินาที** — `dwellSamples = 3`
+  /// จึงต้องใช้เวลา **~4 นาที** กว่าจะยืนยัน `near` ได้หนึ่งครั้ง และ
+  /// `staleAfterMillis = 10_000` เป็นไปไม่ได้เชิงโครงสร้าง (callback ถัดไปยังมา
+  /// ไม่ถึงด้วยซ้ำ) หลักฐาน:
+  /// `docs/test-data/2026-09-10_ios_proximity_counters.log`
+  ///
+  /// การปล่อยให้ gate เดินต่อในสภาพนั้นไม่ได้ให้ผลที่ผิดเฉย ๆ — มันให้ผลที่
+  /// **ดูเหมือนทำงาน** (มี transition ออกมาเป็น `stale` เรื่อย ๆ) ซึ่งอันตรายกว่า
+  /// การไม่ทำงาน ชั้นที่ 2 จึงถูก**บังคับด้วยโค้ด ไม่ใช่ด้วยเอกสาร** ให้เดินเฉพาะ
+  /// ตอน `.active` ส่วนโหมด background ที่ทำงานได้จริงเป็นเรื่องของ **ADR-22
+  /// (ฉบับร่าง)** ซึ่งต้องเริ่มที่ `proximity_gate.dart` ก่อน ไม่ใช่แก้แทรกที่นี่
+  ///
+  /// **ตัวนับยังเดินทั้งสองโหมด** เพราะมันเป็นเครื่องมือวัด ไม่ใช่สถานะที่ gate ใช้
+  /// ตัดสินใจ (ADR-21 หมายเหตุข้อ 1) — และเป็นข้อมูลชุดเดียวที่ ADR-22 จะมีให้ใช้
+  ///
+  /// - Returns: transition ที่ต้องประกาศ (ว่างเสมอเมื่อ `isForeground == false`)
+  ///   และตารางตัวนับชุดใหม่
+  static func stepProximityBatch(
+    samples: [ProximitySample],
+    gate: ProximityGate,
+    counters: [String: ProximitySampleCounters],
+    isForeground: Bool
+  ) -> (transitions: [ProximityTransition], counters: [String: ProximitySampleCounters]) {
+    var counters = counters
     var pending: [ProximityTransition] = []
 
-    for beacon in beacons {
-      let key = ProximityKeyCodec.key(
-        regionIdentifier: regionIdentifier,
-        uuid: beacon.uuid.uuidString.lowercased(),
-        major: beacon.major.uint16Value,
-        minor: beacon.minor.uint16Value
-      )
-      // ส่ง `nil` ตามจริงเมื่อ OS ตอบว่า `unknown` — **ห้ามแปลงเป็น `.far`**
-      // ("วัดไม่ได้" ไม่เท่ากับ "ไกล" — ADR-19 หัวข้อ 6(ง))
-      let bucket = Self.proximityBucket(beacon.proximity)
-
+    for sample in samples {
       // นับ **ก่อน** push เสมอ: `push` ทิ้ง sample ที่เป็น `unknown` ไปเงียบ ๆ ตาม
       // ADR-19 6(ง) ถ้านับหลังจากผลของ push ตัวเลข `unknown` จะเป็น 0 ตลอดกาลและ
       // สมมติฐาน B ของ ADR-21 หัวข้อ 9 จะทดสอบไม่ได้เลย
-      countSample(key: key, bucket: bucket)
+      counters[sample.key] =
+        (counters[sample.key] ?? ProximitySampleCounters()).counting(bucket: sample.bucket)
 
-      if let transition = gate.push(key: key, bucket: bucket) {
+      guard isForeground else { continue }
+
+      if let transition = gate.push(key: sample.key, bucket: sample.bucket) {
         pending.append(transition)
       }
     }
 
     // ---- sweep ท้ายสุด และ "เสมอ" แม้ array ว่าง (ดูเหตุผลใน kdoc ข้างบน) ----
+    // **แต่ไม่ใช่ตอน background** — sweep คือการอ่านนาฬิกาแล้วตัดสินว่า "เงียบไป
+    // นานเกิน" ซึ่งตอน background ความเงียบนั้นเป็นพฤติกรรมของ CoreLocation
+    // ไม่ใช่ของบีคอน การกวาดจึงเป็นการสรุปผิดจากข้อมูลที่ไม่มีสิทธิ์สรุป
+    guard isForeground else { return (transitions: [], counters: counters) }
+
     pending.append(contentsOf: gate.sweepStale())
-
-    proximityStore.save(gate.snapshotStates())
-    // อ่านหลัง save เพื่อให้ครอบทั้งความล้มเหลวของ load และ save ในรอบเดียวกัน
-    let storeError = proximityStore.lastError
-
-    emitProximityTransitions(
-      pending,
-      fallbackRegionIdentifier: regionIdentifier,
-      storeError: storeError
-    )
-
-    if fromRangeCallback {
-      emitRangeTickIfDue(regionIdentifier: regionIdentifier)
-    }
+    return (transitions: pending, counters: counters)
   }
 
   /// ล้างสถานะชั้นที่ 2 ของ **ทุก key ใน region ที่เพิ่งออก** แล้วประกาศ transition
@@ -1078,15 +1169,27 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
     }
   }
 
-  /// นับว่าบีคอนตัวนี้อยู่ใน array ของ `didRange` รอบนี้ (และเป็น `unknown` หรือไม่)
+  /// "process นี้ active อยู่ไหม" — **ฉีดได้ ด้วยเหตุผลเดียวกับ `ProximityGate.clock`**
   ///
-  /// **`unknown` นับรวมอยู่ใน `inArray` ด้วย** — สองตัวนี้ตอบคนละคำถาม: `inArray`
-  /// ตอบว่า "Apple ยังเห็นบีคอนตัวนี้อยู่ไหม" · `unknown` ตอบว่า "เห็นแล้วแต่ตอบไม่ได้
-  /// ว่าใกล้แค่ไหน บ่อยแค่ไหน" ถ้าแยกกันเด็ดขาด (`inArray` ไม่รวม `unknown`) อัตราส่วน
-  /// `unknown/inArray` ที่สมมติฐาน B ต้องใช้จะคำนวณไม่ได้จากบรรทัดเดียว
-  private func countSample(key: String, bucket: ProximityBucket?) {
-    let counters = sampleCountersByKey[key] ?? ProximitySampleCounters()
-    sampleCountersByKey[key] = counters.counting(bucket: bucket)
+  /// XCTest รัน `CLLocationManager` จริงไม่ได้และคุม `UIApplication.applicationState`
+  /// ไม่ได้ ถ้าอ่านค่าจากระบบตรง ๆ กลางเส้นทาง กฎ "ชั้น 2 = foreground เท่านั้น"
+  /// จะไม่มีเทสต์ล็อกไว้เลย (ADR-22) — closure นี้คือจุดที่เทสต์เข้าไปแทนที่ได้
+  var isApplicationActive: () -> Bool = IBeaconRangingManager.applicationStateIsActive
+
+  /// ค่าเริ่มต้นของ [isApplicationActive]
+  ///
+  /// **`Thread.isMainThread` ไม่ใช่การกันเหนียว** — `UIApplication.shared` เป็น
+  /// main-thread-only API จริง ๆ และ `CLLocationManager` ส่ง callback เข้า run loop
+  /// ของเธรดที่มันถูกสร้าง (ที่นี่คือ main เพราะ `IBeaconRangingManager.shared` เกิด
+  /// จาก `didFinishLaunchingWithOptions`/`register(with:)`) ถ้าวันหนึ่งมีใครย้าย
+  /// จุดสร้างไปเธรดอื่น การอ่านจะกลายเป็น undefined behavior เงียบ ๆ
+  ///
+  /// เลือกตอบ `false` (= ถือว่า background) เมื่อถามไม่ได้ เพราะทางที่ปลอดภัยคือ
+  /// **ไม่เดิน gate** ไม่ใช่เดินด้วยข้อมูลที่เชื่อไม่ได้ — ผลที่เสียคือบรรทัดหลักฐาน
+  /// หายไปบ้าง ผลที่เลี่ยงได้คือ state ที่ผิดถูกเขียนลงดิสก์แล้วรอดข้าม process
+  static func applicationStateIsActive() -> Bool {
+    guard Thread.isMainThread else { return false }
+    return UIApplication.shared.applicationState == .active
   }
 
   /// ยิงบรรทัด `rangetick` ถ้าครบรอบ — **อย่างมากทุก 30 วินาทีต่อ process**
