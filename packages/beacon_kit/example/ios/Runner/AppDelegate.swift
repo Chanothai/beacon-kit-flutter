@@ -370,13 +370,53 @@ import beacon_kit_ios
     guard event.from == nil || event.from == .far else { return }
 
     // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown)
+    //
+    //    **cooldown เป็นระดับ key (บีคอนหนึ่งตัวในหนึ่ง region) 60 วินาที** เท่ากับ
+    //    ฝั่ง Android เป๊ะ และ**รอดข้าม process** — จำเป็นบนเส้นทาง ADR-22 เพราะ
+    //    โปรเซสที่ถูกปลุกเกิด/ตายได้หลายรอบในนาทีเดียว cooldown ที่อยู่ใน memory
+    //    อย่างเดียวจะไม่กันอะไรเลย
     guard consumeProximityCooldown(key: proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
     else { return }
+
+    // 5) **เขียนบรรทัด `notification` ก่อนยิงเสมอ** (ADR-20 หัวข้อ 7 / บทเรียนจาก
+    //    รอบ MIUI 9 ก.ย. 2026) — ถ้าไม่มีบรรทัดนี้ "ระบบบล็อก notification" กับ
+    //    "เงื่อนไขไม่เคยเข้า" จะจบที่อาการเดียวกันเป๊ะ: ไม่มีอะไรเด้ง · ฝั่ง iOS
+    //    เพิ่งมีในรอบ ADR-22 เพราะข้อ 19.7 ของไฟล์สถานะต้องการหลักฐานตรงจุดนี้พอดี
+    recordNotificationEvent(event)
 
     postNotification(
       title: "ใกล้ \(event.regionIdentifier) (\(event.to?.wireName ?? "n/a"))",
       body: "reason=\(event.reason.wireName) · beacon=\(event.beacon) · "
-        + "procUuid=\(BackgroundEvidenceLog.processId)"
+        + "mode=\(event.mode.rawValue) · procUuid=\(BackgroundEvidenceLog.processId)"
+    )
+  }
+
+  /// บรรทัด `event=notification` — หลักฐานว่า**เงื่อนไขยิงเข้าเกิดขึ้นจริงเมื่อไร**
+  ///
+  /// ⚠️ **`posted=requested` ไม่ใช่ `posted=true`** และความต่างนี้สำคัญ: ฝั่ง iOS
+  /// ถามสถานะสิทธิ์แบบ synchronous ไม่ได้ (`getNotificationSettings` เป็น async
+  /// และโปรเซสที่ถูกปลุกอาจถูก suspend ก่อน callback มาถึง) — บรรทัดนี้จึงยืนยันได้
+  /// แค่ว่า **แอปสั่งยิงแล้ว** ไม่ได้ยืนยันว่าผู้ใช้เห็น ต่างจากฝั่ง Android ที่
+  /// `deliveryReason()` ตอบได้ทันทีก่อนยิง (`ExampleNotifications.kt`)
+  ///
+  /// ถ้า `UNUserNotificationCenter.add` คืน error กลับมา จะมีบรรทัดที่สอง
+  /// `posted=false` ตามมา — **สองบรรทัด ไม่ใช่บรรทัดเดียวที่แก้ทีหลัง** เพราะไฟล์
+  /// หลักฐานเป็น append-only และการมีบรรทัดแรกค้างไว้คือสิ่งที่พิสูจน์ว่าโปรเซสไป
+  /// ถึงจุดนั้นจริงแม้จะถูกฆ่าต่อจากนั้น
+  private func recordNotificationEvent(_ event: BeaconKitProximityChangedEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "notification",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + " bucket=\(event.to?.wireName ?? "n/a")"
+          + " from=\(event.from?.wireName ?? "none")"
+          + " beacon=\(event.beacon)"
+          + " mode=\(event.mode.rawValue)"
+          + " posted=requested"
+      )
     )
   }
 
@@ -385,7 +425,7 @@ import beacon_kit_ios
   /// `BackgroundEvidenceLog.line`)
   ///
   /// ```
-  ///  bucket=near from=none reason=closer beacon=1/42 store=ok
+  ///  bucket=near from=none reason=closer beacon=1/42 store=ok mode=bg
   /// ```
   ///
   /// รูปแบบเดียวกับฝั่ง Android: ขึ้นต้นด้วยช่องว่าง และทุกค่าที่ไม่มีเขียนเป็น
@@ -401,6 +441,9 @@ import beacon_kit_ios
   /// - `store=ok|<error>` — **ต้องมีตั้งแต่คอมมิตแรกตาม ADR-21 หัวข้อ 7 ข้อ 2**
   ///   `ok` ไม่ใช่ค่าว่าง: ต้องอ่านออกได้ว่า "ถามแล้วและไม่มี error" ต่างจาก "ไม่มี
   ///   คอลัมน์นี้เพราะเป็น log รุ่นเก่า"
+  /// - `mode=fg|bg` — **ADR-22** gate ตัวไหนเป็นคนตัดสิน · ขาดไม่ได้เพราะสอง gate
+  ///   มีค่า `dwellSamples`/`staleAfterMillis` คนละชุด ถ้าไม่มีคอลัมน์นี้ "dwell ครบ
+  ///   เร็วผิดปกติ" กับ "ไม่มี `stale` เลยทั้งช่วง" จะอ่านเป็นบั๊กทั้งคู่
   static func proximityRawSignalsSuffix(_ event: BeaconKitProximityChangedEvent) -> String {
     var parts = ""
     parts += " bucket=\(event.to?.wireName ?? "n/a")"
@@ -408,6 +451,7 @@ import beacon_kit_ios
     parts += " reason=\(event.reason.wireName)"
     parts += " beacon=\(event.beacon)"
     parts += " store=\(event.storeError?.replacingOccurrences(of: " ", with: "_") ?? "ok")"
+    parts += " mode=\(event.mode.rawValue)"
     parts += Self.rangeCounterSuffix(
       rangeCb: event.rangeCallbackCount,
       inArray: event.inArrayCount,
@@ -599,7 +643,23 @@ import beacon_kit_ios
         content: content,
         trigger: nil
       )
-    )
+    ) { error in
+      // เขียนบรรทัดที่สอง **เฉพาะตอนล้มเหลว** — เส้นทางสำเร็จมีบรรทัด
+      // `posted=requested` อยู่แล้ว การเขียนซ้ำตอนสำเร็จจะทำให้ไฟล์หลักฐานยาวขึ้น
+      // เท่าตัวโดยไม่เพิ่มข้อมูล · callback นี้อาจ**ไม่มาถึงเลย**ถ้าระบบ suspend
+      // โปรเซสก่อน ซึ่งเป็นเหตุผลที่บรรทัดแรกต้องถูกเขียนก่อนยิงเสมอ
+      guard let error = error else { return }
+      BackgroundEvidenceLog.shared.append(
+        line: BackgroundEvidenceLog.line(
+          timestamp: Date(),
+          event: "notification",
+          regionIdentifier: "-",
+          conclusion: "notifyFailed",
+          rawSignals: "posted=false "
+            + "reason=\(String(describing: error).replacingOccurrences(of: " ", with: "_"))"
+        )
+      )
+    }
   }
 
   /// แสดง notification แม้ตอนแอปอยู่ **foreground**

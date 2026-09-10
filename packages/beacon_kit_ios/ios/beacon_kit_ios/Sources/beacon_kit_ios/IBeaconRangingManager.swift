@@ -477,10 +477,15 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       // ล้างทั้งสองที่: ในหน่วยความจำ (gate ที่ยังมีชีวิตอยู่ใน process นี้) และบน
       // ดิสก์ (สถานะที่รอดข้าม process มา ซึ่งอาจมีอยู่แม้ gate ยังไม่ถูกสร้างเลย
       // ในรอบ launch นี้)
+      //
+      // **ล้างทั้งสอง gate (ADR-22)** — เหตุผลเดียวกับใน `runProximityRegionExit`:
+      // เลิกเฝ้า region แล้วแปลว่าไม่มี state ของ region นั้นที่ควรรอดในโหมดใดเลย
       if clearProximityState {
         let keyPrefix = "\(identifier)\(ProximityKeyCodec.separator)"
-        proximityGate?.removeStates(matchingPrefix: keyPrefix)
-        proximityStore.removeStates(matchingPrefix: keyPrefix)
+        foregroundGate?.removeStates(matchingPrefix: keyPrefix)
+        foregroundStore.removeStates(matchingPrefix: keyPrefix)
+        backgroundGate?.removeStates(matchingPrefix: keyPrefix)
+        backgroundStore.removeStates(matchingPrefix: keyPrefix)
       }
     }
   }
@@ -853,9 +858,38 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// instance เดียวไว้ได้ ประหยัดการอ่านดิสก์ทุก callback (ซึ่งอาจถี่ระดับวินาที
   /// ตอน foreground) **แต่ยังเขียนลงดิสก์ทุก batch เหมือนเดิม** เพราะ process ถูก
   /// ฆ่าได้ตลอดเวลาและนั่นคือเหตุผลทั้งหมดที่ store มีตัวตน (ADR-21 หัวข้อ 3)
-  private var proximityGate: ProximityGate?
+  /// gate ของ **foreground** — ค่า config ตาม ADR-19 หัวข้อ 8 ทุกตัว (ไม่ส่งอะไรเลย)
+  private var foregroundGate: ProximityGate?
 
-  private let proximityStore = ProximityGateStore()
+  /// gate ของ **background** — ADR-22 · `windowSize`/`dwellSamples`/`staleAfterMillis`
+  /// ต่างจากตัวบน **แต่เป็นคนละ instance ไม่ใช่คนละพฤติกรรม** โค้ดของ `ProximityGate`
+  /// ตัวเดียวกันเป๊ะ ไม่มีบรรทัดไหนรู้ว่าตัวเองเป็น fg หรือ bg
+  private var backgroundGate: ProximityGate?
+
+  private let foregroundStore = ProximityGateStore()
+
+  /// คีย์แยก (`states/bg`) — state ของสอง gate ปนกันไม่ได้ ดู kdoc ของ
+  /// `ProximityGateStore.statesKey`
+  private let backgroundStore = ProximityGateStore(statesKeySuffix: "/bg")
+
+  /// ค่า config ของ gate ตัว background — **ADR-22 ตารางหัวข้อ 3**
+  ///
+  /// ## ทำไมค่าพวกนี้ ไม่ใช่การ "ปิดชั้นกรอง" แบบมั่ว ๆ
+  ///
+  /// - `windowSize = 1` · `dwellSamples = 1` — เชื่อ bucket ของ Apple ตรง ๆ เพราะ
+  ///   **CoreLocation smooth มาให้แล้วหนึ่งชั้น** (`apple_proximity_ranging.md`) และ
+  ///   sample ตอน background มาถึงต่อ key ราวทุก 77 วินาที (ADR-21 หัวข้อ 1) —
+  ///   หน้าต่าง 5 + dwell 3 แปลว่าต้องยืนนิ่ง ~4 นาที ซึ่งไม่ใช่ฟีเจอร์
+  /// - `staleAfterMillis = 24 ชั่วโมง` = **ปิด stale โดยพฤตินัย** เพราะความเงียบตอน
+  ///   background เป็นข่าวสารเกี่ยวกับตารางเวลาของ CoreLocation ไม่ใช่เกี่ยวกับบีคอน
+  ///   (ADR-21 หัวข้อ 4.1) · **สัญญาณ "หายจริง" คือ `regionExit`** ซึ่งมาจาก iOS เอง
+  ///
+  /// ⚠️ **ผลข้างเคียงที่ยอมรับใน POC นี้:** ถ้า `didExitRegion` ไม่มาถึง (เช่น
+  /// Bluetooth ถูกปิดขณะอยู่ในโซน) bucket ที่ยืนยันไว้จะค้างได้นานถึง 24 ชั่วโมง
+  /// — ยอมรับได้เพราะตัวกรอง notification ยิงเฉพาะ**ตอนเข้าสู่**ความใกล้ ไม่ยิงซ้ำ
+  static let backgroundWindowSize = 1
+  static let backgroundDwellSamples = 1
+  static let backgroundStaleAfterMillis: Int64 = 24 * 60 * 60 * 1000
 
   /// ตัวนับ 3 ตัวของ **ADR-21 หัวข้อ 9** (เพิ่มหลังรอบเดินจริง 10 ก.ย. 2026)
   ///
@@ -915,14 +949,37 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
     Int64(Date().timeIntervalSince1970 * 1000)
   }
 
-  private func proximityGateRestoringIfNeeded() -> ProximityGate {
-    if let gate = proximityGate { return gate }
-    let gate = ProximityGate(clock: Self.epochMillisNow)
-    // ต้องกู้สถานะก่อน push แรกเสมอ ไม่งั้น dwell เริ่มนับหนึ่งใหม่ทุกครั้งที่ระบบ
-    // สร้าง process ใหม่ แล้ว `dwellSamples = 3` จะไม่มีวันครบ (ADR-21 หัวข้อ 3)
-    gate.restoreStates(proximityStore.load())
-    proximityGate = gate
-    return gate
+  /// ที่เก็บ state ของโหมดนั้น — **จุดเดียวที่ map โหมด → store** ห้ามมีที่อื่น
+  private func proximityStore(for mode: ProximityLayerMode) -> ProximityGateStore {
+    switch mode {
+    case .foreground: return foregroundStore
+    case .background: return backgroundStore
+    }
+  }
+
+  /// gate ของโหมดนั้น สร้างครั้งเดียวต่อ process แล้วกู้สถานะจากดิสก์ทันที
+  private func proximityGateRestoringIfNeeded(for mode: ProximityLayerMode) -> ProximityGate {
+    switch mode {
+    case .foreground:
+      if let gate = foregroundGate { return gate }
+      let gate = ProximityGate(clock: Self.epochMillisNow)
+      // ต้องกู้สถานะก่อน push แรกเสมอ ไม่งั้น dwell เริ่มนับหนึ่งใหม่ทุกครั้งที่ระบบ
+      // สร้าง process ใหม่ แล้ว `dwellSamples = 3` จะไม่มีวันครบ (ADR-21 หัวข้อ 3)
+      gate.restoreStates(foregroundStore.load())
+      foregroundGate = gate
+      return gate
+    case .background:
+      if let gate = backgroundGate { return gate }
+      let gate = ProximityGate(
+        clock: Self.epochMillisNow,
+        windowSize: Self.backgroundWindowSize,
+        dwellSamples: Self.backgroundDwellSamples,
+        staleAfterMillis: Self.backgroundStaleAfterMillis
+      )
+      gate.restoreStates(backgroundStore.load())
+      backgroundGate = gate
+      return gate
+    }
   }
 
   /// เดิน gate ให้ครบหนึ่ง batch แล้วบันทึกลงดิสก์ก่อนแจ้ง observer
@@ -993,40 +1050,37 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       )
     }
 
-    // ---- ADR-22: ชั้นที่ 2 เดินเฉพาะตอน process `.active` ----
-    let isForeground = isApplicationActive()
+    // ---- ADR-22: เลือก gate ตามโหมด — **ไม่ใช่ปิด/เปิดชั้นที่ 2** ----
+    //
+    // ก่อน ADR-22 ตอน background ชั้นนี้ไม่ทำอะไรเลยนอกจากนับ (ADR-21 หัวข้อ 1)
+    // ตอนนี้มันเดิน gate **คนละ instance** ที่มีค่า config ซึ่งเหมาะกับอัตรา sample
+    // ของโหมดนั้น — เส้นทาง foreground **ไม่ถูกแตะแม้แต่บรรทัดเดียว**
+    let mode: ProximityLayerMode = isApplicationActive() ? .foreground : .background
+    let store = proximityStore(for: mode)
 
-    if isForeground {
-      proximityStore.resetLastError()
-    }
-
-    // กู้ gate แม้ตอน background — **ไม่ใช่เพื่อ push** แต่เพราะ `didExitRegion`
-    // ยังต้องล้าง state ได้ในรอบที่ถูกปลุก และการกู้เกิดครั้งเดียวต่อ process
-    // (ค่าใช้จ่ายคือการอ่านดิสก์หนึ่งครั้ง ไม่ใช่ทุก callback)
-    let gate = proximityGateRestoringIfNeeded()
+    store.resetLastError()
+    let gate = proximityGateRestoringIfNeeded(for: mode)
 
     let outcome = Self.stepProximityBatch(
       samples: samples,
       gate: gate,
-      counters: sampleCountersByKey,
-      isForeground: isForeground
+      counters: sampleCountersByKey
     )
     sampleCountersByKey = outcome.counters
 
-    if isForeground {
-      proximityStore.save(gate.snapshotStates())
-      // อ่านหลัง save เพื่อให้ครอบทั้งความล้มเหลวของ load และ save ในรอบเดียวกัน
-      let storeError = proximityStore.lastError
+    store.save(gate.snapshotStates())
+    // อ่านหลัง save เพื่อให้ครอบทั้งความล้มเหลวของ load และ save ในรอบเดียวกัน
+    let storeError = store.lastError
 
-      emitProximityTransitions(
-        outcome.transitions,
-        fallbackRegionIdentifier: regionIdentifier,
-        storeError: storeError
-      )
-    }
+    emitProximityTransitions(
+      outcome.transitions,
+      fallbackRegionIdentifier: regionIdentifier,
+      storeError: storeError,
+      mode: mode
+    )
 
-    // **บรรทัด `rangetick` ยิงทั้งสองโหมด** — ตัวนับคือสิ่งเดียวที่ยังทำงานตอน
-    // background และเป็นเครื่องมือที่วัดอัตรา callback ให้ ADR-22 ในรอบถัดไป
+    // **บรรทัด `rangetick` ยิงทั้งสองโหมด** — ตัวนับวัดอัตรา callback ซึ่งเป็นตัวเลข
+    // ที่ทำให้ค่า config ของ ADR-22 มีที่มา ไม่ใช่การเดา
     if fromRangeCallback {
       emitRangeTickIfDue(regionIdentifier: regionIdentifier)
     }
@@ -1046,32 +1100,22 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
 
   /// เดิน batch หนึ่งชุด — **pure** (ไม่แตะดิสก์ ไม่แตะ observer ไม่อ่านนาฬิกาเอง)
   ///
-  /// ## `isForeground == false` แปลว่าอะไร (ADR-22)
+  /// ## เมธอดนี้ไม่รู้จักโหมด และ **ต้องไม่รู้** (ADR-22)
   ///
-  /// รอบเดินจริง 10 ก.ย. 2026 วัดได้ว่า `didRange` ตอนแอปถูกปลุกเบื้องหลังมาถึง
-  /// **ทุก ~16 วินาที** (เทียบกับ 2 Hz ตอน foreground) และ **65% เป็น `unknown`**
-  /// เหลือ sample ที่ใช้ได้จริง **ต่อ key ราวทุก 77 วินาที** — `dwellSamples = 3`
-  /// จึงต้องใช้เวลา **~4 นาที** กว่าจะยืนยัน `near` ได้หนึ่งครั้ง และ
-  /// `staleAfterMillis = 10_000` เป็นไปไม่ได้เชิงโครงสร้าง (callback ถัดไปยังมา
-  /// ไม่ถึงด้วยซ้ำ) หลักฐาน:
-  /// `docs/test-data/2026-09-10_ios_proximity_counters.log`
+  /// ผู้เรียกเลือก `gate` มาให้แล้ว — ความต่างระหว่าง foreground กับ background
+  /// **ทั้งหมด**อยู่ในค่า config ของ instance นั้น (`windowSize`/`dwellSamples`/
+  /// `staleAfterMillis`) ไม่ใช่ในเส้นทางโค้ด · ถ้าวันหนึ่งมีใครเพิ่ม `if mode ==`
+  /// เข้ามาในนี้ นั่นคือสัญญาณว่ากำลังจะ **เพิ่มมิติใหม่ให้ `ProximityGate`** ซึ่ง
+  /// ADR-21 หัวข้อ 2 บังคับว่าต้องเริ่มที่ `proximity_gate.dart` ก่อนเสมอ
   ///
-  /// การปล่อยให้ gate เดินต่อในสภาพนั้นไม่ได้ให้ผลที่ผิดเฉย ๆ — มันให้ผลที่
-  /// **ดูเหมือนทำงาน** (มี transition ออกมาเป็น `stale` เรื่อย ๆ) ซึ่งอันตรายกว่า
-  /// การไม่ทำงาน ชั้นที่ 2 จึงถูก**บังคับด้วยโค้ด ไม่ใช่ด้วยเอกสาร** ให้เดินเฉพาะ
-  /// ตอน `.active` ส่วนโหมด background ที่ทำงานได้จริงเป็นเรื่องของ **ADR-22
-  /// (ฉบับร่าง)** ซึ่งต้องเริ่มที่ `proximity_gate.dart` ก่อน ไม่ใช่แก้แทรกที่นี่
+  /// `sample` ที่ `bucket == nil` (`CLProximity.unknown`) **ถูกนับแต่ไม่ถูกใช้** —
+  /// `push` เป็นคนทิ้งเองตาม ADR-19 6(ง) ไม่ต้องกรองที่นี่ ทั้งสองโหมดเหมือนกัน
   ///
-  /// **ตัวนับยังเดินทั้งสองโหมด** เพราะมันเป็นเครื่องมือวัด ไม่ใช่สถานะที่ gate ใช้
-  /// ตัดสินใจ (ADR-21 หมายเหตุข้อ 1) — และเป็นข้อมูลชุดเดียวที่ ADR-22 จะมีให้ใช้
-  ///
-  /// - Returns: transition ที่ต้องประกาศ (ว่างเสมอเมื่อ `isForeground == false`)
-  ///   และตารางตัวนับชุดใหม่
+  /// - Returns: transition ที่ต้องประกาศ และตารางตัวนับชุดใหม่
   static func stepProximityBatch(
     samples: [ProximitySample],
     gate: ProximityGate,
-    counters: [String: ProximitySampleCounters],
-    isForeground: Bool
+    counters: [String: ProximitySampleCounters]
   ) -> (transitions: [ProximityTransition], counters: [String: ProximitySampleCounters]) {
     var counters = counters
     var pending: [ProximityTransition] = []
@@ -1083,19 +1127,14 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       counters[sample.key] =
         (counters[sample.key] ?? ProximitySampleCounters()).counting(bucket: sample.bucket)
 
-      guard isForeground else { continue }
-
       if let transition = gate.push(key: sample.key, bucket: sample.bucket) {
         pending.append(transition)
       }
     }
 
-    // ---- sweep ท้ายสุด และ "เสมอ" แม้ array ว่าง (ดูเหตุผลใน kdoc ข้างบน) ----
-    // **แต่ไม่ใช่ตอน background** — sweep คือการอ่านนาฬิกาแล้วตัดสินว่า "เงียบไป
-    // นานเกิน" ซึ่งตอน background ความเงียบนั้นเป็นพฤติกรรมของ CoreLocation
-    // ไม่ใช่ของบีคอน การกวาดจึงเป็นการสรุปผิดจากข้อมูลที่ไม่มีสิทธิ์สรุป
-    guard isForeground else { return (transitions: [], counters: counters) }
-
+    // ---- sweep ท้ายสุด และ "เสมอ" แม้ array ว่าง (ADR-21 หัวข้อ 8) ----
+    // gate ของ background ตั้ง `staleAfterMillis` ไว้ 24 ชั่วโมง การเรียกตรงนี้จึง
+    // **ไม่มีผลใด ๆ กับมันโดยพฤตินัย** — คงเส้นทางเดียวไว้ดีกว่าแตกเป็น if
     pending.append(contentsOf: gate.sweepStale())
     return (transitions: pending, counters: counters)
   }
@@ -1114,23 +1153,32 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   ///
   /// `throws` ด้วยเหตุผลเดียวกับ [runProximityLayer] — บังคับให้ผู้เรียกครอบ do/catch
   private func runProximityRegionExit(regionIdentifier: String) throws {
-    proximityStore.resetLastError()
-    let gate = proximityGateRestoringIfNeeded()
-
     let keyPrefix = "\(regionIdentifier)\(ProximityKeyCodec.separator)"
-    let transitions = gate.clearStates(matchingPrefix: keyPrefix, emitting: .regionExit)
 
-    // เขียนดิสก์ก่อนแจ้ง observer เสมอ (เหตุผลเดียวกับ runProximityLayer) — และต้อง
-    // เขียนแม้ไม่มี transition เพราะ key ที่ยัง pending ก็หายไปจากหน่วยความจำแล้ว
-    // ถ้าไม่เขียน สถานะบนดิสก์จะฟื้นมันกลับมาในรอบ launch ถัดไปราวกับไม่เคยออกจาก region
-    proximityStore.save(gate.snapshotStates())
-    let storeError = proximityStore.lastError
+    // **ล้างทั้งสอง gate เสมอ ไม่ใช่เฉพาะโหมดปัจจุบัน (ADR-22)** — `didExitRegion`
+    // มาถึงในโหมดไหนก็ได้ และเป็น**สัญญาณ "หายจริง" ตัวเดียว**ที่ gate ของ background
+    // มี (มันปิด stale ไว้) ถ้าล้างแค่ตัวเดียว อีกตัวจะค้าง bucket ที่ยืนยันไว้
+    // ข้ามการออกจากโซนไปทั้งรอบ แล้วผู้ใช้จะไม่ได้ notification ตอนกลับเข้ามาใหม่
+    // เพราะตัวกรอง "เข้าสู่ความใกล้จาก far/ไม่เคยมี" ไม่ผ่าน
+    for mode in [ProximityLayerMode.foreground, .background] {
+      let store = proximityStore(for: mode)
+      store.resetLastError()
+      let gate = proximityGateRestoringIfNeeded(for: mode)
 
-    emitProximityTransitions(
-      transitions,
-      fallbackRegionIdentifier: regionIdentifier,
-      storeError: storeError
-    )
+      let transitions = gate.clearStates(matchingPrefix: keyPrefix, emitting: .regionExit)
+
+      // เขียนดิสก์ก่อนแจ้ง observer เสมอ (เหตุผลเดียวกับ runProximityLayer) — และต้อง
+      // เขียนแม้ไม่มี transition เพราะ key ที่ยัง pending ก็หายไปจากหน่วยความจำแล้ว
+      // ถ้าไม่เขียน สถานะบนดิสก์จะฟื้นมันกลับมาในรอบ launch ถัดไปราวกับไม่เคยออกจาก region
+      store.save(gate.snapshotStates())
+
+      emitProximityTransitions(
+        transitions,
+        fallbackRegionIdentifier: regionIdentifier,
+        storeError: store.lastError,
+        mode: mode
+      )
+    }
   }
 
   /// แจ้ง observer ทีละ transition พร้อมแนบตัวนับของ key นั้น — จุดเดียวที่สร้าง
@@ -1138,7 +1186,8 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   private func emitProximityTransitions(
     _ transitions: [ProximityTransition],
     fallbackRegionIdentifier: String,
-    storeError: String?
+    storeError: String?,
+    mode: ProximityLayerMode
   ) {
     guard !transitions.isEmpty else { return }
 
@@ -1163,7 +1212,8 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
           storeError: storeError,
           rangeCallbackCount: rangeCallbackCount,
           inArrayCount: counters.inArray,
-          unknownCount: counters.unknown
+          unknownCount: counters.unknown,
+          mode: mode
         )
       )
     }

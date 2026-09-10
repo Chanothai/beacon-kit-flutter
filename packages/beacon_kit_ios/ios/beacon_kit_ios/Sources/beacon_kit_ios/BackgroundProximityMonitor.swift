@@ -15,6 +15,19 @@ import Foundation
 /// ทั้งสองฟิลด์มีตั้งแต่คอมมิตแรกตามคำสั่งของ **ADR-21 หัวข้อ 7** ซึ่งเป็นบทเรียน
 /// ตรง ๆ จากรอบ Android: บรรทัด `event=proximity` ของคนละบีคอนพิมพ์ออกมาเหมือนกัน
 /// หมดจนอ่านเป็นบั๊ก entry ซ้ำ และความล้มเหลวของที่เก็บ state ไม่เคยปรากฏในไฟล์เลย
+/// โหมดที่ชั้นที่ 2 เดินอยู่ตอนเกิด transition นี้ — **ADR-22**
+///
+/// ไม่ใช่ "โหมดของ `ProximityGate`" (gate ไม่รู้จักโหมดเลย และ**ต้องไม่รู้** ไม่งั้น
+/// จะเบี่ยงจาก `proximity_gate.dart`) — เป็นชื่อของ **instance ที่ถูกเลือกใช้** ซึ่งมี
+/// ค่า config คนละชุด ตัวเลือกอยู่ที่ `IBeaconRangingManager` ล้วน ๆ
+///
+/// ค่าสตริงคือค่าที่ไปโผล่ในไฟล์หลักฐาน (`mode=fg` / `mode=bg`) — **สั้นโดยตั้งใจ**
+/// เพราะคอลัมน์สัญญาณดิบคั่นด้วยช่องว่างและยาวขึ้นทุกรอบ
+public enum ProximityLayerMode: String {
+  case foreground = "fg"
+  case background = "bg"
+}
+
 public struct BeaconKitProximityChangedEvent {
   public init(
     regionIdentifier: String,
@@ -29,8 +42,10 @@ public struct BeaconKitProximityChangedEvent {
     storeError: String?,
     rangeCallbackCount: Int,
     inArrayCount: Int,
-    unknownCount: Int
+    unknownCount: Int,
+    mode: ProximityLayerMode
   ) {
+    self.mode = mode
     self.regionIdentifier = regionIdentifier
     self.uuid = uuid
     self.major = major
@@ -124,6 +139,14 @@ public struct BeaconKitProximityChangedEvent {
   /// `stale` 33% อยู่ที่กฎ "`unknown` ไม่ต่ออายุ `lastSampleAt`" (ADR-19 6(ง))
   /// **ไม่ใช่ที่ตัวเลข `staleAfter`**
   public let unknownCount: Int
+
+  /// gate ตัวไหนเป็นคนตัดสิน transition นี้ (ADR-22) — **ต้องอยู่ในไฟล์หลักฐาน**
+  ///
+  /// ถ้าไม่มีฟิลด์นี้ บรรทัด `proximity` ของสอง gate ที่มีค่า config คนละชุดจะพิมพ์
+  /// ออกมาเหมือนกันเป๊ะ แล้ว "ทำไม dwell ถึงครบเร็วจัง" กับ "ทำไมไม่มี stale เลย"
+  /// จะอ่านเป็นบั๊กทั้งคู่ — **ความกำกวมชนิดเดียวกับที่ ADR-21 หัวข้อ 7 ข้อ 1 สั่งให้
+  /// กำจัดด้วย `beacon=`** ต่างกันแค่มิติ
+  public let mode: ProximityLayerMode
 }
 
 /// ชีพจรของ ranging หนึ่งครั้ง — **ไม่ใช่ "ความใกล้เปลี่ยน" และไม่ใช่สัญญา wire ใด ๆ**

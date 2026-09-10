@@ -36,6 +36,15 @@ public final class ProximityGateStore {
   /// ทั้งชุดอยู่ในคีย์เดียว — เขียนครั้งเดียวจบ ไม่มีสถานะเหลือครึ่ง ๆ
   private static let statesKey = "states"
 
+  /// คีย์จริงที่ instance นี้ใช้ = [statesKey] + [statesKeySuffix]
+  ///
+  /// **ทำไมต้องแยกคีย์ ไม่ใช่แยก suite:** ADR-22 ให้มี `ProximityGate` สองตัว
+  /// (foreground/background) ที่มีค่า config คนละชุด — state ของทั้งสองจึงปนกัน
+  /// **ไม่ได้เด็ดขาด** (หน้าต่างขนาด 5 ของ fg กับขนาด 1 ของ bg เขียนทับกันจะทำให้
+  /// dwell ของ fg เพี้ยนเงียบ ๆ) · แยกที่ระดับคีย์พอ ไม่ต้องแยก suite เพราะทั้งคู่
+  /// เป็นข้อมูลชั้นที่ 2 เหมือนกัน ควรถูกล้างพร้อมกันตอน `stopMonitoring`
+  private let statesKey: String
+
   /// JSON ของ "ไม่มี key เลยจริง ๆ" — ต่างจาก "อ่านแล้วถอดไม่ออก" (ดู [load])
   private static let emptyJson = "[]"
 
@@ -50,7 +59,11 @@ public final class ProximityGateStore {
 
   /// - Parameter defaults: ฉีดเข้ามาได้เพื่อให้เทสต์ใช้ suite ชั่วคราวของตัวเอง —
   ///   โค้ดจริงไม่ต้องส่ง
-  public init(defaults: UserDefaults? = nil) {
+  /// - Parameter statesKeySuffix: ต่อท้ายคีย์เพื่อแยก state ของ gate คนละตัว
+  ///   (ADR-22) — `""` = gate ของ foreground ซึ่งเป็นคีย์เดิมที่มีอยู่ก่อน ADR-22
+  ///   **ห้ามเปลี่ยนค่า default** ไม่งั้น state ที่ผู้ทดสอบเก็บมาแล้วจะอ่านไม่เจอ
+  public init(defaults: UserDefaults? = nil, statesKeySuffix: String = "") {
+    self.statesKey = Self.statesKey + statesKeySuffix
     if let defaults = defaults {
       self.defaults = defaults
     } else if let suite = UserDefaults(suiteName: Self.suiteName) {
@@ -86,7 +99,7 @@ public final class ProximityGateStore {
   /// แยก "ไม่มีอะไรเก็บไว้" (ไม่มีค่าในคีย์เลย หรือเป็น `[]`) ออกจาก "เก็บไว้จริง
   /// แต่ถอดไม่ออก" — ความต่างเดียวกับ `[]` vs `<read-failed:...>` ของ ADR-17
   public func load() -> [ProximityKeyEntry] {
-    guard let raw = defaults.string(forKey: Self.statesKey) else { return [] }
+    guard let raw = defaults.string(forKey: statesKey) else { return [] }
     let entries = Self.entriesFromJson(raw)
     if entries.isEmpty && raw != Self.emptyJson {
       lastError = "load:unparsable(\(raw.utf8.count)B)"
@@ -108,7 +121,7 @@ public final class ProximityGateStore {
       lastError = "save:serialize-failed"
       return
     }
-    defaults.set(json, forKey: Self.statesKey)
+    defaults.set(json, forKey: statesKey)
   }
 
   /// ลบสถานะของทุก key ที่ขึ้นต้นด้วย [prefix] ออกจากดิสก์
@@ -122,7 +135,7 @@ public final class ProximityGateStore {
 
   /// ล้างทุกอย่าง — สำหรับเวลาไล่บั๊กในสนาม
   public func clear() {
-    defaults.removeObject(forKey: Self.statesKey)
+    defaults.removeObject(forKey: statesKey)
   }
 
   // MARK: - JSON (pure — มี XCTest คลุมได้โดยไม่ต้องมี UserDefaults จริง)

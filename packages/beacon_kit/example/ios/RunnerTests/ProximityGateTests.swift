@@ -1035,7 +1035,8 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
     storeError: String? = nil,
     rangeCallbackCount: Int = 41,
     inArrayCount: Int = 12,
-    unknownCount: Int = 3
+    unknownCount: Int = 3,
+    mode: ProximityLayerMode = .foreground
   ) -> BeaconKitProximityChangedEvent {
     return BeaconKitProximityChangedEvent(
       regionIdentifier: "bigc-ladprao",
@@ -1050,7 +1051,8 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
       storeError: storeError,
       rangeCallbackCount: rangeCallbackCount,
       inArrayCount: inArrayCount,
-      unknownCount: unknownCount
+      unknownCount: unknownCount,
+      mode: mode
     )
   }
 
@@ -1059,7 +1061,7 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
 
     XCTAssertEqual(
       suffix,
-      " bucket=near from=far reason=closer beacon=1/42 store=ok"
+      " bucket=near from=far reason=closer beacon=1/42 store=ok mode=fg"
         + " rangeCb=41 inArray=12 unknown=3"
     )
   }
@@ -1077,7 +1079,7 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
 
     XCTAssertEqual(
       suffix,
-      " bucket=n/a from=none reason=stale beacon=n/a store=ok"
+      " bucket=n/a from=none reason=stale beacon=n/a store=ok mode=fg"
         + " rangeCb=41 inArray=12 unknown=3"
     )
   }
@@ -1095,9 +1097,10 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
   }
 
   /// สัญญาเชิงโครงสร้างของ suffix — ตรวจครบทุกเคสที่เป็นไปได้ของ `to`/`from`/
-  /// `reason`/`beacon`/`store` พร้อมกัน: ขึ้นต้นด้วยช่องว่าง 1 ตัว, มีครบ 8 คู่
-  /// (5 คู่เดิม + ตัวนับ 3 ตัวของ ADR-21 หัวข้อ 9), ทุกคู่เป็น `key=value` ที่ value
-  /// ไม่ว่าง — `reason` รวม `regionExit` ที่เพิ่มเข้ามาหลังรอบเดินจริง 10 ก.ย. 2026 ด้วย
+  /// `reason`/`beacon`/`store`/`mode` พร้อมกัน: ขึ้นต้นด้วยช่องว่าง 1 ตัว, มีครบ 9 คู่
+  /// (5 คู่เดิม + `mode` ของ ADR-22 + ตัวนับ 3 ตัวของ ADR-21 หัวข้อ 9), ทุกคู่เป็น
+  /// `key=value` ที่ value ไม่ว่าง — `reason` รวม `regionExit` ที่เพิ่มเข้ามาหลังรอบ
+  /// เดินจริง 10 ก.ย. 2026 ด้วย
   func testSuffixShapeHoldsForEveryCombination() {
     let buckets: [ProximityBucket?] = [nil, .immediate, .near, .far]
     let reasons: [ProximityTransitionReason] = [.closer, .farther, .stale, .regionExit]
@@ -1107,7 +1110,8 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
       for from in buckets {
         for reason in reasons {
           for storeError in storeErrors {
-            for major: UInt16? in [nil, 65535] {
+            for mode: ProximityLayerMode in [.foreground, .background] {
+              let major: UInt16? = mode == .foreground ? nil : 65535
               let suffix = AppDelegate.proximityRawSignalsSuffix(
                 makeEvent(
                   from: from,
@@ -1115,7 +1119,8 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
                   reason: reason,
                   major: major,
                   minor: major == nil ? nil : 7,
-                  storeError: storeError
+                  storeError: storeError,
+                  mode: mode
                 )
               )
 
@@ -1124,7 +1129,10 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
               let pairs = suffix.dropFirst().split(separator: " ", omittingEmptySubsequences: false)
               XCTAssertEqual(
                 pairs.map { String($0.split(separator: "=", maxSplits: 1)[0]) },
-                ["bucket", "from", "reason", "beacon", "store", "rangeCb", "inArray", "unknown"],
+                [
+                  "bucket", "from", "reason", "beacon", "store", "mode",
+                  "rangeCb", "inArray", "unknown",
+                ],
                 "ลำดับและชื่อคอลัมน์ต้องคงที่: \"\(suffix)\""
               )
               for pair in pairs {
@@ -1561,117 +1569,126 @@ final class RangeCounterSuffixTests: XCTestCase {
   }
 }
 
-// MARK: - ADR-22: ชั้นที่ 2 = foreground เท่านั้น (บังคับด้วยโค้ด)
+// MARK: - ADR-22: สอง gate คนละ config — ไม่ใช่โหมดใหม่ของ gate
 
 /// **ที่มาของทั้งกลุ่ม: `docs/test-data/2026-09-10_ios_proximity_counters.log`**
 ///
-/// ไฟล์นั้นวัดได้ว่าตอนแอปถูกปลุกเบื้องหลัง `didRange` มาถึง **ทุก ~16 วินาที**
-/// (เทียบกับ 2 Hz ตอน foreground) และ **65% ตอบ `unknown`** เหลือ sample ที่ใช้ได้จริง
-/// **ต่อ key ราวทุก 77 วินาที** — ค่าคงที่ของ ADR-19 หัวข้อ 8 (`dwellSamples = 3` ·
-/// `staleAfterMillis = 10_000`) จึงเป็นไปไม่ได้เชิงโครงสร้างในโหมดนั้น
+/// ไฟล์นั้นวัดได้ว่าตอนแอปถูกปลุกเบื้องหลัง sample ที่ใช้ได้จริงมาถึง **ต่อ key ราวทุก
+/// 77 วินาที** — `windowSize = 5` + `dwellSamples = 3` จึงต้องยืนนิ่ง ~4 นาที
+/// ADR-22 แก้ด้วยการใช้ **`ProximityGate` instance ที่สอง** ที่ตั้ง `windowSize = 1` ·
+/// `dwellSamples = 1` · `staleAfterMillis = 24 ชั่วโมง` (ปิด stale โดยพฤตินัย)
 ///
-/// กลุ่มนี้ล็อกว่าการตัดสินใจ "ไม่เดิน gate ตอน background" อยู่ใน**โค้ด** ไม่ใช่แค่
-/// ในเอกสาร — ถ้าใครถอด `isForeground` ออกในอนาคต เทสต์กลุ่มนี้ต้องแดงทันที
-///
-/// ⚠️ สิ่งที่กลุ่มนี้ **ไม่** พิสูจน์: ไม่ได้พิสูจน์ว่า `UIApplication.applicationState`
-/// ตอบว่าอะไรบนเครื่องจริงในรอบที่ถูกปลุก (ทดสอบบน simulator ไม่ได้) — พิสูจน์แค่ว่า
-/// **เมื่อคำตอบคือ "ไม่ active" gate จะไม่ถูกแตะแม้แต่ฟิลด์เดียว**
-final class ProximityForegroundOnlyTests: XCTestCase {
+/// **นี่คือ configuration ไม่ใช่ logic ใหม่** — `ProximityGate.swift` ไม่ถูกแตะเลย
+/// และ `proximity_gate.dart` (reference) ก็ไม่ต้องแก้ตาม
+final class ProximityGateBackgroundConfigTests: XCTestCase {
 
-  /// **เคสหลักของ ADR-22:** background → ตัวนับเดิน แต่ state ของ gate นิ่งสนิท
-  func testBackgroundCountsSamplesButNeverTouchesGateState() {
-    let clock = FakeClock()
-    let gate = ProximityGate(clock: clock.now)
-
-    // สร้างสถานะตั้งต้นด้วยรอบ foreground ปกติก่อน เพื่อให้มีอะไรให้ "ไม่ถูกแตะ"
-    _ = IBeaconRangingManager.stepProximityBatch(
-      samples: [IBeaconRangingManager.ProximitySample(key: sampleKey, bucket: .near)],
-      gate: gate,
-      counters: [:],
-      isForeground: true
-    )
-    let stateBefore = gate.snapshotStates()
-    XCTAssertFalse(stateBefore.isEmpty, "ต้องมี state ตั้งต้นจริง ไม่งั้นเคสนี้พิสูจน์อะไรไม่ได้")
-
-    var counters: [String: IBeaconRangingManager.ProximitySampleCounters] = [:]
-    for _ in 0..<10 {
-      clock.advance(millis: 16_000)  // จังหวะจริงของ background ที่วัดได้
-      let outcome = IBeaconRangingManager.stepProximityBatch(
-        samples: [IBeaconRangingManager.ProximitySample(key: sampleKey, bucket: .immediate)],
-        gate: gate,
-        counters: counters,
-        isForeground: false
-      )
-      counters = outcome.counters
-      XCTAssertTrue(outcome.transitions.isEmpty, "background ต้องไม่ประกาศ transition ใด ๆ")
-    }
-
-    XCTAssertEqual(
-      counters[sampleKey],
-      IBeaconRangingManager.ProximitySampleCounters(inArray: 10, unknown: 0),
-      "ตัวนับต้องเดิน — มันคือเครื่องมือวัดชิ้นเดียวที่ ADR-22 จะมีให้ใช้"
-    )
-    XCTAssertEqual(
-      gate.snapshotStates(), stateBefore,
-      "แต่ state ของ gate ต้องเหมือนเดิมทุกฟิลด์ แม้ป้อน bucket ที่ใกล้กว่าเดิม 10 รอบ"
+  /// gate ที่มีค่าเท่ากับตัว background จริง — อ่านค่าจาก `IBeaconRangingManager`
+  /// **ไม่ใช่พิมพ์เลขซ้ำ** เพื่อให้เทสต์แดงถ้ามีคนแก้ค่าในโค้ดจริง
+  private func makeBackgroundGate(_ clock: FakeClock) -> ProximityGate {
+    return ProximityGate(
+      clock: clock.now,
+      windowSize: IBeaconRangingManager.backgroundWindowSize,
+      dwellSamples: IBeaconRangingManager.backgroundDwellSamples,
+      staleAfterMillis: IBeaconRangingManager.backgroundStaleAfterMillis
     )
   }
 
-  /// `unknown` ตอน background ก็ยังต้องถูกนับแยก — ไม่งั้นตัวเลข 65% ที่ ADR-22
-  /// ทั้งฉบับตั้งอยู่บนนั้นจะวัดซ้ำไม่ได้ในรอบถัดไป
-  func testBackgroundStillSeparatesUnknownFromInArray() {
-    let gate = ProximityGate(clock: FakeClock().now)
+  /// **เคสที่ 1 ของบรีฟ:** `near` ครั้งเดียวต้องยืนยันทันที (dwell 1) และต้องไม่มี
+  /// `stale` ตามมาแม้เงียบไป 5 นาที (staleAfter ปิดอยู่)
+  ///
+  /// เคสนี้คือทั้งเหตุผลของ ADR-22 ในเทสต์เดียว: บน gate ของ foreground
+  /// (`dwellSamples = 3`) `near` ครั้งเดียว **ไม่ให้ transition เลย** และเงียบ 5 นาที
+  /// จะได้ `stale` — พฤติกรรมที่ทำให้โหมด background ใช้งานไม่ได้มาทั้งสองรอบเดินจริง
+  func testSingleNearConfirmsImmediatelyAndNeverGoesStale() {
+    let clock = FakeClock()
+    let gate = makeBackgroundGate(clock)
+
+    let transition = gate.push(key: sampleKey, bucket: .near)
+
+    XCTAssertEqual(transition?.to, .near, "dwell 1 → sample เดียวต้องยืนยันทันที")
+    XCTAssertNil(transition?.from, "เป็น bucket แรกของ key นี้ → from ต้องเป็น nil")
+    XCTAssertEqual(transition?.reason, .closer)
+
+    clock.advance(millis: 300_000)  // เงียบ 5 นาที
+    XCTAssertTrue(
+      gate.sweepStale().isEmpty,
+      "staleAfter 24 ชม. = ปิด stale โดยพฤตินัย — สัญญาณ 'หายจริง' คือ regionExit"
+    )
+    XCTAssertEqual(
+      gate.currentBucket(key: sampleKey), .near,
+      "และ bucket ที่ยืนยันไว้ต้องยังอยู่ ไม่ถูกกวาดทิ้ง"
+    )
+  }
+
+  /// **เคสที่ 2 ของบรีฟ:** สลับ fg → bg → fg แล้ว state ของสอง gate ต้องไม่ปนกัน
+  ///
+  /// เดินผ่าน `stepProximityBatch` จริง (เส้นทางเดียวกับ `runProximityLayer`) โดยให้
+  /// ผู้เรียกเลือก gate เอง — ซึ่งเป็นสัญญาที่ ADR-22 ตั้งไว้พอดี
+  func testTwoGatesKeepSeparateStateAcrossModeSwitches() {
+    let clock = FakeClock()
+    let foregroundGate = ProximityGate(clock: clock.now)  // ค่า ADR-19 หัวข้อ 8 ทั้งชุด
+    let backgroundGate = makeBackgroundGate(clock)
     var counters: [String: IBeaconRangingManager.ProximitySampleCounters] = [:]
 
-    for bucket in [ProximityBucket?.some(.far), nil, nil, .some(.near), nil] {
-      counters = IBeaconRangingManager.stepProximityBatch(
+    func step(_ gate: ProximityGate, _ bucket: ProximityBucket?) -> [ProximityTransition] {
+      let outcome = IBeaconRangingManager.stepProximityBatch(
         samples: [IBeaconRangingManager.ProximitySample(key: sampleKey, bucket: bucket)],
         gate: gate,
-        counters: counters,
-        isForeground: false
-      ).counters
+        counters: counters
+      )
+      counters = outcome.counters
+      return outcome.transitions
     }
+
+    // fg: near สองครั้ง — ยังไม่ครบ dwell 3 จึงยังไม่มี transition
+    XCTAssertTrue(step(foregroundGate, .near).isEmpty)
+    clock.advance(millis: 1_000)
+    XCTAssertTrue(step(foregroundGate, .near).isEmpty)
+    XCTAssertNil(
+      foregroundGate.currentBucket(key: sampleKey),
+      "fg ยังไม่ยืนยันอะไร — dwell 3 ยังไม่ครบ"
+    )
+
+    // bg: immediate ครั้งเดียว — ยืนยันทันทีบน gate ของตัวเอง
+    //
+    // ⚠️ เดินนาฬิกาแค่ 1 วินาทีโดยตั้งใจ: ถ้าเว้นนานกว่า `staleAfterMillis` ของ **fg**
+    // (10 วินาที ตาม ADR-19 หัวข้อ 8) การกลับมา push ที่ fg รอบถัดไปจะโดน stale reset
+    // ซึ่งเป็นพฤติกรรมที่ถูกต้องแต่จะกลบสิ่งที่เคสนี้ต้องการพิสูจน์ (การแยก state)
+    // — เคสนั้นเป็นคนละเรื่องและมีเทสต์ของตัวเองอยู่แล้วใน `ProximityGateStaleTests`
+    clock.advance(millis: 1_000)
+    XCTAssertEqual(step(backgroundGate, .immediate).first?.to, .immediate)
+    XCTAssertEqual(backgroundGate.currentBucket(key: sampleKey), .immediate)
+    XCTAssertNil(
+      foregroundGate.currentBucket(key: sampleKey),
+      "bg ต้องไม่ไปยืนยันให้ fg — คนละ instance คนละ state"
+    )
+
+    // กลับมา fg: sample ที่สาม ทำให้ dwell ครบพอดี และต้องได้ `near` **ไม่ใช่
+    // `immediate`** ซึ่งพิสูจน์ว่าหน้าต่างของ fg ไม่เคยเห็น sample ของ bg เลย
+    clock.advance(millis: 1_000)
+    let confirmed = step(foregroundGate, .near)
+    XCTAssertEqual(confirmed.first?.to, .near)
+    XCTAssertEqual(foregroundGate.currentBucket(key: sampleKey), .near)
+    XCTAssertEqual(
+      backgroundGate.currentBucket(key: sampleKey), .immediate,
+      "และ state ของ bg ต้องไม่ถูก fg เขียนทับ"
+    )
 
     XCTAssertEqual(
       counters[sampleKey],
-      IBeaconRangingManager.ProximitySampleCounters(inArray: 5, unknown: 3)
+      IBeaconRangingManager.ProximitySampleCounters(inArray: 4, unknown: 0),
+      "ตัวนับเป็นของ process ไม่ใช่ของ gate — เดินต่อเนื่องข้ามโหมด"
     )
-    XCTAssertTrue(gate.snapshotStates().isEmpty, "gate ต้องไม่เคยรู้จัก key นี้เลย")
   }
+}
 
-  /// **`sweepStale()` ต้องไม่ทำงานตอน background** — ความเงียบตอนนั้นเป็นพฤติกรรมของ
-  /// CoreLocation (callback ทุก ~16 วิ) ไม่ใช่ของบีคอน การกวาดจึงเป็นการสรุปผิดจาก
-  /// ข้อมูลที่ไม่มีสิทธิ์สรุป
-  func testBackgroundNeverSweepsStaleEvenAfterLongSilence() {
-    let clock = FakeClock()
-    let gate = ProximityGate(clock: clock.now, dwellSamples: 1, staleAfterMillis: 10_000)
+// MARK: - ADR-21 หัวข้อ 8: เส้นทาง foreground ห้ามเปลี่ยน
 
-    _ = IBeaconRangingManager.stepProximityBatch(
-      samples: [IBeaconRangingManager.ProximitySample(key: sampleKey, bucket: .near)],
-      gate: gate,
-      counters: [:],
-      isForeground: true
-    )
-    let stateBefore = gate.snapshotStates()
+/// **regression guard ที่ ADR-22 บังคับไว้ในบรีฟ:** "foreground path ไม่เปลี่ยนแม้แต่
+/// บรรทัดเดียว" — เทียบผลของ `stepProximityBatch` กับ [runOneCallback] ซึ่งเป็นลำดับ
+/// ของ ADR-21 หัวข้อ 8 ที่มีเทสต์ล็อกไว้แล้วทั้งกลุ่ม
+final class ProximityForegroundPathUnchangedTests: XCTestCase {
 
-    clock.advance(millis: 600_000)  // เงียบ 10 นาที — เกิน staleAfter 60 เท่า
-
-    let background = IBeaconRangingManager.stepProximityBatch(
-      samples: [], gate: gate, counters: [:], isForeground: false
-    )
-    XCTAssertTrue(background.transitions.isEmpty, "background ห้ามกวาด stale")
-    XCTAssertEqual(gate.snapshotStates(), stateBefore)
-
-    // พอกลับมา foreground รอบเดียว `stale` ต้องเกิดทันที — กฎเดิมไม่ได้หายไปไหน
-    let foreground = IBeaconRangingManager.stepProximityBatch(
-      samples: [], gate: gate, counters: [:], isForeground: true
-    )
-    XCTAssertEqual(foreground.transitions.map(\.reason), [.stale])
-  }
-
-  /// **regression guard ของเส้นทาง foreground:** ADR-22 ต้องไม่เปลี่ยนพฤติกรรมเดิม
-  /// แม้แต่นิดเดียวเมื่อ `isForeground == true` — เทียบกับ [runOneCallback] ซึ่งเป็น
-  /// ลำดับของ ADR-21 หัวข้อ 8 ที่มีเทสต์ล็อกไว้แล้วทั้งกลุ่ม
   func testForegroundPathIsByteForByteTheOldOrder() {
     let clockA = FakeClock()
     let clockB = FakeClock()
@@ -1697,8 +1714,7 @@ final class ProximityForegroundOnlyTests: XCTestCase {
           IBeaconRangingManager.ProximitySample(key: $0.key, bucket: $0.bucket)
         },
         gate: gateA,
-        counters: [:],
-        isForeground: true
+        counters: [:]
       ).transitions
       let viaOldOrder = runOneCallback(gateB, samples: batch)
 
@@ -1709,8 +1725,8 @@ final class ProximityForegroundOnlyTests: XCTestCase {
   }
 
   /// ค่าเริ่มต้นของ `isApplicationActive` ต้องตอบ `false` เมื่อถามจากเธรดที่ไม่ใช่
-  /// main — `UIApplication.shared` เป็น main-thread-only API จริง ๆ และทางที่
-  /// ปลอดภัยคือ **ไม่เดิน gate** ไม่ใช่เดินด้วยค่าที่อ่านมาแบบผิดสัญญา
+  /// main — `UIApplication.shared` เป็น main-thread-only API จริง ๆ · ตอบ `false`
+  /// แปลว่า "ใช้ gate ของ background" ซึ่งเป็นทางที่ไม่ทำให้ state ของ fg เพี้ยน
   func testApplicationStateIsActiveIsFalseOffMainThread() {
     let answered = expectation(description: "off-main answer")
     var result: Bool?
