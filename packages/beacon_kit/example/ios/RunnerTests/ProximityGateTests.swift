@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import XCTest
 
@@ -1128,5 +1129,53 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
     XCTAssertNotEqual(first, second)
     XCTAssertTrue(first.contains(" beacon=1/42 "))
     XCTAssertTrue(second.contains(" beacon=1/43 "))
+  }
+}
+
+// MARK: - ค่า default และการแปลง CLProximity (เพิ่มจากรีวิว 10 ก.ย. 2026)
+
+/// ล็อก**ค่าที่ทั้งรอบทดสอบเครื่องจริงมีไว้เพื่อพิสูจน์** — ไม่มีเทสตัวไหนก่อนหน้านี้
+/// จับได้เลยถ้าใครแก้ค่าเหล่านี้
+///
+/// เทส stale ทุกตัวในไฟล์นี้ส่ง `staleAfterMillis:` เข้าไปเอง แปลว่าถ้ามีคนแก้ค่า
+/// default เป็น `60_000` ตามของ ADR-20 หัวข้อ 7 (ซึ่ง **ADR-21 หัวข้อ 4 ห้ามไว้ชัดที่สุด
+/// ในทั้งฉบับ** เพราะ 60 วินาทีคำนวณจากอัตรา batch ของ Android ที่วัดได้จริง ส่วน iOS
+/// ยังไม่มีไฟล์ข้อมูลของตัวเองเลย) **เทสทั้ง 73 เคสจะยังเขียวหมด** — ช่องว่างชนิดที่
+/// เจอได้เฉพาะตอนรีวิว ไม่ใช่ตอนรัน
+final class ProximityGateDefaultsTests: XCTestCase {
+
+  func testDefaultsMatchAdr19Section8Exactly() {
+    let gate = ProximityGate(clock: { 0 })
+
+    XCTAssertEqual(gate.windowSize, 5, "ADR-19 หัวข้อ 8")
+    XCTAssertEqual(gate.dwellSamples, 3, "ADR-19 หัวข้อ 8")
+    XCTAssertEqual(
+      gate.staleAfterMillis, 10_000,
+      "ADR-19 หัวข้อ 8 · **ห้ามยืม 60_000 ของ ADR-20 หัวข้อ 7** — ค่านั้นมาจากอัตรา "
+        + "batch ของ Android ที่วัดได้จริง iOS ยังไม่มีข้อมูลของตัวเอง (ADR-21 หัวข้อ 4)"
+    )
+  }
+}
+
+/// `CLProximity.unknown` **ต้องกลายเป็น `nil` ห้ามกลายเป็น `.far`**
+///
+/// นี่คือจุดเดียวในโค้ดที่บังคับ invariant ของ ADR-19 6(ฉ) ("วัดไม่ได้" ไม่เท่ากับ "ไกล")
+/// ที่ขอบระหว่าง CoreLocation กับ gate — ก่อนเทสนี้ไม่มีอะไรฟ้องเลยถ้ามีคนแก้เป็น
+/// `case .unknown: return .far` ซึ่งจะทำให้ sample ที่ Apple บอกว่า "ไม่รู้" ถูกนับเป็น
+/// หลักฐานว่าลูกค้าเดินออกห่าง แล้วไหลเข้า dwell ของทิศ "ไกลขึ้น" ที่ยืนยันทันทีโดยไม่ต้อง
+/// รอ — ผลคือ bucket หลุดทั้งที่ไม่มีใครขยับ
+final class ProximityBucketMappingTests: XCTestCase {
+
+  func testUnknownBecomesNilNeverFar() {
+    XCTAssertNil(
+      IBeaconRangingManager.proximityBucket(.unknown),
+      "ADR-19 6(ฉ): \"วัดไม่ได้\" ไม่เท่ากับ \"ไกล\" — ห้ามคืน .far เด็ดขาด"
+    )
+  }
+
+  func testKnownProximitiesMapOneToOne() {
+    XCTAssertEqual(IBeaconRangingManager.proximityBucket(.immediate), .immediate)
+    XCTAssertEqual(IBeaconRangingManager.proximityBucket(.near), .near)
+    XCTAssertEqual(IBeaconRangingManager.proximityBucket(.far), .far)
   }
 }
