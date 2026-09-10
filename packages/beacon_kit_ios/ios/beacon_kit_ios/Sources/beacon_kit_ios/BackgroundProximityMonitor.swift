@@ -120,6 +120,41 @@ public enum BackgroundProximityMonitor {
   private static var observer: ProximityObserver?
   private static var backgroundLocationUpdatesTraceStorage: String?
 
+  /// ผู้สังเกตการณ์ของ `didFailRangingFor` — **นับความเงียบให้เป็นตัวเลข ไม่ใช่อนุมาน
+  /// จากการไม่มีบรรทัด**
+  ///
+  /// ## ทำไมต้องมี ทั้งที่มันไม่ใช่ "ความใกล้เปลี่ยน"
+  ///
+  /// `didFailRangingFor` คือทางที่เคส **"ไม่เจอ beacon เลย"** ของ API รุ่น `satisfying:`
+  /// เดินมา (`apple_proximity_ranging.md` หัวข้อ 8) และเป็น **จุด sweep ที่สองจากสองจุด**
+  /// ของ ADR-21 หัวข้อ 4 · **แต่เอกสาร Apple ไม่ระบุว่ามันยิงซ้ำเป็นจังหวะหรือยิงครั้งเดียว**
+  /// (หัวข้อ 8 บันทึกไว้เองว่าหาไม่เจอ)
+  ///
+  /// ถ้ามันไม่เคยยิงเลยบนเครื่องจริง sweep จะเหลือจุดเดียวที่ต้น `didRange` ซึ่ง**หยุด
+  /// ทำงานพร้อมกับบีคอนที่หายไปพอดี** ผลคือเคสหลักของฟีเจอร์ ("ลูกค้าเดินออกจากร้าน")
+  /// ไม่มี event ใด ๆ ออกมา ณ เวลาที่มันเกิด และคำถามใหญ่ที่สุดของ ADR-21 หัวข้อ 4
+  /// (`staleAfter = 10` วินาที ใช้กับ iOS ได้จริงไหม) **จะพิสูจน์ไม่ได้ในรอบทดสอบนั้น**
+  ///
+  /// การไม่มีบรรทัดในไฟล์หลักฐานแยกไม่ออกระหว่าง "callback ไม่เคยยิง" กับ "ยิงแต่ไม่มี
+  /// อะไรให้รายงาน" — บทเรียนตรงจาก `android_background_scanning.md` ข้อ B ที่เสียเวลา
+  /// ไปทั้งรอบเพราะ "ความเงียบ" แปลได้สองอย่าง **จึงต้องนับออกมาเป็นบรรทัดจริง**
+  public static func setRangingFailureObserver(_ newObserver: ((String) -> Void)?) {
+    lock.lock()
+    defer { lock.unlock() }
+    rangingFailureObserver = newObserver
+  }
+
+  private static var rangingFailureObserver: ((String) -> Void)?
+
+  /// แจ้งว่า `didFailRangingFor` ยิงสำหรับ region หนึ่ง — ห่อ error ของ host เหมือน
+  /// `emit` เพื่อไม่ให้โค้ดของแอปทำให้เส้นทางเบื้องหลังของ SDK ล้ม
+  public static func emitRangingFailure(regionIdentifier: String) {
+    lock.lock()
+    let observer = rangingFailureObserver
+    lock.unlock()
+    observer?(regionIdentifier)
+  }
+
   public static func setProximityObserver(_ newObserver: ProximityObserver?) {
     lock.lock()
     defer { lock.unlock() }

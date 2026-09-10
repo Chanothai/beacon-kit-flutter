@@ -166,6 +166,11 @@ import beacon_kit_ios
       self?.recordProximityEvent(event)
     }
 
+    // นับ `didFailRangingFor` ให้เห็นเป็นบรรทัดจริง — **ห้ามอนุมานจากการไม่มีบรรทัด**
+    BackgroundProximityMonitor.setRangingFailureObserver { [weak self] regionIdentifier in
+      self?.recordRangingFailure(regionIdentifier: regionIdentifier)
+    }
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -260,6 +265,30 @@ import beacon_kit_ios
   /// คือสิ่งเดียวที่ตอบได้ว่า `staleAfter = 10 วินาที` (ADR-19 หัวข้อ 8) ใช้ได้จริง
   /// กับอัตราการยิงของ `didRange` บน iOS หรือไม่ ซึ่งเป็นคำถามเปิดข้อใหญ่ที่สุดของ
   /// ADR-21 หัวข้อ 4
+  /// เขียนบรรทัด `rangefail` ทุกครั้งที่ `didFailRangingFor` ยิง
+  ///
+  /// **ไม่ใช่การรายงาน error** — เป็นการ**นับความเงียบให้เป็นตัวเลข** เพื่อตอบคำถามเปิด
+  /// ข้อใหญ่ที่สุดของ ADR-21 หัวข้อ 4: `didFailRangingFor` ยิงจริงไหม ยิงถี่แค่ไหน และ
+  /// พึ่งเป็นจุด sweep ที่สองได้หรือไม่ (`apple_proximity_ranging.md` หัวข้อ 8 บันทึกว่า
+  /// **เอกสาร Apple ไม่ระบุ** ว่ามันยิงซ้ำเป็นจังหวะหรือครั้งเดียว)
+  ///
+  /// ถ้าไม่มีบรรทัดนี้ ไฟล์หลักฐานจะแยกไม่ออกระหว่าง "callback ไม่เคยยิงเลย" กับ "ยิงแต่
+  /// ไม่มีอะไรให้รายงาน" — ซึ่งเป็นความกำกวมชนิดเดียวกับที่ทำให้รอบสอบสวนฝั่ง Android
+  /// (`android_background_scanning.md` ข้อ B) ตอบคำถามไม่ได้ทั้งรอบ
+  ///
+  /// **ไม่ยิง notification** — นี่เป็นข้อมูลของผู้ทดสอบ ไม่ใช่เหตุการณ์ที่ผู้ใช้ต้องรู้
+  private func recordRangingFailure(regionIdentifier: String) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: Date(),
+        event: "rangefail",
+        regionIdentifier: regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+      )
+    )
+  }
+
   private func recordProximityEvent(_ event: BeaconKitProximityChangedEvent) {
     // 1) หลักฐานก่อน — **schema 6 คอลัมน์เดิมทุกประการ ไม่เพิ่ม/ลด/สลับคอลัมน์**
     //    ข้อมูลใหม่ของ ADR-21 ทั้งหมดต่อท้ายอยู่ใน**คอลัมน์สัญญาณดิบ**เท่านั้น

@@ -602,6 +602,11 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       return
     }
 
+    // **นับให้เห็นเป็นบรรทัดจริง ก่อน sweep** — ดู kdoc ของ
+    // `BackgroundProximityMonitor.setRangingFailureObserver` ว่าทำไมการไม่มีบรรทัด
+    // ถึงตอบคำถามของ ADR-21 หัวข้อ 4 ไม่ได้เลย
+    BackgroundProximityMonitor.emitRangingFailure(regionIdentifier: regionIdentifier)
+
     // กลืน error ด้วยเหตุผลเดียวกับใน didRange (ดูคอมเมนต์ที่นั่น)
     do {
       try runProximityLayer(regionIdentifier: regionIdentifier, beacons: [])
