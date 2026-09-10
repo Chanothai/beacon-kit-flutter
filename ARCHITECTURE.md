@@ -3870,3 +3870,114 @@ background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วิ
 - ADR-14 หัวข้อ 4.1 + 1.3, ADR-17 (`reconcile()`), ADR-19 หัวข้อ 8 (ตัวเลข policy ทั้งหมด), `proximity_gate.dart`
   (reference), `docs/sources/apple_proximity_ranging.md` หัวข้อ 4, `BeaconRegionSpec.kt` หัวข้อ "รูปแบบของ byte
   ที่กรอง", `BackgroundRegionStore.kt` (pattern SharedPreferences + JSON)
+
+## ADR-21: ProximityGate ฝั่ง iOS — port เป็น Swift ใน `IBeaconRangingManager` (เพิ่ม 10 ก.ย. 2026)
+
+> **สถานะ: ตัดสินใจแล้ว — ยังไม่ implement**
+> ขั้นที่ 1/4 ตาม `PIPELINE.md` **ห้ามมีโค้ดใด ๆ ในรอบนี้** — `flutter-dev` ต้องเปลี่ยน
+> แบนเนอร์นี้เป็น `code-complete, unverified` ในคอมมิตเดียวกับโค้ด (CONTRIBUTING ข้อ 8)
+> **ขอบเขต:** iOS เท่านั้น — ไม่แตะ Android, ไม่แตะ `proximity_gate.dart` (reference),
+> ไม่แตะ `didEnterRegion`/`didExitRegion`/`didDetermineState`/`emitRegionStateIfChanged`
+> **แม้แต่บรรทัดเดียว** · สัญญา event ใช้ของ ADR-20 หัวข้อ 5 ตามเดิม ห้ามนิยามใหม่
+
+### 1. ranging ตอน background ทำได้แค่ไหน — **สัญญาสองแพลตฟอร์มไม่เท่ากัน ต้องพูดตรง ๆ**
+
+| ประเด็น (สรุปจากรอบค้นคว้า 10 ก.ย. 2026 — `apple_proximity_ranging.md` หัวข้อ 5-10) | Android (ADR-20) | iOS (ADR นี้) |
+|---|---|---|
+| ได้ RSSI ตอนไม่มี process | ได้ฟรีทาง `PendingIntent` ของ `BeaconScanReceiver` | **ไม่ได้** — ต้องมี process ที่ ranging เดินอยู่ |
+| ถูกปลุกจากสถานะถูกฆ่า | ได้ (ADR-14 `observed`) | ได้ **แต่จาก region event เท่านั้น** และได้เวลา "around 10 seconds" (ยืนยันทางเดียว จากคู่มือที่ Apple archive) |
+| ผู้ผลิต OS แนะนำอย่างไร | — | Apple เขียนตรง ๆ ว่า "use beacon ranging only while your app is in the foreground" |
+
+**การตัดสิน:** เดินหน้าต่อ แต่**สัญญาที่ให้ product คือ** ชั้นที่ 2 บน iOS ทำงานได้เฉพาะ (ก) ตอน
+foreground (ข) ช่วงหลังถูกปลุกด้วย region enter/exit จนกว่าระบบจะ suspend (หลักไม่กี่สิบวินาที)
+— **ไม่ใช่ "ตลอดเวลาแบบ Android"** ห้ามขายเป็น "proximity เบื้องหลังเท่ากันสองแพลตฟอร์ม" ที่ใด
+
+**สิ่งที่ต้องตั้ง:** `Always` จำเป็น (เอกสารยืนยันว่า When in Use "doesn’t launch an app … to deliver new
+updates") — โค้ดเรียก `requestAlwaysAuthorization()` อยู่แล้ว **ไม่ต้องแก้** · `allowsBackgroundLocationUpdates`
+**ตั้ง `true` ได้ แต่ห้ามตั้งแบบไม่มีเงื่อนไข**: Apple ระบุว่าการตั้ง `true` ทั้งที่ `Info.plist` ไม่มี
+`UIBackgroundModes`/`location` เป็น "a fatal error that terminates the app" — `beacon_kit` เป็นไลบรารีของแอปคนอื่น
+ถ้าตั้งดื้อ ๆ จะทำให้แอปเขาตายทันที **กติกา: อ่าน `UIBackgroundModes` ของ host bundle ก่อน พบ `location` จึงตั้ง ·
+ไม่พบให้ข้ามพร้อมเขียนร่องรอย ห้ามเงียบ** ⚠️ **ไม่มีเอกสาร Apple ยืนยันว่าแฟล็กนี้มีผลกับ *ranging*** (พูดถึง
+location updates ล้วน ๆ) — ตั้งเพราะเป็นตัวเลือกเดียวที่มี **ต้องพิสูจน์ด้วยเครื่องจริง**
+
+### 2. `ProximityGate` เวอร์ชัน Swift — เส้นทาง Apple bucket เท่านั้น
+
+port จาก `proximity_gate.dart` ตาม **ADR-19 หัวข้อ 4 ข้อ 1**: ใส่ `CLBeacon.proximity` ลงหน้าต่าง `windowSize` →
+หา **mode** → **เสมอกันเลือกตัวที่ไกลกว่า** → เข้า dwell เหมือนกันทุกประการ · `unknown` = **ทิ้ง sample ห้ามแตะ
+state แม้แต่ฟิลด์เดียว** (ADR-19 6(ง))
+
+**Swift ≠ Kotlin โดยตั้งใจ** — Kotlin ทำเฉพาะเส้นทาง median/path-loss เพราะ Android ไม่มี bucket ให้ · iOS
+ไม่มี `ibeaconTxPower` (null เสมอเมื่อ `osDecoded`) จึง**ห้าม port เส้นทาง median/เมตรมาฝั่ง Swift เลย**
+ผลพลอยได้คือ payload ฝั่ง iOS ไม่มี `medianMeters` ซึ่ง ADR-20 หัวข้อ 5 เผื่อไว้แล้วว่าเป็น optional
+**ทั้งสองภาษาต้อง == Dart ไม่ใช่ == กันเอง** · ตัวเลขทุกตัวจาก ADR-19 หัวข้อ 8 ห้ามคิดใหม่ · นาฬิกา**ต้อง
+ฉีดผ่าน `init`** เหมือน Kotlin **ห้ามเรียก `Date()` ในคลาสนี้** · เทสต์ port เคสต่อเคสชื่อตรงกับฝั่ง Dart ·
+invariant ของ ADR-19 6(ช) (ห้าม emit `unknown` ออก public API) ต้องมีเทสต์บังคับเหมือนกัน
+
+### 3. state ข้าม process — `UserDefaults` + key จาก `(uuid, major, minor)`
+
+iOS ฆ่า/relaunch process เหมือน Android ถ้าเก็บใน memory อย่างเดียว หน้าต่าง/dwell จะรีเซ็ตทุกครั้งที่ถูกปลุก
+แล้ว `dwellSamples = 3` ไม่มีวันครบ (เหตุผลเดียวกับ ADR-20 หัวข้อ 3) — **เก็บลง `UserDefaults` เป็น JSON**
+(เทียบเท่า SharedPreferences · pattern เดียวกับ `BackgroundRegionStore`) เขียนให้เสร็จก่อนจบ callback
+
+**key = `"<regionIdentifier>|<uuid ตัวพิมพ์เล็ก>|<major>|<minor>"`** — ⚠️ **ห้ามใช้ identifier ของวิทยุเป็นส่วนหนึ่ง
+ของ key เด็ดขาด** (สุ่มใหม่ทุกครั้งที่ถอน-ลงแอป ตาม ADR-19) ฝั่ง Android ยอมใช้ MAC เฉพาะ POC เพราะไม่มี parser ·
+iOS ไม่มีข้อจำกัดนั้นเพราะ `CLBeacon` ให้ครบสามค่ารายเฟรม — ตรงกับที่ ADR-20 หัวข้อ 3 สั่งไว้ล่วงหน้าแล้ว
+
+### 4. stale บน iOS — **ห้ามใช้ `didRange` เป็นนาฬิกา**
+
+สมมติฐานตอนสั่งงาน ("iOS มี ranging ยิงเป็นจังหวะจึงตรวจ stale ได้ตรงกว่า Android") **ค้นแล้วยืนยันไม่ได้ และ
+หลักฐานชี้ไปทางตรงข้าม**: Apple อธิบาย callback นี้ว่ายิง "whenever there is a change to report" / "whenever
+beacons … come within range, go out of range, or their proximity changes" — **event-driven ไม่ใช่ periodic** ·
+และเคส "ไม่เจอเลย" ของ API รุ่น `satisfying:` มาทาง **`didFailRangingFor`** ไม่ใช่ `didRange` ที่มี array ว่าง
+
+**การตัดสิน:** ประเมิน `staleAfter` **ที่ต้น hook ทุกครั้งที่ `didRange` ยิง** (หลักการเดียวกับ ADR-20 หัวข้อ 4 /
+`reconcile()` ของ ADR-17) **บวกจุดที่สองที่ `didFailRangingFor`** ซึ่งเป็น sweep ล้วน ๆ (ไม่ push sample) — ผลที่
+ต้องยอมรับเหมือน Android: stale ถูกค้นพบตอน callback ถัดไป ไม่ใช่ที่วินาทีที่ 10 พอดี · **ไม่ใส่ `Timer` ใน SDK**
+(ADR-19 6(ฌ)) · **`staleAfter` = 10 วินาทีตาม ADR-19 หัวข้อ 8 ตรง ๆ ห้ามยืม 60 วินาทีของ ADR-20 หัวข้อ 7** เพราะ
+ค่านั้นคำนวณจากอัตรา batch ของ Android ที่วัดได้จริง ส่วน iOS **ยังไม่มีไฟล์ข้อมูลเลย** ยืมมาใช้คือการเดา
+
+### 5. จุดที่ hook — ใน `didRange` เท่านั้น และต้องแก้ `guard` ที่ต้นเมธอดก่อน
+
+ชั้น 2 อยู่ **หลัง**ตรรกะเดิมของ `didRange` ทั้งหมด ครอบด้วย `do`/`catch` ที่กลืน error แล้วเขียนร่องรอย —
+exception ของชั้น 2 **ห้าม**ทำให้ enter/exit ของชั้น 1 พัง (หลักการเดียวกับ ADR-20 หัวข้อ 1; ชั้น 1 ของ iOS
+มีหลักฐาน `observed` แล้ว ชั้น 2 ยังไม่เคยรันจริงเลย)
+
+⚠️ **อุปสรรคที่ต้องแก้ก่อน ไม่งั้นฟีเจอร์นี้ตายตั้งแต่บรรทัดแรก:** `didRange` ปัจจุบันเริ่มด้วย `guard let
+eventSink = eventSink else { return }` — ออกจาก**ทั้งเมธอด**เมื่อไม่มีผู้ฟังฝั่ง Dart ซึ่งคือ**เคสหลักที่ ADR
+นี้มีอยู่เพื่อรองรับ** **ต้องย้าย `guard` ให้ครอบเฉพาะบล็อกที่ประกอบ payload + เรียก `eventSink`** โดยพฤติกรรม
+บล็อกนั้นเหมือนเดิมเป๊ะ ส่วนการหา `regionIdentifier` และการเรียกชั้น 2 ต้องเดินได้แม้ `eventSink == nil`
+
+### 6. ยังไม่ทำในรอบนี้ (พร้อมเหตุผลและความเสี่ยงที่ค้างไว้)
+
+| ตัดออก | เหตุผลที่ตัดได้ในรอบนี้ | ความเสี่ยงที่ค้างไว้ |
+|---|---|---|
+| ยังไม่ส่ง `proximityChanged` ขึ้น Dart — ไม่มี channel ไม่มี stream | ตาม ADR-20 หัวข้อ 5 สัญญายังไม่ควรล็อกก่อนพิสูจน์ทั้งสองแพลตฟอร์ม | แอปจริงยังใช้ฟีเจอร์นี้ไม่ได้ ทั้งสองแพลตฟอร์ม |
+| notification + cooldown อยู่ที่ `AppDelegate` ของ example app | เป็นนโยบายของแอป ไม่ใช่ความสามารถของแพลตฟอร์ม (ADR-11 · ADR-20 หัวข้อ 6) | แอปอื่นที่ใช้ SDK ต้องทำเอง |
+| ค่า policy hardcode จาก ADR-19 หัวข้อ 8 ไม่มี API ให้ตั้ง | ค่ายังไม่ calibrate จึงยังไม่ควรเปิดให้ตั้ง | ปรับค่าหน้างานไม่ได้ ต้อง rebuild |
+| ไม่ย้ายไปใช้ `CLBeaconIdentityCondition` | `CLBeaconRegion`/`CLBeaconIdentityConstraint` ถูก deprecate ที่ iOS 27.0 แล้ว (ยืนยันจาก metadata) แต่ยังไม่ถูกถอด และการย้ายกระทบ region monitoring ซึ่งรอบนี้ห้ามแตะ | หนี้ที่ต้องมี ADR ของตัวเอง ก่อน iOS 27 บังคับ |
+| ไม่มี eviction ของ state เก่าใน `UserDefaults` | จำนวนบีคอนใน POC ควบคุมได้ | โตไม่มีเพดานถ้าเจอบีคอนแปลกหน้าจำนวนมาก ต้องมีก่อน production |
+| ไม่มี golden JSON เทียบสามภาษา | รอบนี้ port เทสตรงจาก Dart เหมือน Kotlin | **iOS คือภาษาที่สาม — ADR-20 หัวข้อ 6 ระบุเองว่าถึงจุดนี้ต้องมี golden จริง** หนี้ก้อนแรกที่ควรใช้คืนหลัง POC |
+| ไม่เติม hysteresis ที่ขอบ `immediate`/`near` | ดูหัวข้อ 7 ข้อ 3 | ดูหัวข้อ 7 ข้อ 3 |
+
+### 7. บทเรียนจาก ADR-20 ที่ iOS ต้องไม่ทำซ้ำ
+
+1. **บรรทัดหลักฐานต้องแยกบีคอนออกจากกันได้ตั้งแต่บรรทัดแรกที่เขียน** — รอบ Android เสียเวลาสอบสวนทั้งรอบ
+   (`android_background_scanning.md` ข้อ A) เพราะ `event=proximity` ของคนละบีคอนพิมพ์ออกมาเหมือนกันหมดจนอ่าน
+   เป็นบั๊ก entry ซ้ำ · **iOS ต้องมี `beacon=<major>/<minor>` ในบรรทัดหลักฐานตั้งแต่ commit แรก**
+2. **ความล้มเหลวของที่เก็บ state ต้องมีร่องรอยในไฟล์หลักฐาน ไม่ใช่แค่ console** — ข้อ B ของไฟล์เดียวกันพิสูจน์ไม่ได้
+   จนต้องเดินรอบใหม่ เพราะ 3 code path ที่ทำให้ state หายเงียบ ๆ ไม่เคยปรากฏในไฟล์เลย · **iOS ต้องมี
+   `store=ok|<error>` ในบรรทัด `proximity` ตั้งแต่แรก** และ **`stopMonitoring(identifiers:)` ของ SDK ต้องล้าง
+   store ของชั้น 2 ตั้งแต่แรก** (ฝั่ง Android ยังเป็นหนี้ค้างเพราะต้องแก้ที่ example app)
+3. **ขอบ `immediate`/`near` ไม่มี hysteresis — iOS เจอเหมือนกันเป๊ะ** และหนักกว่าเพราะเส้นทาง Apple bucket ไม่มีแม้แต่
+   dead zone เชิงเมตรให้พึ่ง มีแค่ mode + dwell · ต้นตอคือช่องว่างของ **ADR-19 หัวข้อ 6(ข)** เองที่ใส่ dead zone เฉพาะ
+   ขอบ far/close **จึงห้ามแก้ที่ Swift ฝ่ายเดียวเด็ดขาด** (drift ทันที ขัดหัวข้อ 2) — **รับมือแบบเดียวกับ ADR-20:**
+   กันที่ชั้นนโยบายของ example app (ยิง notification เฉพาะตอนเข้าสู่ความใกล้จาก `far`/ไม่เคยมี bucket) และ**ต้องบันทึก
+   จำนวนการสลับ near↔immediate ที่วัดได้จริงลงไฟล์หลักฐานรอบ iOS** เพื่อให้ ADR รอบหน้าที่แก้พร้อมกันสามภาษามีตัวเลข
+   สองแพลตฟอร์มเทียบกันได้ (Android: 16 จาก 36 event)
+
+### อ้างอิง
+
+ADR-19 หัวข้อ 4 ข้อ 1 · 6(ค)/(ง)/(ฉ)/(ช)/(ฌ) · หัวข้อ 8 — ADR-20 หัวข้อ 1 (hook หลังตรรกะเดิม + กลืน error) ·
+3 (คำสั่งให้ iOS ใช้ uuid/major/minor) · 4 · 5 (สัญญา `proximityChanged`) · 6-7 —
+`docs/sources/apple_proximity_ranging.md` หัวข้อ 5-10 + "ไม่พบ / ไม่ยืนยัน (รอบที่ 2)" ·
+`android_background_scanning.md` ข้อ A/B/E · `proximity_gate.dart` · `IBeaconRangingManager.swift`
