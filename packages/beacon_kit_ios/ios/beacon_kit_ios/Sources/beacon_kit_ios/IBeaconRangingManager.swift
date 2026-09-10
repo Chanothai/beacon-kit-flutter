@@ -626,7 +626,53 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   /// (ไม่ต้องเทียบ constraint แบบ `didRange` เพราะ `CLRegion` มี `identifier`
   /// ตรงตัวอยู่แล้ว เป็นค่าเดียวกับที่ `applyParsedRegions` ตั้งตอนสร้าง region)
   func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+    // **ชั้นที่ 1 ต้องมาก่อนเสมอ** — บรรทัดนี้คือของเดิม ไม่ถูกแก้แม้แต่ตัวอักษรเดียว
     emitRegionStateIfChanged(.enter, for: region)
+
+    // ---- ADR-21 หัวข้อ 1(ข): เริ่ม ranging บนเส้นทางที่ถูกปลุกโดยไม่มี UI ----
+    //
+    // เพิ่ม **หลัง** ชั้นที่ 1 เสมอ ด้วยหลักการเดียวกับที่ ADR-20 ใช้กับ
+    // `BeaconScanReceiver` ฝั่ง Android: ชั้นที่ 2 ห้ามอยู่ในเส้นทางที่ทำให้ชั้นที่ 1
+    // พลาด และห้ามแก้ผลของมัน
+    ensureRangingStarted(for: region)
+  }
+
+  /// เริ่ม ranging ให้ region ที่เพิ่งเข้า — **เส้นทางกู้สำหรับรอบที่ระบบปลุกแอป
+  /// ขึ้นมาโดยไม่มี UI**
+  ///
+  /// ## ทำไมต้องมี ทั้งที่ `applyParsedRegions()` เริ่ม ranging ให้อยู่แล้ว
+  ///
+  /// **region monitoring รอดข้าม process ให้เอง แต่ ranging ไม่รอด** — เมื่อระบบ
+  /// ปลุกแอปที่ถูกฆ่าไปแล้วด้วย region event `applyParsedRegions()` จะยังไม่เคยถูก
+  /// เรียกในรอบนั้น (มันถูกเรียกจากฝั่ง Dart ผ่าน `startIBeaconMonitoring` เท่านั้น
+  /// ซึ่งต้องมี Flutter engine) ผลคือไม่มีใครเริ่ม ranging เลย → `didRange` ไม่ยิง
+  /// → **ชั้นที่ 2 ไม่มี sample แม้แต่ตัวเดียวในเคสที่ ADR-21 ทั้งฉบับมีอยู่เพื่อรองรับ**
+  ///
+  /// ## ทำไมต้องเติม `constraintsByIdentifier` ด้วย ไม่ใช่แค่เรียก `startRanging`
+  ///
+  /// `didRange` แปลง `CLBeaconIdentityConstraint` กลับเป็น `regionIdentifier` ผ่าน
+  /// ตารางนี้ตัวเดียว — ในรอบที่ถูกปลุก ตารางจะ**ว่างเปล่า** เพราะไม่มีใครเรียก
+  /// `applyParsedRegions()` ถ้าไม่เติม `didRange` จะ `return` ที่ `guard` ตัวแรก
+  /// แล้วชั้นที่ 2 ก็ตายเงียบอยู่ดี ทั้งที่ ranging เดินอยู่จริง
+  ///
+  /// ค่าที่เติมมาจาก `CLBeaconRegion.beaconIdentityConstraint` ของ region ที่ระบบ
+  /// ส่งมาเอง — **ไม่ใช่การเดา** เป็นค่าเดียวกับที่ใช้ตอนลงทะเบียน monitoring ไว้
+  ///
+  /// ## สิ่งที่ยังไม่ได้ทำและต้องรู้
+  ///
+  /// **ไม่มีการเรียก `stopRangingBeacons` คู่กันใน `didExitRegion`** — เมธอดนั้นอยู่ใน
+  /// รายการห้ามแตะของรอบนี้ · ในทางปฏิบัติสถานะปัจจุบันไม่แย่ลงกว่าเดิม เพราะ
+  /// `applyParsedRegions()` ก็เปิด ranging ค้างไว้ตลอดอยู่แล้วตั้งแต่ก่อนรอบนี้
+  /// แต่ **Apple แนะนำให้หยุด ranging เมื่อออกจาก region** (`apple_proximity_ranging.md`
+  /// หัวข้อ 9) จึงเป็นหนี้ที่ต้องใช้คืนใน ADR รอบถัดไปพร้อมกับการวัดผลแบตเตอรี่จริง
+  private func ensureRangingStarted(for region: CLRegion) {
+    guard let beaconRegion = region as? CLBeaconRegion else { return }
+
+    let constraint = beaconRegion.beaconIdentityConstraint
+    if constraintsByIdentifier[region.identifier] == nil {
+      constraintsByIdentifier[region.identifier] = constraint
+    }
+    locationManager.startRangingBeacons(satisfying: constraint)
   }
 
   /// เช่นเดียวกับ `didEnterRegion` แต่ตอน "ออก" จากโซน

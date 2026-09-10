@@ -3938,6 +3938,25 @@ state แม้แต่ฟิลด์เดียว** (ADR-19 6(ง))
 ฉีดผ่าน `init`** เหมือน Kotlin **ห้ามเรียก `Date()` ในคลาสนี้** · เทสต์ port เคสต่อเคสชื่อตรงกับฝั่ง Dart ·
 invariant ของ ADR-19 6(ช) (ห้าม emit `unknown` ออก public API) ต้องมีเทสต์บังคับเหมือนกัน
 
+### 2.1 เริ่ม ranging บนเส้นทางที่ถูกปลุกโดยไม่มี UI — **อนุมัติเพิ่มเติม 10 ก.ย. 2026**
+
+รอบแรกของ ADR นี้ห้ามแตะ `didEnterRegion` ทำให้ชั้นที่ 2 มี sample ไหลเข้า**เฉพาะหลังฝั่ง Dart เรียก
+`startIBeaconMonitoring`** เท่านั้น — คือทำงานได้เฉพาะตอนเปิดแอปค้างไว้ ซึ่ง**พิสูจน์สัญญาข้อ 1(ข)
+ของ ADR นี้ไม่ได้เลย** เพราะ **region monitoring รอดข้าม process ให้เอง แต่ ranging ไม่รอด**: ในรอบที่
+ระบบปลุกแอปที่ถูกฆ่าไปแล้ว `applyParsedRegions()` ยังไม่เคยถูกเรียก จึงไม่มีใครเริ่ม ranging → `didRange`
+ไม่ยิง → ชั้นที่ 2 ไม่มี sample แม้แต่ตัวเดียว
+
+**ตัดสินใจแล้ว (เจ้าของงานอนุมัติ):** เพิ่ม `startRangingBeacons(satisfying:)` ใน `didEnterRegion`
+**หลัง** `emitRegionStateIfChanged(.enter, …)` เสมอ — เพิ่ม call ใหม่อย่างเดียว **ไม่แก้บรรทัดใดของ
+ตรรกะ emit เดิม** (หลักการเดียวกับที่ ADR-20 หัวข้อ 1 ใช้กับ `BeaconScanReceiver`: ชั้นที่ 2 ต่อท้ายเสมอ
+ห้ามแทรกกลาง) · ต้องเติม `constraintsByIdentifier` จาก `CLBeaconRegion.beaconIdentityConstraint`
+ที่ระบบส่งมาด้วย ไม่งั้น `didRange` จะ `return` ที่ `guard` ตัวแรกเพราะตารางว่างในรอบที่ถูกปลุก
+
+⚠️ **หนี้ที่เกิดขึ้นพร้อมกัน: ไม่มี `stopRangingBeacons` คู่กันใน `didExitRegion`** (เมธอดนั้นยังอยู่ใน
+รายการห้ามแตะ) สถานะไม่แย่ลงกว่าเดิมเพราะ `applyParsedRegions()` ก็เปิด ranging ค้างไว้ตลอดอยู่แล้ว
+ตั้งแต่ก่อน ADR นี้ **แต่ Apple แนะนำให้หยุด ranging เมื่อออกจาก region** (`apple_proximity_ranging.md`
+หัวข้อ 9) — ต้องใช้คืนใน ADR รอบถัดไปพร้อมการวัดผลแบตเตอรี่จริง ห้ามปิดเป็น "ทำแล้ว"
+
 ### 3. state ข้าม process — `UserDefaults` + key จาก `(uuid, major, minor)`
 
 iOS ฆ่า/relaunch process เหมือน Android ถ้าเก็บใน memory อย่างเดียว หน้าต่าง/dwell จะรีเซ็ตทุกครั้งที่ถูกปลุก
