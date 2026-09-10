@@ -183,6 +183,27 @@ import beacon_kit_ios
   /// "during this or previous launches of your application" จะอยู่ในเซ็ตนี้)
   /// ถ้าบรรทัด launch แสดง `monitoredRegions=[]` แปลว่าไม่มีอะไรให้ iOS ปลุกแอป
   /// ตั้งแต่แรก ซึ่งเป็นคนละสาเหตุกับ "ปลุกแล้วแต่ event หาย" โดยสิ้นเชิง
+  /// git short SHA ของซอร์สที่ build บิลด์นี้ — ประทับลง `Info.plist` ตอน build
+  /// ด้วย build phase "Stamp git SHA" (`Runner.xcodeproj`)
+  ///
+  /// ## ทำไมไฟล์หลักฐานต้องบอกเองว่ามาจากบิลด์ไหน
+  ///
+  /// รอบทดสอบฝั่ง Android เมื่อ 9 ก.ย. 2026 เสียเวลาไปทั้งช่วงเพราะ **แฮชของ APK
+  /// ที่ติดตั้งอยู่บนเครื่องไม่ตรงกับบิลด์ใดที่สร้างในเซสชันนั้นเลย** ต้องไล่ย้อนจาก
+  /// เนื้อ log ("มีบรรทัด `event=notification` ไหม") เพื่ออนุมานว่าเป็นบิลด์หลังคอมมิต
+  /// ไหน — เป็นการอนุมาน ไม่ใช่หลักฐาน
+  ///
+  /// บรรทัด `launch` เป็นที่ที่ถูกต้องเพราะเขียนทุกครั้งที่ process เกิด และค่านี้คงที่
+  /// ตลอดอายุ process (เหตุผลเดียวกับที่ฝั่ง Android วาง `model`/`os` ไว้ที่บรรทัดนี้
+  /// บรรทัดเดียว ไม่ใช่ทุกบรรทัด)
+  ///
+  /// `unknown` = build จากที่ที่ไม่มี git · **`-dirty` ต่อท้าย = ตอน build มีไฟล์ที่ยัง
+  /// ไม่ commit ห้ามอ้างผลรอบนั้นว่าตรงกับคอมมิตใด**
+  ///
+  /// ⚠️ **ฝั่ง Android ยังไม่มีฟิลด์นี้** — เป็นหนี้ที่ต้องใช้คืน ไม่ใช่ความตั้งใจให้ต่างกัน
+  static let gitShortSHA: String =
+    (Bundle.main.object(forInfoDictionaryKey: "GitShortSHA") as? String) ?? "unknown"
+
   private func logLaunch(restoredRegionIdentifiers: [String]) {
     BackgroundEvidenceLog.shared.append(
       line: BackgroundEvidenceLog.line(
@@ -200,7 +221,8 @@ import beacon_kit_ios
         // โดยเฉพาะ ซึ่งคือสิ่งที่ B5 ต้องพิสูจน์
         rawSignals:
           "\(rawSignalSummary(receiverEntry: false)) "
-          + "monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))]"
+          + "monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))] "
+          + "build=\(Self.gitShortSHA)"
       )
     )
   }
