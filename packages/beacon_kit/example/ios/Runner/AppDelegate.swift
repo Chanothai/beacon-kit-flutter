@@ -167,8 +167,16 @@ import beacon_kit_ios
     }
 
     // นับ `didFailRangingFor` ให้เห็นเป็นบรรทัดจริง — **ห้ามอนุมานจากการไม่มีบรรทัด**
+    // (รอบเดินจริง 10 ก.ย. 2026 ได้ 0 บรรทัด ซึ่งเป็น**ผลลัพธ์** ไม่ใช่ความว่างเปล่า:
+    // พิสูจน์ว่า `didFailRangingFor` ไม่ใช่สัญญาณว่าบีคอนหาย — ADR-21 หัวข้อ 8)
     BackgroundProximityMonitor.setRangingFailureObserver { [weak self] regionIdentifier in
       self?.recordRangingFailure(regionIdentifier: regionIdentifier)
+    }
+
+    // ชีพจรของ ranging (ADR-21 หัวข้อ 9 "ของเพิ่ม") — บรรทัด `rangetick` อย่างมากทุก
+    // 30 วินาทีต่อ process **ไม่ยิง notification** ถ้าไม่ต้องการแล้วลบทั้งบล็อกนี้ได้
+    BackgroundProximityMonitor.setRangeTickObserver { [weak self] event in
+      self?.recordRangeTick(event)
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -223,6 +231,15 @@ import beacon_kit_ios
           "\(rawSignalSummary(receiverEntry: false)) "
           + "monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))] "
           + "build=\(Self.gitShortSHA)"
+          // `rangeCb=0` เป็น **ข้อเท็จจริงเชิงโครงสร้าง ไม่ใช่ค่าที่อ่านมา**: บรรทัดนี้
+          // เขียนใน `didFinishLaunchingWithOptions` ซึ่งจบก่อน CoreLocation จะเรียก
+          // `didRange` ได้เสมอ — มีไว้เป็น **เส้นฐานของ process** ให้บรรทัด
+          // `rangetick`/`proximity` ที่ตามมาถูกอ่านเป็น "เพิ่มจาก 0" ได้โดยไม่ต้องเดา
+          // และเป็นตัวบอกว่าบิลด์นี้มีคอลัมน์ตัวนับแล้ว (ต่างจาก log รุ่นก่อน 10 ก.ย.)
+          //
+          // `inArray`/`unknown` เป็น `n/a` เพราะบรรทัด launch **ไม่ได้พูดถึง key ใด**
+          // — `n/a` ไม่ใช่ค่าว่าง: อ่านออกได้ว่า "ตอบไม่ได้ที่บรรทัดนี้"
+          + Self.rangeCounterSuffix(rangeCb: 0, inArray: nil, unknown: nil)
       )
     )
   }
@@ -391,7 +408,69 @@ import beacon_kit_ios
     parts += " reason=\(event.reason.wireName)"
     parts += " beacon=\(event.beacon)"
     parts += " store=\(event.storeError?.replacingOccurrences(of: " ", with: "_") ?? "ok")"
+    parts += Self.rangeCounterSuffix(
+      rangeCb: event.rangeCallbackCount,
+      inArray: event.inArrayCount,
+      unknown: event.unknownCount
+    )
     return parts
+  }
+
+  /// ตัวนับ 3 ตัวของ **ADR-21 หัวข้อ 9** ในรูปคอลัมน์สัญญาณดิบ — **pure function**
+  ///
+  /// ```
+  ///  rangeCb=41 inArray=12 unknown=3
+  /// ```
+  ///
+  /// **ทั้งสามตัวต้องอยู่ด้วยกันและห้ามรวมเป็นตัวเดียว** เพราะบน iOS "ไม่มี sample"
+  /// มีสองความหมายที่แก้คนละทางเลย:
+  /// - `rangeCb` ไม่ขยับ = **ranging ไม่เดิน** (process ถูก suspend / ไม่มีใครเรียก
+  ///   `startRangingBeacons` ในรอบที่ถูกปลุก) → แก้ที่ lifecycle
+  /// - `rangeCb` ขยับถี่ ~1 Hz แต่ `inArray` ห่าง = **CoreLocation ถอดบีคอนออกจาก
+  ///   array เอง** → `stale` 33% ของรอบ 10 ก.ย. คือพฤติกรรมของ OS ไม่ใช่การขาด callback
+  /// - `unknown` สูง = คำตอบอยู่ที่กฎ "`unknown` ไม่ต่ออายุ `lastSampleAt`"
+  ///   (ADR-19 6(ง)) **ไม่ใช่ที่ตัวเลข `staleAfter`** — ข้อนี้สำคัญกว่าการไปปรับ
+  ///   `staleAfter` มั่ว ๆ (ADR-21 หัวข้อ 9 สมมติฐาน B)
+  ///
+  /// - Parameters:
+  ///   - inArray: `nil` = บรรทัดนี้ไม่ได้พูดถึง key ใด (เช่นบรรทัด `launch`) เขียน
+  ///     เป็น `n/a` **ห้ามเขียน `0`** ซึ่งแปลว่า "นับแล้วได้ศูนย์" คนละความหมายกัน
+  ///   - unknown: เช่นเดียวกับ [inArray]
+  static func rangeCounterSuffix(rangeCb: Int, inArray: Int?, unknown: Int?) -> String {
+    var parts = ""
+    parts += " rangeCb=\(rangeCb)"
+    parts += " inArray=\(inArray.map(String.init) ?? "n/a")"
+    parts += " unknown=\(unknown.map(String.init) ?? "n/a")"
+    return parts
+  }
+
+  /// เขียนบรรทัด `rangetick` — **ของเพิ่มจากรอบ 10 ก.ย. 2026 (ADR-21 หัวข้อ 9)**
+  ///
+  /// ตอบคำถามเดียวที่บรรทัด transition ตอบไม่ได้: **"หน้าต่างจริงหลังถูกปลุกยาวแค่ไหน"**
+  /// — ถ้า process ถูก suspend/ฆ่าเงียบ ๆ ตอนบีคอนนิ่งอยู่ บรรทัดสุดท้ายของ process
+  /// นั้นจะเป็น transition เมื่อนานมาแล้ว แล้ว "เวลาที่ ranging หยุดจริง" จะแยกไม่ออก
+  /// จาก "เวลาที่ความใกล้หยุดเปลี่ยน" (ความกำกวมชนิดเดียวกับ `rangefail` 0 บรรทัด)
+  ///
+  /// **ไม่ยิง notification** — เป็นข้อมูลของผู้ทดสอบ ไม่ใช่เหตุการณ์ที่ผู้ใช้ต้องรู้
+  ///
+  /// `inArray`/`unknown` ของบรรทัดนี้เป็น **ผลรวมทุก key ใน process** ต่างจากบรรทัด
+  /// `proximity` ที่เป็นของ key เดียว — ตัวอ่านแยกได้จากคอลัมน์ `event=` (ดู kdoc ของ
+  /// `BeaconKitRangeTickEvent`)
+  private func recordRangeTick(_ event: BeaconKitRangeTickEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "rangetick",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + Self.rangeCounterSuffix(
+            rangeCb: event.rangeCallbackCount,
+            inArray: event.inArrayCount,
+            unknown: event.unknownCount
+          )
+      )
+    )
   }
 
   /// key ของ cooldown — ระดับ **บีคอนหนึ่งตัวในหนึ่ง region**

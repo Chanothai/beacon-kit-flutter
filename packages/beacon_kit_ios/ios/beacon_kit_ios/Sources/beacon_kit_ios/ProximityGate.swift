@@ -60,15 +60,37 @@ public enum ProximityTransitionReason: String, Codable {
   /// `to` เป็น `nil` เสมอเมื่อ reason นี้
   case stale
 
+  /// ระบบประกาศว่าอุปกรณ์ **ออกจาก region** แล้ว (`didExitRegion`) — สถานะชั้นที่ 2
+  /// ของทุก key ใน region นั้นถูกล้างทิ้ง `to` เป็น `nil` เสมอเหมือน [stale]
+  ///
+  /// ⚠️ **case นี้มีเฉพาะฝั่ง Swift — ไม่มีใน `proximity_gate.dart` (reference) และ
+  /// ไม่มีฝั่ง Kotlin · ห้ามเรียกว่า "parity กับ Android" เด็ดขาด** ฝั่ง Android ล้าง
+  /// store ของชั้น 2 ตอน `monitorStop` ของ example app **ไม่ใช่ตอน region exit** และ
+  /// ไม่มี reason ตัวนี้อยู่จริงเลย
+  ///
+  /// **เป็นการเบี่ยงจาก reference โดยตั้งใจ** ด้วยเหตุผลที่เป็นความจริงเฉพาะ iOS:
+  /// iOS มี boundary event ที่ระบบยืนยันเอง (`didExitRegion`) ซึ่งเชื่อถือได้และมา
+  /// ถึงแม้ในรอบที่ process เพิ่งถูกปลุก — ต่างจากอีกสองแพลตฟอร์มที่ไม่มีสัญญาณคู่นี้
+  /// ในชั้นเดียวกัน (รอบเดินจริง 10 ก.ย. 2026 พิสูจน์ว่า `didFailRangingFor` ไม่ใช่
+  /// สัญญาณว่าบีคอนหาย: 0 บรรทัดทั้งรอบ ทั้งที่ iOS ประกาศ `exit` จริง —
+  /// `docs/test-data/2026-09-10_ios_proximity_walk.log`)
+  ///
+  /// **เป็นหนี้ ไม่ใช่ของแถม:** ต้องยกกฎนี้ขึ้นไปที่ `proximity_gate.dart` แล้วไหลลง
+  /// ทั้งสอง port ในรอบถัดไป ไม่งั้นจะมี **สามภาษาสามพฤติกรรม** (ADR-21 หัวข้อ 8)
+  case regionExit
+
   public var wireName: String { rawValue }
 }
 
 /// ผลลัพธ์ตอน bucket ของ key หนึ่งเปลี่ยนจริง — คืนจาก [ProximityGate.push] /
-/// [ProximityGate.sweepStale] **เฉพาะตอนเปลี่ยนจริงเท่านั้น** ไม่ใช่ทุก sample
+/// [ProximityGate.sweepStale] / [ProximityGate.clearStates(matchingPrefix:emitting:)]
+/// **เฉพาะตอนเปลี่ยนจริงเท่านั้น** ไม่ใช่ทุก sample
 ///
 /// `to == nil` แปลว่า "gate ไม่มีคำตอบให้แล้ว" **ไม่ใช่ [ProximityBucket.far]** —
-/// เกิดได้ทางเดียวคือ [ProximityTransitionReason.stale] ผู้เรียกที่อยากรู้ว่า
-/// "ไกลแล้วจริง ๆ" ต้องเช็ค `to == .far` ตรง ๆ ไม่ใช่เช็คว่าไม่ใช่ near/immediate
+/// เกิดได้สองทางคือ [ProximityTransitionReason.stale] และ
+/// [ProximityTransitionReason.regionExit] (ตัวหลังมีเฉพาะฝั่ง Swift ดู kdoc ของ case
+/// นั้น) ผู้เรียกที่อยากรู้ว่า "ไกลแล้วจริง ๆ" ต้องเช็ค `to == .far` ตรง ๆ ไม่ใช่
+/// เช็คว่าไม่ใช่ near/immediate
 public struct ProximityTransition: Equatable {
   public init(
     key: String,
@@ -328,12 +350,52 @@ public final class ProximityGate {
   /// dwell/หน้าต่างเก่าจากคนละรอบการเฝ้าจะถูกนำมาสานต่อทันทีเหมือนข้อมูลต่อเนื่อง
   /// ซึ่งเป็นบั๊กชนิดเดียวกับที่กฎ stale ของ ADR-19 6(ฉ) มีไว้ป้องกัน
   public func removeStates(matchingPrefix prefix: String) {
+    // ผลลัพธ์ถูกทิ้งโดยตั้งใจ: `emitting: nil` แปลว่า "ล้างเงียบ ๆ" อยู่แล้ว จึงไม่มี
+    // transition ให้ทิ้งตั้งแต่แรก (ดู [clearStates(matchingPrefix:emitting:)])
+    _ = clearStates(matchingPrefix: prefix, emitting: nil)
+  }
+
+  /// ล้าง state ของทุก key ที่ขึ้นต้นด้วย [prefix] **พร้อมประกาศ transition** ให้ทุก
+  /// key ที่ **เคย confirm bucket มาก่อน** — key ที่ยังค้าง dwell อยู่ถูกล้าง**เงียบ ๆ**
+  /// ไม่มี transition (หลักการเดียวกับ [sweepStale] เป๊ะ: ไม่เคยประกาศว่า "ใกล้"
+  /// ก็ไม่มีอะไรให้ประกาศว่า "หลุด")
+  ///
+  /// ผู้เรียกจริงมีรายเดียวคือ `IBeaconRangingManager.didExitRegion` ด้วย
+  /// [ProximityTransitionReason.regionExit] — **อ่าน kdoc ของ case นั้นก่อนใช้ที่อื่น**
+  /// เพราะมันเป็น reason ที่มีเฉพาะฝั่ง Swift (เบี่ยงจาก reference โดยตั้งใจ)
+  ///
+  /// คืน transition เรียงตามลำดับที่เห็น key ครั้งแรก เหมือน [sweepStale]
+  public func clearStates(
+    matchingPrefix prefix: String,
+    emitting reason: ProximityTransitionReason
+  ) -> [ProximityTransition] {
+    return clearStates(matchingPrefix: prefix, emitting: Optional(reason))
+  }
+
+  /// - Parameter reason: `nil` = ล้างเงียบ ๆ ไม่คืน transition ใด ๆ เลย
+  private func clearStates(
+    matchingPrefix prefix: String,
+    emitting reason: ProximityTransitionReason?
+  ) -> [ProximityTransition] {
     let removed = keyOrder.filter { $0.hasPrefix(prefix) }
-    guard !removed.isEmpty else { return }
+    guard !removed.isEmpty else { return [] }
+
+    var transitions: [ProximityTransition] = []
     for key in removed {
-      states.removeValue(forKey: key)
+      let state = states.removeValue(forKey: key)
+      guard let reason = reason, let hadConfirmed = state?.confirmedBucket else { continue }
+      transitions.append(
+        ProximityTransition(
+          key: key,
+          from: hadConfirmed,
+          to: nil,
+          reason: reason,
+          medianMeters: nil
+        )
+      )
     }
     keyOrder.removeAll { $0.hasPrefix(prefix) }
+    return transitions
   }
 
   /// ป้อน sample หนึ่งตัวของ [key] — คืน [ProximityTransition] **เฉพาะตอน bucket

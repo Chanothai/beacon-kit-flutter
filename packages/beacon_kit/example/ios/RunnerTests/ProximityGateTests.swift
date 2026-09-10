@@ -1027,7 +1027,10 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
     reason: ProximityTransitionReason = .closer,
     major: UInt16? = 1,
     minor: UInt16? = 42,
-    storeError: String? = nil
+    storeError: String? = nil,
+    rangeCallbackCount: Int = 41,
+    inArrayCount: Int = 12,
+    unknownCount: Int = 3
   ) -> BeaconKitProximityChangedEvent {
     return BeaconKitProximityChangedEvent(
       regionIdentifier: "bigc-ladprao",
@@ -1039,14 +1042,21 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
       reason: reason,
       medianMeters: nil,
       timestampMillis: 1_757_000_000_000,
-      storeError: storeError
+      storeError: storeError,
+      rangeCallbackCount: rangeCallbackCount,
+      inArrayCount: inArrayCount,
+      unknownCount: unknownCount
     )
   }
 
   func testHappyPathSuffixHasEveryFieldInOrder() {
     let suffix = AppDelegate.proximityRawSignalsSuffix(makeEvent())
 
-    XCTAssertEqual(suffix, " bucket=near from=far reason=closer beacon=1/42 store=ok")
+    XCTAssertEqual(
+      suffix,
+      " bucket=near from=far reason=closer beacon=1/42 store=ok"
+        + " rangeCb=41 inArray=12 unknown=3"
+    )
   }
 
   /// **ทุกค่าที่ "ไม่มี" ต้องอ่านออกได้ ห้ามเป็นช่องว่าง** — คอลัมน์สัญญาณดิบคั่น
@@ -1060,7 +1070,11 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
       makeEvent(from: nil, to: nil, reason: .stale, major: nil, minor: nil)
     )
 
-    XCTAssertEqual(suffix, " bucket=n/a from=none reason=stale beacon=n/a store=ok")
+    XCTAssertEqual(
+      suffix,
+      " bucket=n/a from=none reason=stale beacon=n/a store=ok"
+        + " rangeCb=41 inArray=12 unknown=3"
+    )
   }
 
   func testStoreErrorIsReportedAndSpacesAreReplaced() {
@@ -1076,11 +1090,12 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
   }
 
   /// สัญญาเชิงโครงสร้างของ suffix — ตรวจครบทุกเคสที่เป็นไปได้ของ `to`/`from`/
-  /// `reason`/`beacon`/`store` พร้อมกัน: ขึ้นต้นด้วยช่องว่าง 1 ตัว, มีครบ 5 คู่,
-  /// ทุกคู่เป็น `key=value` ที่ value ไม่ว่าง
+  /// `reason`/`beacon`/`store` พร้อมกัน: ขึ้นต้นด้วยช่องว่าง 1 ตัว, มีครบ 8 คู่
+  /// (5 คู่เดิม + ตัวนับ 3 ตัวของ ADR-21 หัวข้อ 9), ทุกคู่เป็น `key=value` ที่ value
+  /// ไม่ว่าง — `reason` รวม `regionExit` ที่เพิ่มเข้ามาหลังรอบเดินจริง 10 ก.ย. 2026 ด้วย
   func testSuffixShapeHoldsForEveryCombination() {
     let buckets: [ProximityBucket?] = [nil, .immediate, .near, .far]
-    let reasons: [ProximityTransitionReason] = [.closer, .farther, .stale]
+    let reasons: [ProximityTransitionReason] = [.closer, .farther, .stale, .regionExit]
     let storeErrors: [String?] = [nil, "save:serialize-failed", "init:suite-unavailable"]
 
     for to in buckets {
@@ -1104,7 +1119,7 @@ final class ProximityRawSignalsSuffixTests: XCTestCase {
               let pairs = suffix.dropFirst().split(separator: " ", omittingEmptySubsequences: false)
               XCTAssertEqual(
                 pairs.map { String($0.split(separator: "=", maxSplits: 1)[0]) },
-                ["bucket", "from", "reason", "beacon", "store"],
+                ["bucket", "from", "reason", "beacon", "store", "rangeCb", "inArray", "unknown"],
                 "ลำดับและชื่อคอลัมน์ต้องคงที่: \"\(suffix)\""
               )
               for pair in pairs {
@@ -1177,5 +1192,366 @@ final class ProximityBucketMappingTests: XCTestCase {
     XCTAssertEqual(IBeaconRangingManager.proximityBucket(.immediate), .immediate)
     XCTAssertEqual(IBeaconRangingManager.proximityBucket(.near), .near)
     XCTAssertEqual(IBeaconRangingManager.proximityBucket(.far), .far)
+  }
+}
+
+// MARK: - ลำดับ sweep ใหม่หลังรอบเดินจริง 10 ก.ย. 2026 (ADR-21 หัวข้อ 8)
+
+/// key ของ **อีก region หนึ่ง** — มีไว้พิสูจน์ว่า `regionExit` ไม่แตะข้ามบ้าน
+private let otherRegionKey = ProximityKeyCodec.key(
+  regionIdentifier: "bigc-rama4",
+  uuid: "7777772e-6b6b-6d63-6e2e-636f6d000001",
+  major: 1,
+  minor: 42
+)
+
+private let regionPrefix = "bigc-ladprao\(ProximityKeyCodec.separator)"
+
+/// เลียนแบบ **ลำดับใหม่** ของ `IBeaconRangingManager.runProximityLayer` หนึ่งรอบ:
+/// push ทุกตัวที่อยู่ใน array ให้ครบก่อน **แล้วค่อย `sweepStale()` เสมอ แม้ array ว่าง**
+///
+/// เทสต์ในกลุ่มนี้จงใจไม่แตะ `CLLocationManager` เลย — สิ่งที่ต้องล็อกคือ**ลำดับ**
+/// ซึ่งเป็นตรรกะล้วน ๆ ที่นาฬิกาปลอมพิสูจน์ได้ 100% (ADR-21 หัวข้อ 4: ไม่มี `Timer`
+/// ใน SDK · จังหวะจริงของ CoreLocation พิสูจน์ได้เฉพาะบนเครื่องจริงเท่านั้น)
+private func runOneCallback(
+  _ gate: ProximityGate,
+  samples: [(key: String, bucket: ProximityBucket?)]
+) -> [ProximityTransition] {
+  var pending: [ProximityTransition] = []
+  for sample in samples {
+    if let transition = gate.push(key: sample.key, bucket: sample.bucket) {
+      pending.append(transition)
+    }
+  }
+  pending.append(contentsOf: gate.sweepStale())
+  return pending
+}
+
+/// **ที่มาของทั้งกลุ่ม: `docs/test-data/2026-09-10_ios_proximity_walk.log`**
+///
+/// ไฟล์นั้นมี `event=rangefail` **0 บรรทัด** ทั้งที่ผู้ทดสอบเดินพ้นสัญญาณสองนาทีและ
+/// iOS ประกาศ `exit` จริง — แปลว่า **จุด sweep ที่สองของ ADR-21 หัวข้อ 4
+/// (`didFailRangingFor`) ไม่เคยทำงานเลย** สิ่งที่เหลือคือ `didRange` ซึ่งอาจยิงมา
+/// พร้อม array ที่ไม่มีบีคอนตัวที่หายไป (หรือว่างเปล่า) จึง**ต้อง sweep ทุกครั้ง**
+final class ProximityGateSweepOrderTests: XCTestCase {
+
+  /// **เคสหลักของรอบนี้:** `didRange` ที่ array ว่าง N ครั้ง ต้องทำให้เกิด `stale`
+  /// ภายใน `staleAfterMillis` — ไม่ต้องมี `didFailRangingFor` ไม่ต้องมี `Timer`
+  ///
+  /// ถ้าใครย้าย `sweepStale()` กลับไปไว้หลัง `guard beacons.isEmpty` หรือเลิกเรียก
+  /// มันตอน array ว่าง เทสนี้จะแดงทันที
+  func testEmptyArrayCallbacksProduceStaleWithinStaleAfter() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    XCTAssertNotNil(gate.push(key: sampleKey, bucket: .far), "ยืนยัน far ที่ t=0")
+
+    // callback ที่ array ว่างเปล่า ห่างกันวินาทีละครั้ง จนกว่าจะมีอะไรออกมา
+    // (เพดาน 15 รอบ = 15 วินาที ซึ่งเกิน staleAfter 10 วินาทีไปมากพอที่ "ไม่เกิดเลย"
+    // จะแปลว่าบั๊กจริง ไม่ใช่เทสต์นับรอบไม่พอ)
+    var transitions: [ProximityTransition] = []
+    var elapsedMillis: Int64 = 0
+    for _ in 0..<15 {
+      clock.advance(millis: 1_000)
+      elapsedMillis += 1_000
+      let batch = runOneCallback(gate, samples: [])
+      transitions.append(contentsOf: batch)
+      if !batch.isEmpty { break }
+    }
+
+    XCTAssertEqual(transitions.count, 1, "ต้องได้ stale พอดีหนึ่งใบ ไม่ใช่ซ้ำทุก callback")
+    XCTAssertEqual(transitions.first?.from, .far)
+    XCTAssertNil(transitions.first?.to, "'วัดไม่ได้' ไม่ใช่ 'ไกล'")
+    XCTAssertEqual(transitions.first?.reason, .stale)
+    XCTAssertEqual(
+      elapsedMillis, 11_000,
+      "callback แรกที่เลย staleAfter (10s) คือวินาทีที่ 11 — ไม่ใช่ 'ไม่เกิดเลย'"
+    )
+  }
+
+  /// เรียกซ้ำหลังจากนั้นต้องเงียบสนิท — บรรทัด `stale` ที่ยิงทุก callback จะกลาย
+  /// เป็นสแปมในไฟล์หลักฐานจนอ่านไม่ออกว่าเกิดอะไรขึ้นจริง
+  func testEmptyArrayCallbacksAfterStaleStaySilent() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+    clock.advance(millis: 11_000)
+    XCTAssertEqual(runOneCallback(gate, samples: []).count, 1)
+
+    for _ in 0..<5 {
+      clock.advance(millis: 30_000)
+      XCTAssertTrue(runOneCallback(gate, samples: []).isEmpty, "หลุดไปแล้วต้องไม่ยิงซ้ำ")
+    }
+  }
+
+  /// **ลำดับกลับด้าน (push ก่อน sweep) แก้บั๊กอะไรจริง ๆ**
+  ///
+  /// ในไฟล์หลักฐานรอบ 10 ก.ย. มีคู่บรรทัดที่มิลลิวินาทีเดียวกันของ**บีคอนตัวเดียวกัน**:
+  /// ```
+  /// 13:41:25.073 ... bucket=n/a from=far  reason=stale   beacon=9903/3
+  /// 13:41:25.073 ... bucket=far from=none reason=farther beacon=9903/3
+  /// ```
+  /// นั่นคืออาการของลำดับเดิม (sweep **ก่อน** push): sweep ยิง `stale` แล้ว push ของ
+  /// รอบเดียวกันเริ่ม state ใหม่จนยืนยัน `far` ได้ทันที = สอง transition ต่อหนึ่ง
+  /// callback ของ key เดียว
+  ///
+  /// ลำดับใหม่ให้ `push` เป็นผู้ประกาศ `stale` เอง (แล้ว**ทิ้ง sample ของรอบนั้น**
+  /// ตาม ADR-19 หัวข้อ 7) ส่วน sweep ที่ตามมาเห็น state ที่รีเซ็ตแล้วจึงเงียบ
+  func testKeyReportedInTheSameCallbackEmitsOnlyOneTransition() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+    clock.advance(millis: 11_000)
+
+    let batch = runOneCallback(gate, samples: [(sampleKey, .far)])
+
+    XCTAssertEqual(batch.count, 1, "หนึ่ง callback ของ key เดียว = หนึ่ง transition")
+    XCTAssertEqual(batch.first?.reason, .stale)
+    XCTAssertNil(batch.first?.to)
+  }
+
+  /// key ที่ **ยังรายงานอยู่** ต้องไม่ถูก sweep ในรอบเดียวกัน แม้ key อื่นจะหลุด —
+  /// นี่คือเหตุผลที่ `sweepStale()` ต้องอยู่ **หลัง** loop: `lastSampleAt` ของตัวที่
+  /// เพิ่งรายงานต้องสดแล้วก่อนถูกกวาด
+  func testFreshlyReportedKeySurvivesWhileMissingKeyIsSweptInTheSameCallback() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+    _ = gate.push(key: otherKey, bucket: .far)
+    XCTAssertEqual(gate.currentBucket(key: sampleKey), .far)
+    XCTAssertEqual(gate.currentBucket(key: otherKey), .far)
+
+    // เดินเวลาเป็นช่วง ๆ โดยมีแต่ sampleKey ที่ยังอยู่ใน array (otherKey หายไปเฉย ๆ
+    // — เคสที่ Apple ถอดบีคอนออกจาก array ซึ่งตัวนับ `inArray` มีไว้วัดพอดี)
+    var swept: [ProximityTransition] = []
+    for _ in 0..<3 {
+      clock.advance(millis: 5_000)
+      swept.append(contentsOf: runOneCallback(gate, samples: [(sampleKey, .far)]))
+    }
+
+    XCTAssertEqual(swept.count, 1, "เฉพาะ key ที่หายไปเท่านั้นที่หลุด")
+    XCTAssertEqual(swept.first?.key, otherKey)
+    XCTAssertEqual(swept.first?.reason, .stale)
+    XCTAssertEqual(
+      gate.currentBucket(key: sampleKey), .far,
+      "key ที่รายงานทุกรอบต้องไม่ถูกกวาดแม้เวลาผ่านไปเกิน staleAfter หลายเท่า"
+    )
+  }
+}
+
+// MARK: - regionExit (ADR-21 หัวข้อ 8)
+
+/// ⚠️ **`regionExit` ไม่ใช่ parity กับ Android** — ฝั่งนั้นไม่มี reason นี้จริง ๆ
+/// (ล้าง store ตอน `monitorStop` ของ example app ไม่ใช่ตอน region exit) และ
+/// `proximity_gate.dart` ก็ไม่มี · เป็นการเบี่ยงจาก reference **โดยตั้งใจ** เพราะ
+/// iOS มี boundary event ที่ระบบยืนยันเอง — และเป็น**หนี้**ที่ต้องยกขึ้นไปที่ Dart
+/// แล้วไหลลงทั้งสอง port ในรอบถัดไป ไม่งั้นจะมีสามภาษาสามพฤติกรรม
+final class ProximityGateRegionExitTests: XCTestCase {
+
+  func testRegionExitEmitsForConfirmedKeysAndRemovesEveryKeyOfThatRegion() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+    _ = gate.push(key: otherKey, bucket: .far)
+    XCTAssertEqual(gate.currentBucket(key: sampleKey), .far)
+    XCTAssertEqual(gate.currentBucket(key: otherKey), .far)
+
+    let transitions = gate.clearStates(matchingPrefix: regionPrefix, emitting: .regionExit)
+
+    XCTAssertEqual(transitions.count, 2)
+    XCTAssertEqual(
+      transitions.map(\.key), [sampleKey, otherKey],
+      "เรียงตามลำดับที่เห็น key ครั้งแรก เหมือน sweepStale()"
+    )
+    for transition in transitions {
+      XCTAssertEqual(transition.from, .far)
+      XCTAssertNil(transition.to, "'ออกจาก region' ไม่ใช่ 'ไกล' — to ต้องเป็น nil")
+      XCTAssertEqual(transition.reason, .regionExit)
+      XCTAssertNil(transition.medianMeters)
+    }
+
+    XCTAssertNil(gate.stateOf(key: sampleKey), "ล้างทิ้งทั้ง entry ไม่ใช่รีเซ็ตเป็น state ว่าง")
+    XCTAssertNil(gate.stateOf(key: otherKey))
+    XCTAssertTrue(gate.snapshotStates().isEmpty)
+  }
+
+  /// key ที่ยังค้าง dwell (ไม่เคย confirm) ต้องถูกล้าง **เงียบ ๆ** — หลักการเดียวกับ
+  /// `sweepStale()` เป๊ะ: ไม่เคยประกาศว่า "ใกล้" ก็ไม่มีอะไรให้ประกาศว่า "หลุด"
+  func testPendingKeyIsClearedSilentlyOnRegionExit() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    XCTAssertNil(gate.push(key: sampleKey, bucket: .near), "dwell ยังไม่ครบ 3")
+    XCTAssertEqual(gate.stateOf(key: sampleKey)?.pendingCloserCount, 1)
+    XCTAssertNil(gate.currentBucket(key: sampleKey))
+
+    let transitions = gate.clearStates(matchingPrefix: regionPrefix, emitting: .regionExit)
+
+    XCTAssertTrue(transitions.isEmpty, "ไม่เคย confirm = ไม่มีอะไรให้ประกาศ")
+    XCTAssertNil(gate.stateOf(key: sampleKey), "แต่ต้องถูกล้างจริง")
+  }
+
+  /// **key ของ region อื่นห้ามถูกแตะแม้แต่ฟิลด์เดียว** — เทียบทั้ง `struct` ด้วย
+  /// `Equatable` แบบเดียวกับที่เทสของ ADR-19 6(ง) ทำ ไม่ใช่ไล่เช็คทีละฟิลด์ซึ่งลืมได้
+  func testOtherRegionIsNotTouchedAtAll() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+    _ = gate.push(key: otherRegionKey, bucket: .far)
+    let untouched = gate.stateOf(key: otherRegionKey)
+    XCTAssertNotNil(untouched)
+
+    let transitions = gate.clearStates(matchingPrefix: regionPrefix, emitting: .regionExit)
+
+    XCTAssertEqual(transitions.map(\.key), [sampleKey], "ต้องไม่มี key ของ region อื่นหลุดมา")
+    XCTAssertEqual(
+      gate.stateOf(key: otherRegionKey), untouched,
+      "state ของ region อื่นต้องเท่าเดิมทุกฟิลด์ (confirmed/pending/window/lastSampleAt)"
+    )
+    XCTAssertEqual(gate.currentBucket(key: otherRegionKey), .far)
+    XCTAssertEqual(gate.snapshotStates().map(\.key), [otherRegionKey])
+  }
+
+  /// เรียกซ้ำ (เช่น iOS ยิง `didExitRegion` สองครั้ง) ต้องเงียบสนิทครั้งที่สอง
+  func testRegionExitIsIdempotent() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+
+    XCTAssertEqual(gate.clearStates(matchingPrefix: regionPrefix, emitting: .regionExit).count, 1)
+    XCTAssertTrue(gate.clearStates(matchingPrefix: regionPrefix, emitting: .regionExit).isEmpty)
+  }
+
+  /// `removeStates(matchingPrefix:)` (เส้นทาง `stopMonitoring`) ต้อง **ยังเงียบเหมือนเดิม**
+  /// — การ refactor ให้สองเมธอดใช้แกนเดียวกันต้องไม่ทำให้เส้นทางเดิมเริ่ม emit
+  func testSilentRemoveStillEmitsNothing() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, windowSize: 1, staleAfterMillis: 10_000)
+
+    _ = gate.push(key: sampleKey, bucket: .far)
+    _ = gate.push(key: otherRegionKey, bucket: .far)
+
+    gate.removeStates(matchingPrefix: regionPrefix)
+
+    XCTAssertNil(gate.stateOf(key: sampleKey))
+    XCTAssertEqual(gate.snapshotStates().map(\.key), [otherRegionKey])
+  }
+}
+
+// MARK: - ตัวนับ 3 ตัว (ADR-21 หัวข้อ 9)
+
+/// **ห้ามรวมสามตัวเป็นตัวเดียว** — บน iOS "ไม่มี sample" มีสองความหมายที่แก้คนละทาง:
+/// ranging ไม่เดิน (`rangeCb` ไม่ขยับ) กับ ranging เดินแต่ Apple ถอดบีคอนออกจาก array
+/// (`rangeCb` ขยับ แต่ `inArray` ไม่ขยับ)
+final class ProximitySampleCountersTests: XCTestCase {
+
+  func testKnownBucketCountsInArrayOnly() {
+    let counters = IBeaconRangingManager.ProximitySampleCounters()
+      .counting(bucket: .near)
+
+    XCTAssertEqual(counters.inArray, 1)
+    XCTAssertEqual(counters.unknown, 0)
+  }
+
+  /// `unknown` **นับรวมอยู่ใน `inArray` ด้วย** — บีคอนที่ Apple ตอบว่า `unknown`
+  /// ก็คือบีคอนที่ยังอยู่ใน array (เห็นอยู่ แต่ตอบไม่ได้ว่าใกล้แค่ไหน) ถ้าแยกขาด
+  /// อัตราส่วน `unknown/inArray` ที่สมมติฐาน B ต้องใช้จะคำนวณจากบรรทัดเดียวไม่ได้
+  func testUnknownBucketCountsBothInArrayAndUnknown() {
+    let counters = IBeaconRangingManager.ProximitySampleCounters()
+      .counting(bucket: nil)
+
+    XCTAssertEqual(counters.inArray, 1)
+    XCTAssertEqual(counters.unknown, 1)
+  }
+
+  func testCountsAccumulateInOrder() {
+    var counters = IBeaconRangingManager.ProximitySampleCounters()
+    for bucket in [ProximityBucket?.some(.far), nil, .some(.near), nil, nil] {
+      counters = counters.counting(bucket: bucket)
+    }
+
+    XCTAssertEqual(counters, IBeaconRangingManager.ProximitySampleCounters(inArray: 5, unknown: 3))
+  }
+
+  /// **ล็อกกฎ ADR-19 6(ง) คู่กับตัวนับ:** sample ที่เป็น `unknown` ต้องถูก**นับ**
+  /// (ไม่งั้นสมมติฐาน B ทดสอบไม่ได้) แต่ต้อง **ไม่ต่ออายุ `lastSampleAt`** เด็ดขาด
+  /// — ถ้ามันต่ออายุ บีคอนที่เงียบสนิทแต่ยังมี `unknown` ไหลเข้ามาจะค้าง `near`
+  /// ตลอดไปและ `stale` จะไม่มีวันเกิด
+  func testUnknownIsCountedButNeverRenewsLastSampleAt() {
+    let clock = FakeClock()
+    let gate = ProximityGate(clock: clock.now, dwellSamples: 1, staleAfterMillis: 10_000)
+    var counters = IBeaconRangingManager.ProximitySampleCounters()
+
+    counters = counters.counting(bucket: .near)
+    _ = gate.push(key: sampleKey, bucket: .near)  // t=0
+    let stateAtT0 = gate.stateOf(key: sampleKey)
+    XCTAssertEqual(stateAtT0?.lastSampleAt, 0)
+
+    for _ in 0..<9 {
+      clock.advance(millis: 1_000)
+      counters = counters.counting(bucket: nil)
+      XCTAssertNil(gate.push(key: sampleKey, bucket: nil))
+    }
+
+    XCTAssertEqual(
+      counters, IBeaconRangingManager.ProximitySampleCounters(inArray: 10, unknown: 9),
+      "ตัวนับต้องเดินต่อ — นี่คือข้อมูลที่ใช้ตอบว่า Apple ส่ง unknown บ่อยแค่ไหน"
+    )
+    XCTAssertEqual(
+      gate.stateOf(key: sampleKey), stateAtT0,
+      "แต่ state ของ gate ต้องไม่ถูกแตะแม้แต่ฟิลด์เดียว (ADR-19 6(ง))"
+    )
+
+    clock.advance(millis: 2_000)  // t=11s เทียบกับ lastSampleAt ที่ยังค้างที่ t=0
+    XCTAssertEqual(
+      runOneCallback(gate, samples: [(sampleKey, nil)]).first?.reason,
+      .stale,
+      "ช่องว่างจริงนับจาก t=0 — `unknown` รัว ๆ ต้องไม่กันไม่ให้ stale เกิด"
+    )
+  }
+}
+
+/// รูปแบบของคอลัมน์ตัวนับในไฟล์หลักฐาน — pure function เช่นเดียวกับ
+/// `proximityRawSignalsSuffix`
+final class RangeCounterSuffixTests: XCTestCase {
+
+  func testAllThreeCountersAppearInOrder() {
+    XCTAssertEqual(
+      AppDelegate.rangeCounterSuffix(rangeCb: 41, inArray: 12, unknown: 3),
+      " rangeCb=41 inArray=12 unknown=3"
+    )
+  }
+
+  /// บรรทัด `launch` ไม่ได้พูดถึง key ใด — `inArray`/`unknown` ต้องเป็น `n/a`
+  /// **ห้ามเป็น `0`** ซึ่งแปลว่า "นับแล้วได้ศูนย์" คนละความหมายกับ "ตอบไม่ได้"
+  func testMissingKeyScopedCountersAreNotAnotherZero() {
+    XCTAssertEqual(
+      AppDelegate.rangeCounterSuffix(rangeCb: 0, inArray: nil, unknown: nil),
+      " rangeCb=0 inArray=n/a unknown=n/a"
+    )
+  }
+
+  /// ค่าห้ามว่างและห้ามมีช่องว่างปน — คอลัมน์สัญญาณดิบคั่นด้วยช่องว่าง
+  func testEveryPairIsReadableForBoundaryValues() {
+    for value: Int? in [nil, 0, 1, Int.max] {
+      let suffix = AppDelegate.rangeCounterSuffix(rangeCb: 0, inArray: value, unknown: value)
+      let pairs = suffix.dropFirst().split(separator: " ", omittingEmptySubsequences: false)
+
+      XCTAssertEqual(
+        pairs.map { String($0.split(separator: "=", maxSplits: 1)[0]) },
+        ["rangeCb", "inArray", "unknown"]
+      )
+      for pair in pairs {
+        let parts = pair.split(separator: "=", maxSplits: 1)
+        XCTAssertEqual(parts.count, 2, "ทุกคู่ต้องเป็น key=value: \"\(pair)\"")
+        XCTAssertFalse(parts[1].isEmpty, "ค่าห้ามว่าง: \"\(pair)\"")
+      }
+    }
   }
 }

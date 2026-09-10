@@ -3873,20 +3873,32 @@ background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วิ
 
 ## ADR-21: ProximityGate ฝั่ง iOS — port เป็น Swift ใน `IBeaconRangingManager` (เพิ่ม 10 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified**
+> **สถานะ: รอบแรกได้หลักฐานเครื่องจริงแล้ว · การแก้รอบสอง (หัวข้อ 8-9) ยัง code-complete, unverified**
 > โค้ดครบตามหัวข้อ 1-5 แล้ว (`ProximityGate.swift` · `ProximityGateStore.swift` ·
 > `BackgroundProximityMonitor.swift` · hook ใน `didRange`/`didFailRangingFor` ของ
-> `IBeaconRangingManager` · observer ใน `AppDelegate` ของ example app) และผ่าน
-> `flutter build ios` + `xcodebuild test` — **73 เคส: 71 passed / 0 failed / 2 skipped**
-> (สอง skip เดิมเรื่อง protection class มีมาก่อน ADR นี้ · ของใหม่ 48 เคสอยู่ใน target
-> `RunnerTests` แล้วตั้งแต่คอมมิตที่เพิ่ม `ProximityGateTests.swift` เข้า `project.pbxproj`)
-> **แต่ยังไม่เคยรันกับ K9P จริงแม้แต่ครั้งเดียว** — ห้ามอ่านว่า "ทำงานได้" จนกว่าจะมีรอบ
-> ทดสอบบนเครื่องจริงพร้อมไฟล์หลักฐาน (บรรทัด `event=proximity`)
+> `IBeaconRangingManager` · observer ใน `AppDelegate` ของ example app)
+>
+> **รอบเดินจริง 10 ก.ย. 2026 เกิดขึ้นแล้ว** — `docs/test-data/2026-09-10_ios_proximity_walk.log`
+> (54 บรรทัด · build `a8f7fa1`) พิสูจน์ว่า **ชั้นที่ 2 ทำงานจริงบนเครื่องจริง** รวมถึงใน
+> process ที่ `relaunchedFromTerminated` (13:55:42-13:57:12) — และพิสูจน์ว่า**สมมติฐาน
+> เรื่อง `didFailRangingFor` ของหัวข้อ 4 ผิด** (ดูหัวข้อ 8)
+>
+> **แต่การแก้ที่เกิดจากรอบนั้น (หัวข้อ 8-9: ลำดับ sweep ใหม่ · `regionExit` · ตัวนับ 3 ตัว
+> · บรรทัด `rangetick`) ยังไม่เคยรันกับ K9P จริงแม้แต่ครั้งเดียว** — code-complete,
+> unverified ห้ามอ่านว่า "ทำงานได้" จนกว่าจะมีรอบเดินจริงรอบใหม่พร้อมไฟล์หลักฐาน
+>
+> ผ่าน `flutter build ios --debug --no-codesign` + `xcodebuild test` —
+> **92 เคส: 90 passed / 0 failed / 2 skipped** (สอง skip เดิมเรื่อง protection class มีมาก่อน
+> ADR นี้ · รอบสองเพิ่ม 16 เคสใน `ProximityGateTests.swift` ซึ่งอยู่ใน target `RunnerTests`
+> อยู่แล้ว — **ไม่แตะ `project.pbxproj`**)
+>
 > **ขอบเขต:** iOS เท่านั้น — ไม่แตะ Android, ไม่แตะ `proximity_gate.dart` (reference),
-> ไม่แตะ `didExitRegion`/`didDetermineState`/`emitRegionStateIfChanged` **แม้แต่บรรทัดเดียว**
+> ไม่แตะ `didDetermineState`/`emitRegionStateIfChanged` **แม้แต่บรรทัดเดียว**
 > · `didEnterRegion` **ถูกแตะหนึ่งจุดโดยได้รับอนุมัติเป็นรายกรณี** — เพิ่ม
 > `ensureRangingStarted(for:)` ต่อท้าย `emitRegionStateIfChanged(.enter, …)` ไม่แก้บรรทัดใด
-> ของตรรกะ emit เดิม (ดูหัวข้อ 2.1) · สัญญา event ใช้ของ ADR-20 หัวข้อ 5 ตามเดิม ห้ามนิยามใหม่
+> ของตรรกะ emit เดิม (ดูหัวข้อ 2.1) · **`didExitRegion` ถูกแตะในรอบสอง (10 ก.ย. 2026)
+> ด้วยกติกาเดียวกันเป๊ะ — เพิ่มต่อท้ายอย่างเดียว ตรรกะ emit เดิมไม่ถูกแก้แม้แต่ตัวอักษรเดียว**
+> (ดูหัวข้อ 8(ข)) · สัญญา event ใช้ของ ADR-20 หัวข้อ 5 ตามเดิม ห้ามนิยามใหม่
 >
 > **สามจุดที่ implement ต่างจากตัว ADR — ต้องอ่านก่อนรีวิว:**
 > 1. **`ProximityKeyState` ฝั่ง Swift ไม่มี counter `dropped*`** ต่างจาก Dart/Kotlin —
@@ -3895,6 +3907,10 @@ background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วิ
 >    **ห้ามนับ counter ใด ๆ** ตามหัวข้อ 2 ของ ADR นี้เอง ("ห้ามแตะ state แม้แต่ฟิลด์เดียว")
 >    — ผลคือ **จำนวน `unknown` ที่ Apple ส่งมายังนับไม่ได้ในรอบนี้** ถ้ารอบทดสอบเครื่องจริง
 >    ต้องการตัวเลขนั้น ต้องเป็น ADR รอบใหม่ที่แก้ทั้งสามภาษาพร้อมกัน ไม่ใช่แก้ Swift ฝ่ายเดียว
+>    · **แก้แล้วในรอบสอง (หัวข้อ 9) โดยไม่ต้องแตะสามภาษา**: ตัวนับ `unknown=`/`inArray=`
+>    อยู่ใน `IBeaconRangingManager` **ไม่ได้อยู่ใน `ProximityKeyState`** และไม่ลงดิสก์ —
+>    `ProximityGate` จึงยังเท่ากับ reference ทุกฟิลด์ ข้อห้ามเดิมยังมีผลเต็มที่สำหรับ
+>    การใส่ counter ลง *state ของ gate*
 > 2. **`stopMonitoring(identifiers:)` มีพารามิเตอร์เพิ่ม `clearProximityState`** (default
 >    `true`) และ `applyParsedRegions` เป็นผู้เรียกจุดเดียวที่ส่ง `false` — จำเป็นเพราะ
 >    `applyParsedRegions` คือ**เส้นทางเดียวที่เริ่ม `startRangingBeacons` ในรอบ launch ใหม่**
@@ -3905,7 +3921,11 @@ background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วิ
 > 3. **~~ยังไม่มีอะไรเริ่ม ranging ในรอบที่ถูกปลุกจากสถานะถูกฆ่า~~ — แก้แล้ว 10 ก.ย. 2026**
 >    เจ้าของงานอนุมัติให้แตะ `didEnterRegion` เป็นรายกรณี จึงเพิ่ม `startRangingBeacons`
 >    ที่นั่นตามที่ Apple แนะนำ **ดูหัวข้อ 2.1 ซึ่งเป็นแหล่งความจริงของข้อนี้** · หนี้ที่ยัง
->    ค้าง: ไม่มี `stopRangingBeacons` คู่กันใน `didExitRegion` (เมธอดนั้นยังห้ามแตะ)
+>    ค้าง: **ไม่มี `stopRangingBeacons` คู่กันใน `didExitRegion`** — ตั้งแต่ 10 ก.ย. 2026
+>    เมธอดนั้น**ไม่ได้อยู่ในรายการห้ามแตะแล้ว** (หัวข้อ 8(ข) เพิ่มโค้ดต่อท้ายที่นั่น) แต่
+>    **ยังจงใจไม่เพิ่ม** เพราะการหยุด ranging กระทบทั้งอายุแบตและโอกาสได้ sample ในหน้าต่าง
+>    ที่ถูกปลุก ซึ่งหัวข้อ 2.1 ระบุเองว่าต้องมี**การวัดผลแบตเตอรี่จริง**ก่อน ห้ามใส่เพราะ
+>    "ทำได้แล้ว" เฉย ๆ
 
 ### 1. ranging ตอน background ทำได้แค่ไหน — **สัญญาสองแพลตฟอร์มไม่เท่ากัน ต้องพูดตรง ๆ**
 
@@ -3954,8 +3974,9 @@ invariant ของ ADR-19 6(ช) (ห้าม emit `unknown` ออก public 
 ห้ามแทรกกลาง) · ต้องเติม `constraintsByIdentifier` จาก `CLBeaconRegion.beaconIdentityConstraint`
 ที่ระบบส่งมาด้วย ไม่งั้น `didRange` จะ `return` ที่ `guard` ตัวแรกเพราะตารางว่างในรอบที่ถูกปลุก
 
-⚠️ **หนี้ที่เกิดขึ้นพร้อมกัน: ไม่มี `stopRangingBeacons` คู่กันใน `didExitRegion`** (เมธอดนั้นยังอยู่ใน
-รายการห้ามแตะ) สถานะไม่แย่ลงกว่าเดิมเพราะ `applyParsedRegions()` ก็เปิด ranging ค้างไว้ตลอดอยู่แล้ว
+⚠️ **หนี้ที่เกิดขึ้นพร้อมกัน: ไม่มี `stopRangingBeacons` คู่กันใน `didExitRegion`** (รอบแรกเมธอดนั้นอยู่ใน
+รายการห้ามแตะ · **รอบสอง 10 ก.ย. 2026 แตะแล้วตามหัวข้อ 8(ข) แต่ยังจงใจไม่เพิ่ม `stopRangingBeacons`**
+เพราะยังไม่มีการวัดผลแบตเตอรี่จริงมารองรับ) สถานะไม่แย่ลงกว่าเดิมเพราะ `applyParsedRegions()` ก็เปิด ranging ค้างไว้ตลอดอยู่แล้ว
 ตั้งแต่ก่อน ADR นี้ **แต่ Apple แนะนำให้หยุด ranging เมื่อออกจาก region** (`apple_proximity_ranging.md`
 หัวข้อ 9) — ต้องใช้คืนใน ADR รอบถัดไปพร้อมการวัดผลแบตเตอรี่จริง ห้ามปิดเป็น "ทำแล้ว"
 
@@ -3976,11 +3997,20 @@ iOS ไม่มีข้อจำกัดนั้นเพราะ `CLBeacon
 beacons … come within range, go out of range, or their proximity changes" — **event-driven ไม่ใช่ periodic** ·
 และเคส "ไม่เจอเลย" ของ API รุ่น `satisfying:` มาทาง **`didFailRangingFor`** ไม่ใช่ `didRange` ที่มี array ว่าง
 
-**การตัดสิน:** ประเมิน `staleAfter` **ที่ต้น hook ทุกครั้งที่ `didRange` ยิง** (หลักการเดียวกับ ADR-20 หัวข้อ 4 /
-`reconcile()` ของ ADR-17) **บวกจุดที่สองที่ `didFailRangingFor`** ซึ่งเป็น sweep ล้วน ๆ (ไม่ push sample) — ผลที่
+**การตัดสิน (รอบแรก — ⚠️ ถูกแก้แล้วโดยหัวข้อ 8 อ่านคู่กันเสมอ):** ประเมิน `staleAfter` **ที่ต้น hook ทุกครั้งที่
+`didRange` ยิง** (หลักการเดียวกับ ADR-20 หัวข้อ 4 / `reconcile()` ของ ADR-17) **บวกจุดที่สองที่
+`didFailRangingFor`** ซึ่งเป็น sweep ล้วน ๆ (ไม่ push sample) — ผลที่
 ต้องยอมรับเหมือน Android: stale ถูกค้นพบตอน callback ถัดไป ไม่ใช่ที่วินาทีที่ 10 พอดี · **ไม่ใส่ `Timer` ใน SDK**
 (ADR-19 6(ฌ)) · **`staleAfter` = 10 วินาทีตาม ADR-19 หัวข้อ 8 ตรง ๆ ห้ามยืม 60 วินาทีของ ADR-20 หัวข้อ 7** เพราะ
 ค่านั้นคำนวณจากอัตรา batch ของ Android ที่วัดได้จริง ส่วน iOS **ยังไม่มีไฟล์ข้อมูลเลย** ยืมมาใช้คือการเดา
+
+> ⚠️ **แก้ 10 ก.ย. 2026 หลังรอบเดินจริง — สองประโยคข้างบนเรื่อง `didFailRangingFor` ใช้ไม่ได้แล้ว:**
+> ไฟล์หลักฐาน `docs/test-data/2026-09-10_ios_proximity_walk.log` มี `event=rangefail` **0 บรรทัด**
+> ทั้งที่ผู้ทดสอบเดินพ้นสัญญาณสองนาทีและ iOS ประกาศ `exit` จริง — **`didFailRangingFor` ไม่ใช่สัญญาณ
+> ว่าบีคอนหาย** มันคือสัญญาณว่า *ranging เองล้มเหลว* (เช่น Bluetooth ถูกปิด) **ห้ามพึ่งเป็นจุด sweep**
+> · จุด sweep จริงย้ายไปที่ **ท้าย `didRange` เรียกเสมอแม้ array ว่าง** บวก **`didExitRegion`** —
+> ดูหัวข้อ 8 ซึ่งเป็นแหล่งความจริงของเรื่องนี้ · hook ที่ `didFailRangingFor` **ยังอยู่ ห้ามลบ**
+> เพราะยังมีค่าสำหรับเคส Bluetooth ปิด
 
 ### 5. จุดที่ hook — ใน `didRange` เท่านั้น และต้องแก้ `guard` ที่ต้นเมธอดก่อน
 
@@ -4021,9 +4051,98 @@ eventSink = eventSink else { return }` — ออกจาก**ทั้งเ�
    จำนวนการสลับ near↔immediate ที่วัดได้จริงลงไฟล์หลักฐานรอบ iOS** เพื่อให้ ADR รอบหน้าที่แก้พร้อมกันสามภาษามีตัวเลข
    สองแพลตฟอร์มเทียบกันได้ (Android: 16 จาก 36 event)
 
+### 8. แก้ตามผลรอบเดินจริง 10 ก.ย. 2026 — จุด sweep ที่เชื่อถือได้ (เพิ่ม 10 ก.ย. 2026)
+
+**แหล่งความจริงของทั้งหัวข้อคือ `docs/test-data/2026-09-10_ios_proximity_walk.log`** (54 บรรทัด · build
+`a8f7fa1`) ตัวเลขทุกตัวข้างล่างอ่านจากไฟล์นั้นตรง ๆ **ห้ามตีความใหม่**:
+
+| ข้อเท็จจริง | ตัวเลข | อ่านได้ว่า |
+|---|---|---|
+| `event=rangefail` | **0 บรรทัด** ทั้งไฟล์ | `didFailRangingFor` ไม่ยิงเลย แม้ผู้ทดสอบเดินพ้นสัญญาณ 2 นาที และ iOS ประกาศ `exit` จริง |
+| `reason=stale` | 10 จาก 30 (33%) | หนึ่งในสามของ transition ทั้งหมดคือ "วัดไม่ได้อีกแล้ว" |
+| `from=none` | 9 จาก 30 (30%) | เกือบเท่ากับจำนวน `stale` — ยืนยันว่าวน "หลุดแล้วยืนยันใหม่" |
+| ระยะห่าง transition | มัธยฐาน 11 วิ (`9903/3`) · 25 วิ (`9902/2`) | — |
+| ชั้นที่ 2 ใน process ที่ `relaunchedFromTerminated` | มีจริง (13:55:42-13:57:12) | หัวข้อ 2.1 ใช้ได้จริง |
+
+**(ก) `sweepStale()` ย้ายไป "หลัง" push และเรียก "เสมอ" แม้ array ว่าง**
+
+รอบแรกเรียก sweep **ก่อน** loop push (เหตุผลตอนนั้น: "ตรวจความเงียบก่อนที่ sample ของรอบนี้จะไปต่ออายุ key")
+— อ่านดูสมเหตุสมผลแต่ **แก้เคสหลักไม่ได้** และเมื่อจุด sweep ที่สอง (`didFailRangingFor`) ไม่เคยทำงานเลย
+`didRange` จึงเป็นจุดเดียวที่เหลือจริง ๆ · ลำดับใหม่ให้ผลที่ต้องการพอดีโดยไม่ต้องมี `Timer`:
+
+1. key ที่ **เพิ่งรายงานในรอบนี้** มี `lastSampleAt` สดจาก `push()` แล้ว จึงรอด sweep แน่นอน
+2. key ที่ **หายไปจาก array** ไม่มีอะไรมาต่ออายุ จึงถูกจับได้ **ในรอบเดียวกันที่มันหาย** ไม่ต้องรอ callback ถัดไป
+3. `unknown` ยังไม่ต่ออายุ `lastSampleAt` ตาม ADR-19 6(ง) เหมือนเดิมทุกประการ (`push()` เป็นคนบังคับ ไม่ใช่ลำดับนี้)
+
+ผลพลอยได้ที่ตรวจได้จากไฟล์: ลำดับเดิมทำให้เกิด **คู่บรรทัดในมิลลิวินาทีเดียวกันของบีคอนตัวเดียวกัน**
+(`13:41:25.073` — `reason=stale` แล้วตามด้วย `reason=farther` ของ `9903/3`) เพราะ sweep ยิง `stale` แล้ว push
+ของรอบเดียวกันยืนยัน `far` ใหม่ทันที · ลำดับใหม่ให้ `push()` เป็นผู้ประกาศ `stale` เอง (แล้วทิ้ง sample ของรอบนั้น
+ตาม ADR-19 หัวข้อ 7) sweep ที่ตามมาจึงเงียบ = **หนึ่ง callback ของ key เดียว = หนึ่ง transition**
+
+**(ข) `didExitRegion` ล้างสถานะชั้นที่ 2 ของ region นั้นแล้ว emit `reason=regionExit`**
+
+ทุก key ของ region นั้นที่ **เคย confirmed** → emit `to = nil`, `reason = regionExit` · key ที่ยัง pending →
+ล้างเงียบ ๆ ไม่ emit (หลักการเดียวกับ `sweepStale`) · โค้ดอยู่ **หลัง** `emitRegionStateIfChanged(.exit, …)`
+เสมอและครอบด้วย `do`/`catch` ที่กลืน error — หลักการเดียวกับ `didEnterRegion` ในหัวข้อ 2.1 (ชั้นที่ 2 ห้ามทำให้
+ชั้นที่ 1 พลาด) **ตรรกะ emit เดิมไม่ถูกแก้แม้แต่ตัวอักษรเดียว**
+
+> ⚠️⚠️ **`regionExit` ไม่ใช่ parity กับ Android — ห้ามเขียนที่ไหนว่าเป็น parity**
+> `proximity_gate.dart` (reference) **ไม่มี** reason นี้ และฝั่ง Kotlin ก็ **ไม่มี** · ฝั่ง Android ล้าง store
+> ของชั้น 2 ตอน `monitorStop` ของ example app **ไม่ใช่ตอน region exit** ซึ่งเป็นคนละเหตุการณ์กันคนละชั้นกัน
+>
+> นี่คือ **reason ที่สามที่มีเฉพาะ Swift** เป็นการ **เบี่ยงจาก reference โดยตั้งใจ** ด้วยเหตุผลที่เป็นจริง
+> เฉพาะ iOS: iOS มี boundary event ที่ระบบยืนยันเอง (`didExitRegion`) ซึ่งเชื่อถือได้และมาถึงแม้ตอน `didRange`
+> เลิกยิงไปแล้ว — ต่างจากอีกสองแพลตฟอร์มที่ไม่มีสัญญาณคู่นี้ในชั้นเดียวกัน
+>
+> **เป็นหนี้ ไม่ใช่ของแถม:** ต้องยกกฎนี้ขึ้นไปที่ `proximity_gate.dart` แล้วไหลลงทั้งสอง port ในรอบถัดไป
+> **ไม่งั้นจะมีสามภาษาสามพฤติกรรม** ซึ่งขัดหัวข้อ 2 ของ ADR นี้เอง ("ทั้งสองภาษาต้อง == Dart ไม่ใช่ == กันเอง")
+
+**(ค) hook ที่ `didFailRangingFor` เก็บไว้ ห้ามลบ** — ยังมีค่าสำหรับเคส **Bluetooth ถูกปิด / สิทธิ์ถูกถอน**
+และการ sweep ที่นั่นเป็น superset ของจุดอื่นจึงไม่ทำอันตราย · **แต่ถ้อยคำของหัวข้อ 4 ถูกแก้แล้ว**:
+`didFailRangingFor` **ไม่ใช่**สัญญาณว่าบีคอนหาย (พิสูจน์แล้ว 0 บรรทัด) มันคือสัญญาณว่า *ranging เองล้มเหลว*
+**ห้ามพึ่งเป็นจุด sweep** — บรรทัด `rangefail` ที่ได้ 0 บรรทัดคือ **ผลลัพธ์เชิงบวก** ของรอบนั้น ไม่ใช่โค้ดที่ไร้ค่า
+
+### 9. ตัวนับ 3 ตัว + บรรทัด `rangetick` — เครื่องมือวัดของรอบถัดไป (เพิ่ม 10 ก.ย. 2026)
+
+บน iOS **"ไม่มี sample" มีสองความหมายที่แก้คนละทาง** จึง **ห้ามรวมเป็นตัวนับเดียว**:
+
+| ฟิลด์ | นับอะไร | ขอบเขต | ตอบคำถามอะไร |
+|---|---|---|---|
+| `rangeCb=` | จำนวนครั้งที่ `didRange` ถูกเรียก (**ไม่นับ `didFailRangingFor`**) | process | ranging เดินอยู่จริงไหม ถี่แค่ไหน |
+| `inArray=` | จำนวนครั้งที่บีคอน**ตัวนั้น**อยู่ใน array | key | Apple ถอดบีคอนออกจาก array บ่อยไหม |
+| `unknown=` | จำนวนครั้งที่อยู่ใน array แต่ `proximity == .unknown` (**นับรวมใน `inArray` ด้วย**) | key | Apple ส่ง `unknown` บ่อยแค่ไหน |
+
+**สมมติฐานสองข้อที่ตัวนับชุดนี้มีไว้ทดสอบ:**
+
+- **A —** ถ้า `rangeCb` ถี่ ~1 Hz แต่ `inArray` ห่าง → `stale` 33% คือ **พฤติกรรมของ CoreLocation ที่ถอดบีคอน
+  ออกจาก array** ไม่ใช่การขาด callback (แก้ที่นโยบาย ไม่ใช่ที่ lifecycle)
+- **B —** ถ้า `unknown` สูง → **คำตอบจริงของ `stale` 33% อยู่ที่กฎ "`unknown` ไม่ต่ออายุ `lastSampleAt`"
+  (ADR-19 6(ง)) ไม่ใช่ที่ตัวเลข `staleAfter`** — **ข้อนี้สำคัญกว่าการไปปรับ `staleAfter` มั่ว ๆ** เพราะการขยับ
+  `staleAfter` ฝ่ายเดียวคือการแก้อาการโดยไม่รู้สาเหตุ และค่านั้นต้องเท่ากันทั้งสามภาษาตาม ADR-19 หัวข้อ 8
+
+**เก็บที่ไหน:** ใน `IBeaconRangingManager` เท่านั้น (`rangeCallbackCount` + `sampleCountersByKey`)
+**ไม่ลง `ProximityKeyState` และไม่ลง `UserDefaults`** — หมายเหตุข้อ 1 ของ ADR นี้ห้ามใส่ counter ลง state ของ
+gate เพราะจะเบี่ยงจาก reference ทั้งที่ไม่จำเป็น · ทั้งชุดเป็นค่า **ระดับ process** ตายพร้อม process และ
+**ไม่ถูกล้างตอน `regionExit`/`stopMonitoring`** (มันวัดพฤติกรรมของ CoreLocation ไม่ใช่สถานะความใกล้)
+
+**เขียนที่ไหน:** ต่อท้าย **คอลัมน์สัญญาณดิบ** ของบรรทัด `launch` และ `proximity` — **schema 6 คอลัมน์ไม่เปลี่ยน**
+· บรรทัด `launch` ได้ `rangeCb=0 inArray=n/a unknown=n/a` (`0` เป็นข้อเท็จจริงเชิงโครงสร้าง: บรรทัดนั้นเขียนใน
+`didFinishLaunchingWithOptions` ซึ่งจบก่อน CoreLocation เรียก `didRange` เสมอ · `n/a` เพราะบรรทัดนั้นไม่ได้พูดถึง
+key ใด — **`n/a` ไม่ใช่ `0`** คนละความหมาย)
+
+**บรรทัด `event=rangetick` — ของเพิ่มจากโจทย์ ไม่ได้อยู่ในคำสั่งเดิม**
+ยิง **อย่างมากทุก 30 วินาทีต่อ process** จาก `didRange` เท่านั้น พกตัวนับทั้งสามไปด้วย **ไม่ยิง notification**
+· มีไว้ตอบคำถาม **"หน้าต่างจริงหลังถูกปลุกยาวแค่ไหน"** ซึ่งบรรทัด transition ตอบไม่ได้: ถ้า process ถูก
+suspend/ฆ่าเงียบ ๆ ตอนบีคอนนิ่งอยู่ บรรทัดสุดท้ายของ process จะเป็น transition เมื่อนานมาแล้ว แล้ว "เวลาที่
+ranging หยุดจริง" จะแยกไม่ออกจาก "เวลาที่ความใกล้หยุดเปลี่ยน" — ความกำกวมชนิดเดียวกับ `rangefail` 0 บรรทัด
+· **ถ้าไม่ต้องการ ลบได้ในบรรทัดเดียว** (observer ตัวเดียวใน `AppDelegate` + `emitRangeTickIfDue`)
+· ⚠️ บนบรรทัด `rangetick` `inArray`/`unknown` เป็น **ผลรวมทุก key ใน process** ไม่ใช่ของ key เดียวแบบบรรทัด
+`proximity` (บรรทัดนี้ไม่ได้พูดถึงบีคอนตัวใดตัวหนึ่ง) — ตัวอ่านแยกได้จากคอลัมน์ `event=`
+
 ### อ้างอิง
 
 ADR-19 หัวข้อ 4 ข้อ 1 · 6(ค)/(ง)/(ฉ)/(ช)/(ฌ) · หัวข้อ 8 — ADR-20 หัวข้อ 1 (hook หลังตรรกะเดิม + กลืน error) ·
 3 (คำสั่งให้ iOS ใช้ uuid/major/minor) · 4 · 5 (สัญญา `proximityChanged`) · 6-7 —
 `docs/sources/apple_proximity_ranging.md` หัวข้อ 5-10 + "ไม่พบ / ไม่ยืนยัน (รอบที่ 2)" ·
-`android_background_scanning.md` ข้อ A/B/E · `proximity_gate.dart` · `IBeaconRangingManager.swift`
+`android_background_scanning.md` ข้อ A/B/E · `proximity_gate.dart` · `IBeaconRangingManager.swift` ·
+**`docs/test-data/2026-09-10_ios_proximity_walk.log` (แหล่งความจริงของหัวข้อ 8-9)**

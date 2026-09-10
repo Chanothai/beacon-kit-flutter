@@ -26,7 +26,10 @@ public struct BeaconKitProximityChangedEvent {
     reason: ProximityTransitionReason,
     medianMeters: Double?,
     timestampMillis: Int64,
-    storeError: String?
+    storeError: String?,
+    rangeCallbackCount: Int,
+    inArrayCount: Int,
+    unknownCount: Int
   ) {
     self.regionIdentifier = regionIdentifier
     self.uuid = uuid
@@ -38,6 +41,9 @@ public struct BeaconKitProximityChangedEvent {
     self.medianMeters = medianMeters
     self.timestampMillis = timestampMillis
     self.storeError = storeError
+    self.rangeCallbackCount = rangeCallbackCount
+    self.inArrayCount = inArrayCount
+    self.unknownCount = unknownCount
   }
 
   /// identifier ที่แอปตั้งไว้ตอนลงทะเบียน region (ADR-8 ใช้เป็นรหัสสาขา)
@@ -90,6 +96,83 @@ public struct BeaconKitProximityChangedEvent {
   /// ล้มเหลว → กู้ได้ค่าว่าง → transition ถัดไปได้ `from=none` โดยไม่มีอะไรฟ้อง
   /// (ADR-21 หัวข้อ 7 ข้อ 2)
   public let storeError: String?
+
+  /// ⚠️ log เท่านั้น ไม่ใช่สัญญา wire — **ตัวนับ 3 ตัวของ ADR-21 หัวข้อ 9**
+  /// (เพิ่มหลังรอบเดินจริง 10 ก.ย. 2026)
+  ///
+  /// ทั้งสามตัวเป็นค่าของ **process นี้เท่านั้น** ไม่รอดข้าม launch และ **ไม่ถูกเก็บ
+  /// ลง `ProximityGateStore`** โดยตั้งใจ — มันเป็นเครื่องมือวัดของรอบทดสอบ ไม่ใช่
+  /// สถานะที่ gate ใช้ตัดสินใจ (ADR-21 หมายเหตุข้อ 1 ห้ามใส่ counter ลง
+  /// `ProximityKeyState` เพราะจะเบี่ยงจาก reference ทั้งที่ไม่จำเป็น)
+  ///
+  /// **ห้ามรวมสามตัวนี้เป็นตัวเดียว** — บน iOS "ไม่มี sample" มีสองความหมายที่แก้
+  /// คนละทาง: ranging ไม่เดิน (`rangeCallbackCount` ไม่ขยับ) กับ ranging เดินแต่
+  /// Apple ถอดบีคอนออกจาก array (`rangeCallbackCount` ขยับ แต่ `inArrayCount` ไม่ขยับ)
+  ///
+  /// จำนวนครั้งที่ `didRange` ถูกเรียกใน process นี้ — **ระดับ process ไม่ใช่ระดับ
+  /// key** ตอบว่า "ranging เดินอยู่จริงไหม ถี่แค่ไหน"
+  public let rangeCallbackCount: Int
+
+  /// จำนวนครั้งที่บีคอน **ตัวที่ key ของ event นี้ชี้ถึง** อยู่ใน array ของ `didRange`
+  /// ใน process นี้ — ตอบว่า "Apple ถอดบีคอนออกจาก array บ่อยไหม"
+  public let inArrayCount: Int
+
+  /// จำนวนครั้งที่บีคอนตัวนั้นอยู่ใน array **แต่ `proximity == .unknown`** (นับรวมอยู่
+  /// ใน [inArrayCount] ด้วย) — ตอบว่า "Apple ส่ง `unknown` บ่อยแค่ไหน"
+  ///
+  /// ตัวเลขนี้คือกุญแจของ **สมมติฐาน B** ใน ADR-21 หัวข้อ 9: ถ้าค่านี้สูง คำตอบของ
+  /// `stale` 33% อยู่ที่กฎ "`unknown` ไม่ต่ออายุ `lastSampleAt`" (ADR-19 6(ง))
+  /// **ไม่ใช่ที่ตัวเลข `staleAfter`**
+  public let unknownCount: Int
+}
+
+/// ชีพจรของ ranging หนึ่งครั้ง — **ไม่ใช่ "ความใกล้เปลี่ยน" และไม่ใช่สัญญา wire ใด ๆ**
+/// (ADR-21 หัวข้อ 9 "ของเพิ่ม")
+///
+/// ## ทำไมต้องมี ทั้งที่ไม่มีอะไรเปลี่ยน
+///
+/// คำถาม "หน้าต่างจริงหลังถูกปลุกยาวแค่ไหน" ตอบไม่ได้จากไฟล์หลักฐานที่มีแต่บรรทัด
+/// transition: ถ้า process ถูก suspend/ฆ่าเงียบ ๆ โดยที่บีคอนยังนิ่งอยู่ บรรทัด
+/// สุดท้ายของ process นั้นจะเป็น transition เมื่อนานมาแล้ว แล้ว "เวลาที่ ranging
+/// หยุดจริง" จะแยกไม่ออกจาก "เวลาที่ความใกล้หยุดเปลี่ยน" — ความกำกวมชนิดเดียวกับที่
+/// รอบเดินจริง 10 ก.ย. 2026 เจอกับ `rangefail` (0 บรรทัด แปลได้สองอย่าง)
+///
+/// ยิง **อย่างมากทุก 30 วินาทีต่อ process** จาก `didRange` เท่านั้น · **ไม่ยิง
+/// notification** (เป็นข้อมูลของผู้ทดสอบ ไม่ใช่เหตุการณ์ที่ผู้ใช้ต้องรู้)
+public struct BeaconKitRangeTickEvent {
+  public init(
+    regionIdentifier: String,
+    rangeCallbackCount: Int,
+    inArrayCount: Int,
+    unknownCount: Int,
+    timestampMillis: Int64
+  ) {
+    self.regionIdentifier = regionIdentifier
+    self.rangeCallbackCount = rangeCallbackCount
+    self.inArrayCount = inArrayCount
+    self.unknownCount = unknownCount
+    self.timestampMillis = timestampMillis
+  }
+
+  /// region ของ `didRange` ที่จุดชนวน tick นี้ — ไม่ใช่ "ทุก region ที่ range อยู่"
+  public let regionIdentifier: String
+
+  public let rangeCallbackCount: Int
+
+  /// ⚠️ **ความหมายต่างจากฟิลด์ชื่อเดียวกันใน [BeaconKitProximityChangedEvent]** —
+  /// ที่นั่นเป็นของ key เดียว ที่นี่เป็น **ผลรวมของทุก key ใน process นี้** เพราะ
+  /// บรรทัด tick ไม่ได้พูดถึงบีคอนตัวใดตัวหนึ่ง (ตัวอ่านแยกได้จากคอลัมน์ `event=`
+  /// ซึ่งเป็น `rangetick` ไม่ใช่ `proximity`)
+  public let inArrayCount: Int
+
+  /// ผลรวมของทุก key เช่นเดียวกับ [inArrayCount]
+  public let unknownCount: Int
+
+  public let timestampMillis: Int64
+
+  public var timestamp: Date {
+    Date(timeIntervalSince1970: Double(timestampMillis) / 1000)
+  }
 }
 
 /// ทางออกของชั้น proximity (ADR-21 ชั้นที่ 2) ไปยัง **โค้ด native ของ host app**
@@ -123,21 +206,25 @@ public enum BackgroundProximityMonitor {
   /// ผู้สังเกตการณ์ของ `didFailRangingFor` — **นับความเงียบให้เป็นตัวเลข ไม่ใช่อนุมาน
   /// จากการไม่มีบรรทัด**
   ///
-  /// ## ทำไมต้องมี ทั้งที่มันไม่ใช่ "ความใกล้เปลี่ยน"
+  /// ## ⚠️ ผลรอบเดินจริง 10 ก.ย. 2026: `didFailRangingFor` **ไม่ใช่**สัญญาณว่าบีคอนหาย
   ///
-  /// `didFailRangingFor` คือทางที่เคส **"ไม่เจอ beacon เลย"** ของ API รุ่น `satisfying:`
-  /// เดินมา (`apple_proximity_ranging.md` หัวข้อ 8) และเป็น **จุด sweep ที่สองจากสองจุด**
-  /// ของ ADR-21 หัวข้อ 4 · **แต่เอกสาร Apple ไม่ระบุว่ามันยิงซ้ำเป็นจังหวะหรือยิงครั้งเดียว**
-  /// (หัวข้อ 8 บันทึกไว้เองว่าหาไม่เจอ)
+  /// `docs/test-data/2026-09-10_ios_proximity_walk.log` มี `event=rangefail`
+  /// **0 บรรทัด** ทั้งไฟล์ ทั้งที่ผู้ทดสอบเดินพ้นสัญญาณไปสองนาทีและ iOS ประกาศ
+  /// `exit` ของ region จริงในรอบเดียวกัน — **พิสูจน์แล้วว่าเป็นสมมติฐานที่ผิด**
+  /// (สมมติฐานเดิมมาจาก abstract ของ Apple: "couldn't detect any beacons that satisfy
+  /// the provided constraint" ซึ่งอ่านได้ว่าเป็นเคส "ไม่เจอเลย")
   ///
-  /// ถ้ามันไม่เคยยิงเลยบนเครื่องจริง sweep จะเหลือจุดเดียวที่ต้น `didRange` ซึ่ง**หยุด
-  /// ทำงานพร้อมกับบีคอนที่หายไปพอดี** ผลคือเคสหลักของฟีเจอร์ ("ลูกค้าเดินออกจากร้าน")
-  /// ไม่มี event ใด ๆ ออกมา ณ เวลาที่มันเกิด และคำถามใหญ่ที่สุดของ ADR-21 หัวข้อ 4
-  /// (`staleAfter = 10` วินาที ใช้กับ iOS ได้จริงไหม) **จะพิสูจน์ไม่ได้ในรอบทดสอบนั้น**
+  /// ความหมายที่เหลืออยู่จริงคือ **"ranging เองล้มเหลว"** (เช่น Bluetooth ถูกปิด,
+  /// สิทธิ์ถูกถอน) ไม่ใช่ "บีคอนหายไปจากที่เกิดเหตุ" — **ห้ามพึ่ง callback นี้เป็นจุด
+  /// sweep เด็ดขาด** จุด sweep ที่เชื่อถือได้คือท้าย `didRange` ทุกครั้ง (เรียก
+  /// `sweepStale()` เสมอแม้ array ว่าง) และ `didExitRegion` — ดู ADR-21 หัวข้อ 4/8
   ///
-  /// การไม่มีบรรทัดในไฟล์หลักฐานแยกไม่ออกระหว่าง "callback ไม่เคยยิง" กับ "ยิงแต่ไม่มี
-  /// อะไรให้รายงาน" — บทเรียนตรงจาก `android_background_scanning.md` ข้อ B ที่เสียเวลา
-  /// ไปทั้งรอบเพราะ "ความเงียบ" แปลได้สองอย่าง **จึงต้องนับออกมาเป็นบรรทัดจริง**
+  /// ## ยังเก็บ observer นี้ไว้ทำไม
+  ///
+  /// เพราะเคส "ranging ล้มเหลว" ยังต้องแยกออกจาก "ranging เดินแต่ไม่เจออะไร" ให้ได้
+  /// จากไฟล์หลักฐาน — และการไม่มีบรรทัดแยกไม่ออกระหว่าง "callback ไม่เคยยิง" กับ
+  /// "ยิงแต่ไม่มีอะไรให้รายงาน" (บทเรียนตรงจาก `android_background_scanning.md` ข้อ B)
+  /// **บรรทัด `rangefail` ที่ 0 บรรทัดคือผลลัพธ์เชิงบวกของรอบนั้น ไม่ใช่โค้ดที่ไร้ค่า**
   public static func setRangingFailureObserver(_ newObserver: ((String) -> Void)?) {
     lock.lock()
     defer { lock.unlock() }
@@ -153,6 +240,25 @@ public enum BackgroundProximityMonitor {
     let observer = rangingFailureObserver
     lock.unlock()
     observer?(regionIdentifier)
+  }
+
+  /// ผู้สังเกตการณ์ของ [BeaconKitRangeTickEvent] — **ของเพิ่มจากรอบ 10 ก.ย. 2026
+  /// (ADR-21 หัวข้อ 9)** ถ้าไม่ต้องการแล้วลบทิ้งได้โดยไม่กระทบเส้นทางอื่นเลย
+  public static func setRangeTickObserver(_ newObserver: ((BeaconKitRangeTickEvent) -> Void)?) {
+    lock.lock()
+    defer { lock.unlock() }
+    rangeTickObserver = newObserver
+  }
+
+  private static var rangeTickObserver: ((BeaconKitRangeTickEvent) -> Void)?
+
+  /// แจ้งชีพจรของ ranging — **ผู้เรียกเป็นคนคุมจังหวะ (อย่างมากทุก 30 วินาที)**
+  /// ไม่ใช่ที่นี่ เพราะการ throttle ต้องใช้นาฬิกาเดียวกับที่ประทับลง event
+  internal static func emitRangeTick(_ event: BeaconKitRangeTickEvent) {
+    lock.lock()
+    let observer = rangeTickObserver
+    lock.unlock()
+    observer?(event)
   }
 
   public static func setProximityObserver(_ newObserver: ProximityObserver?) {
