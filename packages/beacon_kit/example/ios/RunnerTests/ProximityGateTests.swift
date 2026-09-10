@@ -1622,8 +1622,9 @@ final class ProximityGateBackgroundConfigTests: XCTestCase {
 
   /// **เคสที่ 2 ของบรีฟ:** สลับ fg → bg → fg แล้ว state ของสอง gate ต้องไม่ปนกัน
   ///
-  /// เดินผ่าน `stepProximityBatch` จริง (เส้นทางเดียวกับ `runProximityLayer`) โดยให้
-  /// ผู้เรียกเลือก gate เอง — ซึ่งเป็นสัญญาที่ ADR-22 ตั้งไว้พอดี
+  /// เดินผ่าน `stepProximityBatch` โดยให้ผู้เรียกเลือก gate เอง — ซึ่งเป็นสัญญาที่
+  /// ADR-22 ตั้งไว้พอดี · ⚠️ **ไม่ได้ยิงผ่าน `runProximityLayer`** จึงไม่ได้พิสูจน์ว่า
+  /// การ *เลือก* gate/store ในโค้ดจริงถูกต้อง (ADR-22 หัวข้อ 6 ข้อ 6)
   func testTwoGatesKeepSeparateStateAcrossModeSwitches() {
     let clock = FakeClock()
     let foregroundGate = ProximityGate(clock: clock.now)  // ค่า ADR-19 หัวข้อ 8 ทั้งชุด
@@ -1684,9 +1685,20 @@ final class ProximityGateBackgroundConfigTests: XCTestCase {
 
 // MARK: - ADR-21 หัวข้อ 8: เส้นทาง foreground ห้ามเปลี่ยน
 
-/// **regression guard ที่ ADR-22 บังคับไว้ในบรีฟ:** "foreground path ไม่เปลี่ยนแม้แต่
-/// บรรทัดเดียว" — เทียบผลของ `stepProximityBatch` กับ [runOneCallback] ซึ่งเป็นลำดับ
-/// ของ ADR-21 หัวข้อ 8 ที่มีเทสต์ล็อกไว้แล้วทั้งกลุ่ม
+/// **regression guard ของ ADR-22 — อ่านขอบเขตให้ตรงก่อนเชื่อ**
+///
+/// เทียบผลของ `stepProximityBatch` กับ [runOneCallback] ซึ่งเป็นลำดับของ ADR-21
+/// หัวข้อ 8 ที่มีเทสต์ล็อกไว้แล้วทั้งกลุ่ม
+///
+/// ## สิ่งที่เทสต์นี้พิสูจน์
+/// **ลำดับ push→sweep และค่า transition ที่คืนออกมา** ไม่เปลี่ยนจากก่อน ADR-22
+///
+/// ## สิ่งที่เทสต์นี้ **ไม่** พิสูจน์ (ผลรีวิว 10 ก.ย. 2026 — ADR-22 หัวข้อ 6 ข้อ 6)
+/// - **ไม่ได้ยิงผ่าน `runProximityLayer`** ซึ่งเป็นจุดจริงที่เลือกโหมด เลือก store
+///   และประกอบ `mode:` เข้า event — ไม่มีเทสต์ตัวใดในโปรเจกต์ยิงผ่านจุดนั้นเลย
+/// - **เส้นทาง foreground เปลี่ยนจริงสามจุด** (ที่เรียก `resetLastError`,
+///   พารามิเตอร์ `mode:`, และคอลัมน์ `mode=fg` ในบรรทัดหลักฐาน) — คำว่า "ไม่เปลี่ยน
+///   แม้แต่บรรทัดเดียว" ที่เคยใช้ในคอมมิตแรกของ ADR-22 **กว้างเกินความจริง**
 final class ProximityForegroundPathUnchangedTests: XCTestCase {
 
   func testForegroundPathIsByteForByteTheOldOrder() {
