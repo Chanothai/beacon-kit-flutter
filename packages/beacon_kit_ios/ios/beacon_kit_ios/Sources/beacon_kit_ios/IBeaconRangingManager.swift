@@ -409,7 +409,20 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   private func applyParsedRegions(
     _ parsedRegions: [(identifier: String, constraint: CLBeaconIdentityConstraint)]
   ) {
-    stopMonitoring(identifiers: nil)
+    // `clearProximityState: false` — **จุดเดียวในโค้ดทั้งหมดที่ส่งค่านี้**
+    //
+    // เส้นทางนี้คือ "แทนที่ชุด region" ไม่ใช่ "เลิกสนใจ region นั้นแล้ว" และมันคือ
+    // **เส้นทางเดียวที่เริ่ม `startRangingBeacons` ในรอบ launch ใหม่** ด้วย
+    // (ranging ไม่รอดข้าม process ต่างจาก monitoring ที่ระบบเก็บไว้ให้) แปลว่าตอน
+    // iOS ปลุก process ที่ถูกฆ่าขึ้นมา ลำดับจริงคือ: ถูกปลุก → Dart เรียก
+    // `startIBeaconMonitoring` → ที่นี่ → ranging เริ่มเดิน → `didRange` ตัวแรกมาถึง
+    // ถ้าเส้นทางนี้ล้างสถานะชั้น 2 ด้วย **หน้าต่าง/dwell ที่อุตส่าห์เก็บลง
+    // `UserDefaults` เพื่อให้รอดข้าม process (ADR-21 หัวข้อ 3) จะถูกลบทิ้งพอดี
+    // ในวินาทีที่มันกำลังจะถูกใช้** — กลไกทั้งข้อจะตายโดยไม่มีอะไรฟ้อง
+    //
+    // การล้างสถานะยังคงเกิดตามปกติในเส้นทาง `stopIBeaconMonitoring` ที่แอปเรียกเอง
+    // ซึ่งเป็นความหมายที่ ADR-21 หัวข้อ 7 ข้อ 2 พูดถึงจริง ๆ
+    stopMonitoring(identifiers: nil, clearProximityState: false)
 
     for parsedRegion in parsedRegions {
       let region = CLBeaconRegion(
@@ -433,7 +446,13 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
   }
 
   /// หยุด monitor+range ตาม [identifiers] — nil = หยุดทั้งหมดที่กำลัง monitor อยู่
-  func stopMonitoring(identifiers: [String]?) {
+  ///
+  /// - Parameter clearProximityState: ล้างสถานะของ**ชั้นที่ 2** (ADR-21) ของ region
+  ///   เหล่านั้นด้วยหรือไม่ — `true` เสมอสำหรับผู้เรียกทุกรายยกเว้น
+  ///   [applyParsedRegions] ซึ่งอธิบายเหตุผลไว้ที่จุดเรียกของมันเอง
+  ///   (ค่า default เป็น `true` เพื่อให้ผู้เรียกที่ไม่รู้เรื่องชั้น 2 ได้พฤติกรรม
+  ///   ที่ปลอดภัยกว่าโดยไม่ต้องตัดสินใจ)
+  func stopMonitoring(identifiers: [String]?, clearProximityState: Bool = true) {
     let targetIdentifiers = identifiers ?? Array(constraintsByIdentifier.keys)
     for identifier in targetIdentifiers {
       guard let constraint = constraintsByIdentifier[identifier] else { continue }
@@ -445,6 +464,23 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       // (identifier เดิมถูกส่งมาอีกครั้งใน startIBeaconMonitoring) ต้องถือว่าเป็น
       // การเริ่มต้นใหม่ ไม่ใช่ dedupe กับ state เก่าก่อนหยุดไปแล้ว
       lastKnownRegionState.removeValue(forKey: identifier)
+
+      // **ADR-21 หัวข้อ 7 ข้อ 2** — ล้าง state ของ**ชั้นที่ 2** ด้วยเหตุผลเดียวกับ
+      // บรรทัดข้างบนเป๊ะ: หน้าต่าง/ตัวนับ dwell ของ region ที่เลิกเฝ้าไปแล้วต้องไม่
+      // ถูกนำมาสานต่อถ้า identifier เดิมถูกลงทะเบียนใหม่วันหลัง (sample ที่นับ dwell
+      // "ติดกัน" ต้องติดกันจริงตามเวลา — ADR-19 หัวข้อ 6(ฉ))
+      //
+      // ฝั่ง Android เรื่องนี้ยังเป็นหนี้ค้างเพราะต้องไปแก้ที่ example app —
+      // **iOS ทำตั้งแต่คอมมิตแรกเพื่อไม่ให้ทำซ้ำรอยเดิม**
+      //
+      // ล้างทั้งสองที่: ในหน่วยความจำ (gate ที่ยังมีชีวิตอยู่ใน process นี้) และบน
+      // ดิสก์ (สถานะที่รอดข้าม process มา ซึ่งอาจมีอยู่แม้ gate ยังไม่ถูกสร้างเลย
+      // ในรอบ launch นี้)
+      if clearProximityState {
+        let keyPrefix = "\(identifier)\(ProximityKeyCodec.separator)"
+        proximityGate?.removeStates(matchingPrefix: keyPrefix)
+        proximityStore.removeStates(matchingPrefix: keyPrefix)
+      }
     }
   }
 
@@ -482,8 +518,6 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
     didRange beacons: [CLBeacon],
     satisfying beaconConstraint: CLBeaconIdentityConstraint
   ) {
-    guard let eventSink = eventSink else { return }
-
     // CLBeaconIdentityConstraint เทียบค่าได้ (Apple ออกแบบมาให้เทียบกับ constraint
     // ที่ใช้ตอนเรียก startRangingBeacons(satisfying:) ได้โดยตรงใน callback นี้)
     guard
@@ -493,19 +527,89 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       return
     }
 
-    let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-    let payload: [[String: Any]] = beacons.map { beacon in
-      [
-        "regionIdentifier": regionIdentifier,
-        "uuid": beacon.uuid.uuidString.lowercased(),
-        "major": beacon.major.intValue,
-        "minor": beacon.minor.intValue,
-        "rssi": beacon.rssi,
-        "proximity": Self.proximityString(beacon.proximity),
-        "timestamp": timestamp,
-      ]
+    // **ADR-21 หัวข้อ 5 — ทำไม `guard let eventSink` ถึงถูกย้ายมาไว้ตรงนี้:**
+    // เดิมบรรทัดนี้อยู่ที่ต้นเมธอด ซึ่งแปลว่าเมื่อ**ไม่มีผู้ฟังฝั่ง Dart** (engine
+    // ยังไม่ถูกสร้าง หรือไม่มีใคร subscribe) เมธอดนี้จะ `return` ออกไปทั้งตัว —
+    // นั่นคือ**เคสหลักที่ ADR-21 ทั้งฉบับมีอยู่เพื่อรองรับ** (แอปถูกปลุกด้วย region
+    // event แล้ว ranging เดินอยู่เบื้องหลังโดยยังไม่มี UI) ถ้าไม่ย้าย ชั้นที่ 2
+    // จะตายตั้งแต่บรรทัดแรกโดยไม่มีอะไรฟ้อง
+    //
+    // **พฤติกรรมของบล็อกนี้เหมือนเดิมเป๊ะ** — ย้ายขอบเขตของ guard อย่างเดียว ไม่แก้
+    // payload ไม่แก้ลำดับ ไม่แก้เงื่อนไขใด ๆ ของเส้นทางเดิม
+    if let eventSink = eventSink {
+      let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+      let payload: [[String: Any]] = beacons.map { beacon in
+        [
+          "regionIdentifier": regionIdentifier,
+          "uuid": beacon.uuid.uuidString.lowercased(),
+          "major": beacon.major.intValue,
+          "minor": beacon.minor.intValue,
+          "rssi": beacon.rssi,
+          "proximity": Self.proximityString(beacon.proximity),
+          "timestamp": timestamp,
+        ]
+      }
+      eventSink(payload)
     }
-    eventSink(payload)
+
+    // ---- ชั้นที่ 2 ของ ADR-21: proximity ----
+    //
+    // **อยู่หลังตรรกะเดิมทั้งหมดเสมอ ห้ามขยับขึ้นก่อน** (ADR-21 หัวข้อ 5) และ
+    // ครอบทั้งก้อนด้วย do/catch ที่ **กลืน** error โดยตั้งใจ — ไม่ใช่ความมักง่าย:
+    // เส้นทางเดิม (ranging -> Dart) กับชั้น 1 (region enter/exit) มีหลักฐานจาก
+    // อุปกรณ์จริงแล้ว ส่วนชั้นนี้ยังไม่เคยรันบนเครื่องจริงเลยแม้แต่ครั้งเดียว และ
+    // ต้องอ่านค่าที่เก็บไว้บน `UserDefaults` (ถอด JSON ได้ไม่ครบ) ถ้าปล่อยให้
+    // exception ลอยขึ้นไป callback ของ CoreLocation จะพังทั้งเมธอด ทั้งที่งานของ
+    // เส้นทางเดิมข้างบนทำเสร็จไปแล้ว — ได้ crash โดยไม่ได้อะไรกลับมา และรอบถัดไป
+    // ก็จะ crash ซ้ำแบบเดิม (หลักการเดียวกับ ADR-20 หัวข้อ 1)
+    //
+    // ร่องรอยของความล้มเหลวไม่ได้หายไปพร้อม error ที่ถูกกลืน — เส้นทางที่ล้มบ่อย
+    // ที่สุด (ที่เก็บ state) รายงานผ่าน `store=` ในบรรทัดหลักฐานทุกบรรทัดอยู่แล้ว
+    // (ADR-21 หัวข้อ 7 ข้อ 2)
+    do {
+      try runProximityLayer(regionIdentifier: regionIdentifier, beacons: beacons)
+    } catch {
+      BackgroundProximityMonitor.recordBackgroundLocationUpdatesTrace(
+        "proximity-layer-failed:\(error)"
+      )
+    }
+  }
+
+  /// **ADR-21 หัวข้อ 4 — จุด sweep ที่สอง**
+  ///
+  /// เคส "ไม่เจอ beacon เลย" ของ API รุ่น `satisfying:` (รุ่นที่โค้ดนี้ใช้) มาทาง
+  /// callback นี้ **ไม่ใช่** `didRange` ที่มี array ว่าง — ยืนยันคำต่อคำจาก abstract
+  /// ของ Apple เอง: "Tells the delegate that the location manager couldn't detect
+  /// any beacons that satisfy the provided constraint."
+  /// (`docs/sources/apple_proximity_ranging.md` หัวข้อ 8)
+  ///
+  /// ถ้าไม่ hook ที่นี่ด้วย เคสที่สำคัญที่สุดของฟีเจอร์นี้ ("ลูกค้าเดินออกจากร้าน")
+  /// จะไม่มีใครค้นพบเลย เพราะ `didRange` เลิกยิงไปแล้วตั้งแต่บีคอนหายไป —
+  /// **sweep ล้วน ไม่ push sample** (ไม่มี sample ให้ push อยู่แล้ว)
+  ///
+  /// ⚠️ เอกสาร Apple **ไม่ระบุ**ว่า callback นี้ยิงซ้ำเป็นจังหวะหรือยิงครั้งเดียว
+  /// (บันทึกไว้แล้วใน sources หัวข้อ "ไม่พบ/ไม่ยืนยัน (รอบที่ 2)") จึงยังพึ่งมันเป็น
+  /// นาฬิกาไม่ได้ — เป็นแค่โอกาสตรวจเพิ่ม ไม่ใช่การรับประกันว่า stale จะถูกพบ
+  func locationManager(
+    _ manager: CLLocationManager,
+    didFailRangingFor beaconConstraint: CLBeaconIdentityConstraint,
+    error: Error
+  ) {
+    guard
+      let regionIdentifier = constraintsByIdentifier.first(where: { $0.value == beaconConstraint }
+      )?.key
+    else {
+      return
+    }
+
+    // กลืน error ด้วยเหตุผลเดียวกับใน didRange (ดูคอมเมนต์ที่นั่น)
+    do {
+      try runProximityLayer(regionIdentifier: regionIdentifier, beacons: [])
+    } catch {
+      BackgroundProximityMonitor.recordBackgroundLocationUpdatesTrace(
+        "proximity-layer-failed:\(error)"
+      )
+    }
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -637,6 +741,173 @@ final class IBeaconRangingManager: NSObject, CLLocationManagerDelegate, FlutterS
       )
     )
     regionStateStreamHandler.send(payload)
+  }
+
+  // MARK: - ชั้นที่ 2: proximity (ADR-21, เพิ่ม 10 ก.ย. 2026)
+
+  /// gate ของชั้น 2 — สร้างครั้งเดียวต่อ process แล้วกู้สถานะจากดิสก์ทันที
+  ///
+  /// ต่างจากฝั่ง Android ที่สร้าง gate ใหม่ทุก `onReceive` (receiver มีชีวิตแค่ช่วง
+  /// นั้น) — ฝั่ง iOS `IBeaconRangingManager.shared` มีอายุเท่ากับ process จึงถือ
+  /// instance เดียวไว้ได้ ประหยัดการอ่านดิสก์ทุก callback (ซึ่งอาจถี่ระดับวินาที
+  /// ตอน foreground) **แต่ยังเขียนลงดิสก์ทุก batch เหมือนเดิม** เพราะ process ถูก
+  /// ฆ่าได้ตลอดเวลาและนั่นคือเหตุผลทั้งหมดที่ store มีตัวตน (ADR-21 หัวข้อ 3)
+  private var proximityGate: ProximityGate?
+
+  private let proximityStore = ProximityGateStore()
+
+  /// ตั้งค่า `allowsBackgroundLocationUpdates` ไปแล้วหรือยังใน process นี้ —
+  /// ตัดสินครั้งเดียวพอ ค่าใน `Info.plist` เปลี่ยนระหว่างรันไม่ได้อยู่แล้ว
+  private var didDecideBackgroundLocationUpdates = false
+
+  /// นาฬิกาที่ฉีดให้ [ProximityGate] — **จุดเดียวในเส้นทางนี้ที่เรียก `Date()`**
+  /// เพราะ `ProximityGate.swift` ห้ามแตะนาฬิกาของระบบเอง (ADR-21 หัวข้อ 2)
+  private static func epochMillisNow() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
+  }
+
+  private func proximityGateRestoringIfNeeded() -> ProximityGate {
+    if let gate = proximityGate { return gate }
+    let gate = ProximityGate(clock: Self.epochMillisNow)
+    // ต้องกู้สถานะก่อน push แรกเสมอ ไม่งั้น dwell เริ่มนับหนึ่งใหม่ทุกครั้งที่ระบบ
+    // สร้าง process ใหม่ แล้ว `dwellSamples = 3` จะไม่มีวันครบ (ADR-21 หัวข้อ 3)
+    gate.restoreStates(proximityStore.load())
+    proximityGate = gate
+    return gate
+  }
+
+  /// เดิน gate ให้ครบหนึ่ง batch แล้วบันทึกลงดิสก์ก่อนแจ้ง observer
+  ///
+  /// ลำดับสำคัญและห้ามสลับ:
+  /// 1. กู้สถานะจากดิสก์ (ครั้งแรกของ process)
+  /// 2. [ProximityGate.sweepStale] **ก่อน** ป้อน sample ใหม่ — ตรวจความเงียบที่ผ่าน
+  ///    มาด้วยเวลาก่อนที่ sample ของรอบนี้จะไปต่ออายุ key ให้ (ADR-21 หัวข้อ 4:
+  ///    ไม่มี `Timer` ใน SDK stale จึงถูกค้นพบตอน callback เท่านั้น)
+  /// 3. ป้อนทุก `CLBeacon` ตามลำดับที่ระบบส่งมา ("ordered by approximate distance
+  ///    from the device, with the closest beacon at the beginning" — Apple)
+  /// 4. **บันทึกลงดิสก์ก่อนแจ้ง observer** — หลักการเดียวกับที่ example app เขียน
+  ///    หลักฐานก่อนยิง notification: ถ้าระบบ suspend/ฆ่า process คั่นกลาง อย่างน้อย
+  ///    สถานะที่นับมาได้ต้องไม่หาย
+  ///
+  /// ประกาศ `throws` เพื่อ**บังคับให้ผู้เรียกครอบด้วย do/catch ตั้งแต่วันนี้** ตาม
+  /// ADR-21 หัวข้อ 5 แม้เส้นทางปัจจุบันจะยังไม่มีจุดที่ throw จริง — ถ้าวันหนึ่งมี
+  /// ใครเพิ่มโค้ดที่ throw เข้ามาในนี้ ชั้น 1 จะยังปลอดภัยอยู่โดยไม่ต้องแก้ผู้เรียก
+  private func runProximityLayer(regionIdentifier: String, beacons: [CLBeacon]) throws {
+    decideBackgroundLocationUpdatesIfNeeded()
+
+    proximityStore.resetLastError()
+    let gate = proximityGateRestoringIfNeeded()
+
+    var pending: [ProximityTransition] = gate.sweepStale()
+
+    for beacon in beacons {
+      let key = ProximityKeyCodec.key(
+        regionIdentifier: regionIdentifier,
+        uuid: beacon.uuid.uuidString.lowercased(),
+        major: beacon.major.uint16Value,
+        minor: beacon.minor.uint16Value
+      )
+      // ส่ง `nil` ตามจริงเมื่อ OS ตอบว่า `unknown` — **ห้ามแปลงเป็น `.far`**
+      // ("วัดไม่ได้" ไม่เท่ากับ "ไกล" — ADR-19 หัวข้อ 6(ง))
+      if let transition = gate.push(key: key, bucket: Self.proximityBucket(beacon.proximity)) {
+        pending.append(transition)
+      }
+    }
+
+    proximityStore.save(gate.snapshotStates())
+    // อ่านหลัง save เพื่อให้ครอบทั้งความล้มเหลวของ load และ save ในรอบเดียวกัน
+    let storeError = proximityStore.lastError
+
+    guard !pending.isEmpty else { return }
+
+    let timestampMillis = Self.epochMillisNow()
+    for transition in pending {
+      let parsed = ProximityKeyCodec.parse(transition.key)
+      BackgroundProximityMonitor.emit(
+        BeaconKitProximityChangedEvent(
+          // ถ้าถอด key ไม่ได้ (ไม่ควรเกิด) ยังต้องรายงาน region ตามที่รู้จริงจาก
+          // callback แทนการทิ้ง event ทั้งใบ — ความเงียบคือสิ่งที่ ADR-21 หัวข้อ 7
+          // ทั้งข้อพยายามกำจัด
+          regionIdentifier: parsed?.regionIdentifier ?? regionIdentifier,
+          uuid: parsed?.uuid,
+          major: parsed?.major,
+          minor: parsed?.minor,
+          from: transition.from,
+          to: transition.to,
+          reason: transition.reason,
+          medianMeters: transition.medianMeters,
+          timestampMillis: timestampMillis,
+          storeError: storeError
+        )
+      )
+    }
+  }
+
+  /// ตั้ง `allowsBackgroundLocationUpdates` **ก็ต่อเมื่อ `Info.plist` ของ host app
+  /// ประกาศ `UIBackgroundModes` ที่มี `location` จริงเท่านั้น**
+  ///
+  /// ⚠️ **ห้ามตั้งแบบไม่มีเงื่อนไขเด็ดขาด** — Apple ระบุคำต่อคำว่า "Setting the
+  /// value to `true` but omitting the `UIBackgroundModes` key and `location` value
+  /// in your app's `Info.plist` file is **a fatal error that terminates the app**"
+  /// (`docs/sources/apple_proximity_ranging.md` หัวข้อ 6) `beacon_kit` เป็นไลบรารี
+  /// ที่รันอยู่ในแอปของคนอื่น การตั้งดื้อ ๆ = **SDK ฆ่าแอปของ host app เพราะเขา
+  /// ลืมใส่ plist** ซึ่งยอมไม่ได้ (ADR-21 หัวข้อ 1)
+  ///
+  /// เมื่อไม่ตั้ง **ต้องมีร่องรอย ห้ามเงียบ** — ดู
+  /// [BackgroundProximityMonitor.backgroundLocationUpdatesTrace]
+  ///
+  /// ⚠️ **ยังไม่มีเอกสาร Apple ยืนยันว่าแฟล็กนี้มีผลกับ *ranging*** ทุกประโยคในหน้า
+  /// นั้นพูดถึง "location updates" ล้วน ๆ (บันทึกไว้แล้วใน sources หัวข้อ
+  /// "ไม่พบ/ไม่ยืนยัน (รอบที่ 2)") — ตั้งเพราะเป็นตัวเลือกเดียวที่มี **ต้องพิสูจน์
+  /// ด้วยเครื่องจริงเท่านั้น**
+  private func decideBackgroundLocationUpdatesIfNeeded() {
+    guard !didDecideBackgroundLocationUpdates else { return }
+    didDecideBackgroundLocationUpdates = true
+
+    let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String]
+    if Self.allowsBackgroundLocationUpdates(backgroundModes: modes) {
+      locationManager.allowsBackgroundLocationUpdates = true
+      BackgroundProximityMonitor.recordBackgroundLocationUpdatesTrace(
+        "allowsBackgroundLocationUpdates=true"
+      )
+    } else {
+      BackgroundProximityMonitor.recordBackgroundLocationUpdatesTrace(
+        "allowsBackgroundLocationUpdates=skipped"
+          + " reason=no-location-in-UIBackgroundModes"
+          + " modes=[\((modes ?? []).joined(separator: ","))]"
+      )
+    }
+  }
+
+  /// ส่วนที่เป็น **pure function** ของ [decideBackgroundLocationUpdatesIfNeeded] —
+  /// แยกออกมาเพื่อให้ XCTest ตรวจตารางการตัดสินนี้ได้โดยไม่ต้องแก้ `Info.plist`
+  /// ของแอปทดสอบ (pattern เดียวกับ `authorizationDecision(for:)`)
+  static func allowsBackgroundLocationUpdates(backgroundModes: [String]?) -> Bool {
+    return (backgroundModes ?? []).contains("location")
+  }
+
+  /// แปลง `CLProximity` -> [ProximityBucket] — **`nil` เมื่อ `unknown`**
+  ///
+  /// การแปลงอยู่ที่ไฟล์นี้ (ซึ่ง import CoreLocation อยู่แล้ว) ไม่ใช่ใน
+  /// `ProximityGate.swift` ที่ห้าม import CoreLocation ตาม ADR-21 หัวข้อ 2
+  ///
+  /// `unknown` แปลงเป็น `nil` **ไม่ใช่ `.far`** — Apple นิยามไว้ว่า "The proximity
+  /// of the beacon could not be determined" ซึ่งคือ "วัดไม่ได้" คนละเรื่องกับ
+  /// "วัดได้แล้วไกล" (ADR-19 หัวข้อ 6(ง)) `@unknown default` ก็เป็น `nil` ด้วย
+  /// เหตุผลเดียวกัน: case ที่เราไม่รู้จัก = ตอบไม่ได้ ห้ามเดา
+  static func proximityBucket(_ proximity: CLProximity) -> ProximityBucket? {
+    switch proximity {
+    case .immediate:
+      return .immediate
+    case .near:
+      return .near
+    case .far:
+      return .far
+    case .unknown:
+      return nil
+    @unknown default:
+      return nil
+    }
   }
 
   private static func proximityString(_ proximity: CLProximity) -> String {

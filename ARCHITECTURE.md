@@ -3873,12 +3873,37 @@ background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วิ
 
 ## ADR-21: ProximityGate ฝั่ง iOS — port เป็น Swift ใน `IBeaconRangingManager` (เพิ่ม 10 ก.ย. 2026)
 
-> **สถานะ: ตัดสินใจแล้ว — ยังไม่ implement**
-> ขั้นที่ 1/4 ตาม `PIPELINE.md` **ห้ามมีโค้ดใด ๆ ในรอบนี้** — `flutter-dev` ต้องเปลี่ยน
-> แบนเนอร์นี้เป็น `code-complete, unverified` ในคอมมิตเดียวกับโค้ด (CONTRIBUTING ข้อ 8)
+> **สถานะ: code-complete, unverified**
+> โค้ดครบตามหัวข้อ 1-5 แล้ว (`ProximityGate.swift` · `ProximityGateStore.swift` ·
+> `BackgroundProximityMonitor.swift` · hook ใน `didRange`/`didFailRangingFor` ของ
+> `IBeaconRangingManager` · observer ใน `AppDelegate` ของ example app) และผ่าน
+> `flutter build ios` + `xcodebuild test` (XCTest เดิมทั้งชุดยังเขียว) **แต่ยังไม่เคยรัน
+> กับ K9P จริงแม้แต่ครั้งเดียว** — ห้ามอ่านว่า "ทำงานได้" จนกว่าจะมีรอบทดสอบบนเครื่องจริง
+> พร้อมไฟล์หลักฐาน (บรรทัด `event=proximity`) · **ยังไม่มีเทสต์ของชั้นนี้เลย** (ขั้นที่ 3/4
+> เป็นของ `beacon-qa`)
 > **ขอบเขต:** iOS เท่านั้น — ไม่แตะ Android, ไม่แตะ `proximity_gate.dart` (reference),
 > ไม่แตะ `didEnterRegion`/`didExitRegion`/`didDetermineState`/`emitRegionStateIfChanged`
 > **แม้แต่บรรทัดเดียว** · สัญญา event ใช้ของ ADR-20 หัวข้อ 5 ตามเดิม ห้ามนิยามใหม่
+>
+> **สามจุดที่ implement ต่างจากตัว ADR — ต้องอ่านก่อนรีวิว:**
+> 1. **`ProximityKeyState` ฝั่ง Swift ไม่มี counter `dropped*`** ต่างจาก Dart/Kotlin —
+>    สาขาที่ counter นั้นนับ (ADR-19 6(จ): `proximity == null` **และ** `txPower == null`)
+>    ไปไม่ถึงบนเส้นทางนี้ เพราะอินพุตเดียวคือ Apple bucket ส่วน sample ที่เป็น `unknown`
+>    **ห้ามนับ counter ใด ๆ** ตามหัวข้อ 2 ของ ADR นี้เอง ("ห้ามแตะ state แม้แต่ฟิลด์เดียว")
+>    — ผลคือ **จำนวน `unknown` ที่ Apple ส่งมายังนับไม่ได้ในรอบนี้** ถ้ารอบทดสอบเครื่องจริง
+>    ต้องการตัวเลขนั้น ต้องเป็น ADR รอบใหม่ที่แก้ทั้งสามภาษาพร้อมกัน ไม่ใช่แก้ Swift ฝ่ายเดียว
+> 2. **`stopMonitoring(identifiers:)` มีพารามิเตอร์เพิ่ม `clearProximityState`** (default
+>    `true`) และ `applyParsedRegions` เป็นผู้เรียกจุดเดียวที่ส่ง `false` — จำเป็นเพราะ
+>    `applyParsedRegions` คือ**เส้นทางเดียวที่เริ่ม `startRangingBeacons` ในรอบ launch ใหม่**
+>    (ranging ไม่รอดข้าม process ต่างจาก monitoring) ถ้าล้าง state ที่นั่นด้วย สถานะที่เก็บ
+>    ลง `UserDefaults` ตามหัวข้อ 3 จะถูกลบทิ้งพอดีในวินาทีที่กำลังจะถูกใช้ = กลไกทั้งข้อตาย
+>    เงียบ ๆ · การล้างยังคงเกิดตามปกติในเส้นทาง `stopIBeaconMonitoring` ที่แอปเรียกเอง
+>    ซึ่งเป็นความหมายที่หัวข้อ 7 ข้อ 2 พูดถึงจริง ๆ
+> 3. **ยังไม่มีอะไรเริ่ม ranging ในรอบที่ถูกปลุกจากสถานะถูกฆ่า** — Apple แนะนำให้เริ่ม
+>    ranging ใน `didEnterRegion` แต่รอบนี้ห้ามแตะเมธอดนั้น ผลคือชั้น 2 บน iOS จะมี sample
+>    ไหลเข้าก็ต่อเมื่อ Dart เรียก `startIBeaconMonitoring` แล้วเท่านั้น **สัญญาในหัวข้อ 1
+>    ข้อ (ข) ("ช่วงหลังถูกปลุกด้วย region enter/exit") จึงยังพิสูจน์ไม่ได้ในรอบนี้** ต้องมี
+>    ADR รอบใหม่ที่อนุญาตให้แตะ `didEnterRegion` ก่อน
 
 ### 1. ranging ตอน background ทำได้แค่ไหน — **สัญญาสองแพลตฟอร์มไม่เท่ากัน ต้องพูดตรง ๆ**
 

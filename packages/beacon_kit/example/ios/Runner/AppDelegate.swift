@@ -156,6 +156,16 @@ import beacon_kit_ios
     // ทดสอบก่อนหน้าแยกไม่ออกเลยเพราะไม่มีบรรทัดอะไรทั้งสิ้นให้ดู
     logLaunch(restoredRegionIdentifiers: restoredRegionIdentifiers)
 
+    // **ชั้นที่ 2 (ADR-21) — ต่อจากของเดิม ไม่แตะตรรกะข้างบนเลยแม้แต่บรรทัดเดียว**
+    //
+    // ตั้งที่นี่ด้วยเหตุผลเดียวกับที่ชั้น 1 ตั้ง hook ที่นี่: นี่คือจุดเดียวที่
+    // ทำงานเสมอไม่ว่า process จะเกิดด้วยเหตุใด (ผู้ใช้เปิดเอง / iOS ปลุกขึ้นมา
+    // เบื้องหลัง) และจบก่อนที่ CoreLocation จะเรียก delegate ได้เสมอ — SDK ไม่มี
+    // คิว event ให้ (ADR-21 หัวข้อ 6) ถ้าตั้ง observer ช้ากว่านี้ event จะหายจริง ๆ
+    BackgroundProximityMonitor.setProximityObserver { [weak self] event in
+      self?.recordProximityEvent(event)
+    }
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -222,6 +232,155 @@ import beacon_kit_ios
       title: "Region \(event.state): \(event.regionIdentifier)",
       body: "สถานะแอป: \(currentRunContext())"
     )
+  }
+
+  // MARK: - หลักฐานของชั้นที่ 2 (proximity — ADR-21)
+
+  /// เว้นช่วง notification ต่อหนึ่งบีคอนอย่างน้อย 60 วินาที
+  ///
+  /// **เป็นค่าสำหรับ demo ล้วน ๆ ไม่ใช่ค่าที่ calibrate อะไร** — และเป็น**บทเรียน
+  /// ตรง ๆ จากรอบทดสอบ Android 9 ก.ย. 2026 ที่ผู้ทดสอบได้ notification 13 ใบใน 15
+  /// นาทีทั้งที่ยืนอยู่กับที่** (bucket แกว่ง near ⇄ immediate เพราะขอบนั้นไม่มี
+  /// hysteresis ตาม ADR-19 หัวข้อ 6(ข) — ADR-21 หัวข้อ 7 ข้อ 3 สั่งไว้ว่า iOS ต้อง
+  /// ไม่ทำซ้ำ)
+  private static let proximityNotificationCooldownMillis: Int64 = 60_000
+
+  /// suite แยกของ cooldown — **ต้องรอดข้าม process** (ดู [consumeProximityCooldown])
+  private static let proximityCooldownSuiteName = "beacon_kit_example.proximity_cooldown"
+
+  /// เขียน log + ยิง notification ของ transition ชั้นที่ 2 จาก **โค้ด native ล้วน**
+  ///
+  /// เหตุผลเดียวกับ [recordRegionEvent] เป๊ะ: เส้นทางที่ ADR-21 มีอยู่เพื่อรองรับ
+  /// คือช่วงที่ Flutter engine อาจยังไม่มีตัวตน — ถ้าเขียน log ฝั่ง Dart เครื่องมือ
+  /// วัดจะตายพร้อมกับสิ่งที่มันควรวัด
+  ///
+  /// **ลำดับที่ห้ามสลับ: log ก่อน notification เสมอ** และ **cooldown มีผลกับ
+  /// notification เท่านั้น บรรทัด log เขียนทุก transition** ไม่งั้นหลักฐานจะหายไป
+  /// พร้อมกับการกันสแปม ซึ่งกลับหัวกลับหางกับเหตุผลข้างบน — บรรทัด `farther`/`stale`
+  /// คือสิ่งเดียวที่ตอบได้ว่า `staleAfter = 10 วินาที` (ADR-19 หัวข้อ 8) ใช้ได้จริง
+  /// กับอัตราการยิงของ `didRange` บน iOS หรือไม่ ซึ่งเป็นคำถามเปิดข้อใหญ่ที่สุดของ
+  /// ADR-21 หัวข้อ 4
+  private func recordProximityEvent(_ event: BeaconKitProximityChangedEvent) {
+    // 1) หลักฐานก่อน — **schema 6 คอลัมน์เดิมทุกประการ ไม่เพิ่ม/ลด/สลับคอลัมน์**
+    //    ข้อมูลใหม่ของ ADR-21 ทั้งหมดต่อท้ายอยู่ใน**คอลัมน์สัญญาณดิบ**เท่านั้น
+    //    (ตัวอ่านที่มีอยู่ — หน้า "ดู log" ฝั่ง Dart และ `tool/analyze_region_log.dart`
+    //    — จึงไม่พัง)
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "proximity",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        // receiverEntry = true เป็น **ข้อเท็จจริงของเส้นทางเรียก ไม่ใช่การเดา**:
+        // `BackgroundProximityMonitor.emit` ถูกเรียกจาก
+        // `IBeaconRangingManager.runProximityLayer` ที่เดียว และเมธอดนั้นมีผู้เรียก
+        // แค่สองตัวคือ `didRange` กับ `didFailRangingFor` ซึ่งเป็น
+        // `CLLocationManagerDelegate` ที่ระบบเรียกเข้ามาทั้งคู่
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + Self.proximityRawSignalsSuffix(event)
+      )
+    )
+
+    // 2) notification เฉพาะ transition ที่ยืนยันว่า "ใกล้" — **ตัวกรองอยู่ที่แอป
+    //    ไม่ใช่ที่ SDK** (ADR-21 หัวข้อ 6 · ADR-11 หัวข้อ 7 เรื่องตำแหน่งของ
+    //    debounce) ผู้ทดสอบไม่ควรถูกเด้งตอนเดินออกห่าง เพราะจะกลบสัญญาณที่กำลังจะ
+    //    พิสูจน์
+    guard event.to == .near || event.to == .immediate else { return }
+
+    // 3) **ยิงเฉพาะตอน "เข้าสู่ความใกล้" เท่านั้น ไม่ใช่ทุกการขยับภายในความใกล้**
+    //
+    //    ขอบ `immediate`/`near` ไม่มี dead zone อะไรคั่นเลยบนเส้นทางนี้ (มีแค่ mode
+    //    ของหน้าต่าง + dwell) — ผู้ที่ยืนนิ่งอยู่ราวหนึ่งเมตรจึงทำให้ candidate
+    //    สลับไป-กลับได้เรื่อย ๆ และ **ทั้งสองทิศผ่านตัวกรองข้อ 2 ได้หมด** นี่คือ
+    //    ช่องว่างของ ADR-19 หัวข้อ 6(ข) เอง (ใส่ hysteresis ไว้เฉพาะขอบ far/close)
+    //    ซึ่ง **ห้ามแก้ที่ `ProximityGate` ฝั่ง Swift ฝ่ายเดียวเด็ดขาด** เพราะจะ
+    //    drift จาก reference implementation ทันที (ADR-21 หัวข้อ 2/7 ข้อ 3) —
+    //    รอบนี้จึงกันที่ชั้นนโยบายของแอปแทน เหมือนที่ ADR-20 ทำฝั่ง Android
+    //
+    //    **บรรทัดหลักฐานยังเขียนครบทุก flap** (ข้อ 1) ตัวเลข "สลับ near↔immediate
+    //    กี่ครั้ง" ที่ ADR-21 หัวข้อ 7 ข้อ 3 สั่งให้เก็บจึงไม่หายไปไหน
+    guard event.from == nil || event.from == .far else { return }
+
+    // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown)
+    guard consumeProximityCooldown(key: proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
+    else { return }
+
+    postNotification(
+      title: "ใกล้ \(event.regionIdentifier) (\(event.to?.wireName ?? "n/a"))",
+      body: "reason=\(event.reason.wireName) · beacon=\(event.beacon) · "
+        + "procUuid=\(BackgroundEvidenceLog.processId)"
+    )
+  }
+
+  /// ส่วนต่อท้ายของคอลัมน์สัญญาณดิบสำหรับบรรทัด `event=proximity` — **pure function**
+  /// จึงมี XCTest คลุมได้จริงโดยไม่ต้องมีอุปกรณ์ (เหตุผลเดียวกับ
+  /// `BackgroundEvidenceLog.line`)
+  ///
+  /// ```
+  ///  bucket=near from=none reason=closer beacon=1/42 store=ok
+  /// ```
+  ///
+  /// รูปแบบเดียวกับฝั่ง Android: ขึ้นต้นด้วยช่องว่าง และทุกค่าที่ไม่มีเขียนเป็น
+  /// `n/a` **ห้ามปล่อยว่างและห้ามมีช่องว่างในค่า** เพราะคอลัมน์สัญญาณดิบคั่นค่าด้วย
+  /// ช่องว่าง ถ้าค่าใดว่างหรือมีช่องว่างปน ตัวอ่านจะเห็นเป็นคนละ key โดยไม่มีอะไรฟ้อง
+  ///
+  /// - `from=none` (ไม่ใช่ `n/a`) เมื่อไม่เคยมี bucket ที่ยืนยันมาก่อน — คนละความ
+  ///   หมายกัน: `none` = "ยืนยัน bucket แรกของบีคอนตัวนี้" ซึ่งเป็นข้อเท็จจริงที่รู้
+  ///   แน่ ส่วน `n/a` = "ตอบไม่ได้"
+  /// - `beacon=<major>/<minor>` — **ต้องมีตั้งแต่คอมมิตแรกตาม ADR-21 หัวข้อ 7 ข้อ 1**
+  ///   ไม่งั้น `stale` หลายบรรทัดติดกันของคนละบีคอนจะอ่านเหมือนบั๊กยิงซ้ำ (เกิดจริง
+  ///   รอบ Android 9 ก.ย. 2026)
+  /// - `store=ok|<error>` — **ต้องมีตั้งแต่คอมมิตแรกตาม ADR-21 หัวข้อ 7 ข้อ 2**
+  ///   `ok` ไม่ใช่ค่าว่าง: ต้องอ่านออกได้ว่า "ถามแล้วและไม่มี error" ต่างจาก "ไม่มี
+  ///   คอลัมน์นี้เพราะเป็น log รุ่นเก่า"
+  static func proximityRawSignalsSuffix(_ event: BeaconKitProximityChangedEvent) -> String {
+    var parts = ""
+    parts += " bucket=\(event.to?.wireName ?? "n/a")"
+    parts += " from=\(event.from?.wireName ?? "none")"
+    parts += " reason=\(event.reason.wireName)"
+    parts += " beacon=\(event.beacon)"
+    parts += " store=\(event.storeError?.replacingOccurrences(of: " ", with: "_") ?? "ok")"
+    return parts
+  }
+
+  /// key ของ cooldown — ระดับ **บีคอนหนึ่งตัวในหนึ่ง region**
+  ///
+  /// ตรงกับ key ของ `ProximityGate` (ADR-21 หัวข้อ 3) โดยตั้งใจ เพราะข้อความที่
+  /// ผู้ใช้เห็นมี `beacon=<major>/<minor>` อยู่ด้วย — บีคอนคนละตัวจึงให้ข้อความคนละ
+  /// ใบที่อ่านแล้วแยกออก ต่างจากฝั่ง Android ที่จงใจ**ไม่**ใส่ตัวแยกบีคอนลง key
+  /// เพราะที่นั่นไม่มี major/minor รายเฟรมให้ใส่ในข้อความตั้งแต่แรก
+  private func proximityCooldownKey(for event: BeaconKitProximityChangedEvent) -> String {
+    return [
+      event.regionIdentifier,
+      event.uuid ?? "-",
+      event.major.map(String.init) ?? "-",
+      event.minor.map(String.init) ?? "-",
+    ].joined(separator: "|")
+  }
+
+  /// `true` เมื่อยิง notification ได้ (และจดเวลาไว้แล้ว) · `false` เมื่อยังติด
+  /// cooldown อยู่
+  ///
+  /// **เก็บลง `UserDefaults` ไม่ใช่ตัวแปรใน memory** เพราะ process ตายและถูกปลุก
+  /// ใหม่ได้ตลอดในเส้นทางที่ ADR-21 รองรับ — cooldown ที่อยู่ใน memory อย่างเดียวจะ
+  /// รีเซ็ตทุกครั้งที่ระบบสร้าง process ใหม่ ซึ่งแปลว่ามันจะไม่ทำงานเลยในเคสที่มัน
+  /// ถูกสร้างมาเพื่อแก้ (เหตุผลเดียวกับที่ฝั่ง Android ใช้ `SharedPreferences`)
+  ///
+  /// นาฬิกาที่เทียบคือเวลาแบบ wall clock ที่ติดมากับ event เอง — ยอมแลกความเสี่ยง
+  /// เรื่องผู้ใช้ปรับนาฬิกาเครื่อง (ซึ่งทำให้เกิด/หายไปได้แค่ notification ใบเดียว
+  /// ตอน demo) กับการไม่ต้องจัดการโทเคนรอบบูต
+  private func consumeProximityCooldown(key: String, nowMillis: Int64) -> Bool {
+    guard let defaults = UserDefaults(suiteName: Self.proximityCooldownSuiteName) else {
+      // อ่าน/เขียนที่เก็บ cooldown ไม่ได้ = ยอมให้เด้ง ดีกว่าเงียบไปทั้งรอบทดสอบ
+      // (ความล้มเหลวของ "ตัวกันสแปม" ต้องไม่กลืน event ที่กำลังจะพิสูจน์)
+      return true
+    }
+    let lastMillis = Int64(defaults.double(forKey: key))
+    if lastMillis != 0 && nowMillis - lastMillis < Self.proximityNotificationCooldownMillis {
+      return false
+    }
+    defaults.set(Double(nowMillis), forKey: key)
+    return true
   }
 
   /// **ตรรกะการตัดสินล้วน (pure)** — แยกออกจาก `currentRunContext()` เพื่อให้
