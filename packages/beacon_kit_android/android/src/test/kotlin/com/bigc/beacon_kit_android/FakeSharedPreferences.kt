@@ -20,6 +20,22 @@ class FakeSharedPreferences : SharedPreferences {
 
     private val values = mutableMapOf<String, Any?>()
 
+    /**
+     * ตัวจำลองผลลัพธ์ของ `Editor.commit()` แบบกำหนดเอง — ใช้เฉพาะเทสต์ C2
+     * (`ProximityGateStore.load()` ต้องเช็คผลของ `commit()` ตอนลบคีย์เก่า) ที่ต้อง
+     * จำลอง `commit()` คืน `false` หรือโยน exception โดยไม่มีวิธีอื่นทำได้ผ่าน
+     * [FakeEditor] ปกติ (ปกติ `commit()` ของตัวปลอมนี้ apply แล้วคืน `true` เสมอ)
+     *
+     * `null` (ค่าเริ่มต้น) = พฤติกรรมปกติ ไม่กระทบเทสต์เดิมสักตัว — ตั้งเป็น non-null
+     * เมื่อไรจะถูกเรียก**แทน**พฤติกรรมปกติทุกครั้งที่ editor ตัวไหนก็ตามของ instance
+     * นี้ถูก `commit()` ไม่แยกตาม operation (remove/put) เพราะ `SharedPreferences`
+     * จริงก็ไม่แยกผลของ `commit()` ตาม operation เช่นกัน (เขียนทั้ง batch เดียวกันเสมอ)
+     * — ถ้า override คืน `false` การเปลี่ยนแปลงที่ pending ไว้จะ**ไม่ถูก apply**
+     * (จำลองดิสก์เขียนไม่สำเร็จจริง ไม่ใช่แค่รายงานผลผิด) ถ้า override โยน exception
+     * ก็โยนตรง ๆ โดยไม่ apply เช่นกัน
+     */
+    var commitOverride: (() -> Boolean)? = null
+
     override fun getAll(): MutableMap<String, *> = values.toMutableMap()
 
     override fun getString(key: String?, defValue: String?): String? =
@@ -110,6 +126,12 @@ class FakeSharedPreferences : SharedPreferences {
         }
 
         override fun commit(): Boolean {
+            val override = commitOverride
+            if (override != null) {
+                // ตั้งใจไม่ apply() เมื่อมี override — commit() ที่คืน false หรือ
+                // โยน exception ต้องไม่ทิ้งผลข้างเคียงไว้ เหมือนดิสก์เขียนไม่สำเร็จจริง
+                return override.invoke()
+            }
             apply()
             return true
         }

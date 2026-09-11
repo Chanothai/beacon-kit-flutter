@@ -1,0 +1,16 @@
+{
+  "name": "ibeacon_valid_major_minor_9902_2",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน ibeacon_valid_basic ทุก byte ยกเว้น major/minor: [20:22)=26ae (9902 แทน 1) [22:24)=0002 (2 แทน 100) — สร้างขึ้นเพื่อให้ QA agent ใช้ค่า major/minor เดียวกันข้ามภาษา (ADR-20 หัวข้อ 1(ข) บังคับว่าเทส ibeaconIdentityFrom() ฝั่ง Kotlin ต้องใช้ byte ชุดเดียวกับ ibeacon_parser_test.dart ฝั่ง Dart ไม่ใช่แต่งเลขคนละชุด) ไม่ได้จับจากอุปกรณ์จริง",
+  "raw_hex": "4c000215e2c56db5dffb48d2b060d0f5a71096e026ae0002c5",
+  "expect": {
+    "result": "success",
+    "frame": {
+      "uuid": "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+      "major": 9902,
+      "minor": 2,
+      "tx_power": -59
+    }
+  }
+}

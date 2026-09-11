@@ -1,0 +1,16 @@
+{
+  "name": "ibeacon_valid_major_minor_max_boundary",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน ibeacon_valid_basic ทุก byte ยกเว้น major/minor: [20:22)=ffff [22:24)=ffff — ขอบบนของช่วง uint16 (65535) กรณีสำคัญที่สุดของขอบเขต: ถ้า major/minor ถูกอ่านเป็น signed 16-bit จะได้ -1 แทนที่จะเป็น 65535 (ADR-20 หัวข้อ 1(ข)) ต้องคู่กับ ibeacon_valid_major_minor_zero_boundary เพื่อครอบทั้งขอบล่างและขอบบน ไม่ได้จับจากอุปกรณ์จริง",
+  "raw_hex": "4c000215e2c56db5dffb48d2b060d0f5a71096e0ffffffffc5",
+  "expect": {
+    "result": "success",
+    "frame": {
+      "uuid": "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+      "major": 65535,
+      "minor": 65535,
+      "tx_power": -59
+    }
+  }
+}
