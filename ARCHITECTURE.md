@@ -3761,11 +3761,12 @@ bucket หนึ่งไปอีก bucket" ซึ่งสมมติว่�
 
 ## ADR-20: ProximityGate ตอนแอปไม่ทำงาน — port ตรรกะเป็น Kotlin ใน `BeaconScanReceiver` (เพิ่ม 9 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified**
-> โค้ดครบตามหัวข้อ 1-5 แล้ว (`ProximityGate.kt` · `ProximityGateStore.kt` ·
-> `BackgroundProximityMonitor.kt` · hook ใน `BeaconScanReceiver` · observer ใน example app)
-> และผ่าน unit test เดิมทั้งหมด **แต่ยังไม่เคยรันกับ K9P จริงแม้แต่ครั้งเดียว** — ห้ามอ่านว่า
-> "ทำงานได้" จนกว่าจะมีรอบทดสอบบนเครื่องจริงพร้อมไฟล์หลักฐาน (บรรทัด `event=proximity`)
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> ข้อ 8 · 9 · 10**
+>
+> ไฟล์: `ProximityGate.kt` · `ProximityGateStore.kt` · `BackgroundProximityMonitor.kt` ·
+> hook ใน `BeaconScanReceiver` · observer ใน example app
+>
 > **ขอบเขต:** POC time-box บน Android เท่านั้น — ไม่แตะ iOS, ไม่แตะ region enter/exit เดิม
 > (ADR-14/ADR-17), ไม่แตะ `ProximityGate` ฝั่ง Dart
 
@@ -3873,39 +3874,18 @@ background มาเป็น batch ไม่ใช่ ~1 ครั้ง/วิ
 
 ## ADR-21: ProximityGate ฝั่ง iOS — port เป็น Swift ใน `IBeaconRangingManager` (เพิ่ม 10 ก.ย. 2026)
 
-> **สถานะ: `observed` เฉพาะโหมด foreground · โหมด background ถูกปิดด้วยโค้ดโดยเจตนา (10 ก.ย. 2026 รอบสาม)**
-> โค้ดครบตามหัวข้อ 1-5 แล้ว (`ProximityGate.swift` · `ProximityGateStore.swift` ·
-> `BackgroundProximityMonitor.swift` · hook ใน `didRange`/`didFailRangingFor` ของ
-> `IBeaconRangingManager` · observer ใน `AppDelegate` ของ example app)
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 19.1-19.12**
 >
-> **รอบเดินจริง 10 ก.ย. 2026 เกิดขึ้นแล้ว** — `docs/test-data/2026-09-10_ios_proximity_walk.log`
-> (54 บรรทัด · build `a8f7fa1`) พิสูจน์ว่า **ชั้นที่ 2 ทำงานจริงบนเครื่องจริง** รวมถึงใน
-> process ที่ `relaunchedFromTerminated` (13:55:42-13:57:12) — และพิสูจน์ว่า**สมมติฐาน
-> เรื่อง `didFailRangingFor` ของหัวข้อ 4 ผิด** (ดูหัวข้อ 8)
+> ไฟล์: `ProximityGate.swift` · `ProximityGateStore.swift` · `BackgroundProximityMonitor.swift`
+> · hook ใน `didRange`/`didFailRangingFor` ของ `IBeaconRangingManager` · observer ใน
+> `AppDelegate` ของ example app
 >
-> ~~**แต่การแก้ที่เกิดจากรอบนั้น (หัวข้อ 8-9) ยังไม่เคยรันกับ K9P จริง** — code-complete, unverified~~
-> **ยกแล้ว** ด้วยรอบเดินจริงรอบสองในย่อหน้าถัดไป
->
-> **รอบเดินจริงรอบสอง 10 ก.ย. 2026** — `docs/test-data/2026-09-10_ios_proximity_counters.log`
-> (62 บรรทัด · build `4c6f648`) ยืนยันหัวข้อ 8-9 ที่รอบก่อนยัง unverified: `regionExit` ทำงานจริง
-> (15:30:28 ทั้งสองบีคอน) · `reason=stale` ลดจาก **33% เหลือ 11%** · transition ที่มีความหมายจริง
-> **81%** · `rangefail` ยังเป็น **0** ตามเดิม
->
-> **และหักล้างสัญญาเดิมของหัวข้อ 1**: ตัวนับ 3 ตัวพิสูจน์ว่าโหมด background ให้ sample ที่ใช้ได้
-> **ต่อ key ทุก ~77 วินาที** ซึ่งค่าคงที่ของ ADR-19 หัวข้อ 8 ทำงานด้วยไม่ได้เชิงโครงสร้าง —
-> ชั้นที่ 2 จึงถูก**บังคับด้วยโค้ด**ให้เดินเฉพาะตอน `.active` (หัวข้อ 1 · หัวข้อ 4.1 · หัวข้อ 7 ข้อ 4)
-> **โหมด background ที่ทำงานได้จริงเป็นเรื่องของ ADR-22 (ฉบับร่าง) ไม่ใช่ ADR นี้**
->
-> ผ่าน `flutter build ios --debug --no-codesign` + `xcodebuild test` —
-> **97 เคส: 95 passed / 0 failed / 2 skipped** (สอง skip เดิมเรื่อง protection class มีมาก่อน
-> ADR นี้ · รอบสามเพิ่ม 5 เคสในกลุ่ม `ProximityForegroundOnlyTests` ซึ่งอยู่ใน
-> `ProximityGateTests.swift` ใน target `RunnerTests` อยู่แล้ว — **ไม่แตะ `project.pbxproj`**)
->
-> ⚠️ **สิ่งที่รอบสามยัง `code-complete, unverified`:** การบังคับ foreground-only เองยังไม่เคยรัน
-> บนเครื่องจริง — XCTest พิสูจน์ได้แค่ว่า *เมื่อ* คำตอบคือ "ไม่ active" gate จะไม่ถูกแตะ
-> **ไม่ได้พิสูจน์ว่า `UIApplication.applicationState` ตอบว่าอะไรจริง ๆ ในรอบที่ระบบปลุกแอปขึ้นมา**
-> (simulator ทดสอบไม่ได้) รอบเดินจริงถัดไปต้องยืนยันจากไฟล์หลักฐานว่าบรรทัด `proximity`
-> **หายไปจากช่วง background จริง** ขณะที่บรรทัด `rangetick` ยังมีอยู่
+> **ข้อสรุปเชิงออกแบบที่เกิดจากรอบเดินจริง (ไม่ใช่สถานะผล):** ชั้นที่ 2 บน iOS
+> **เดินเฉพาะตอน `.active`** — บังคับด้วยโค้ด ไม่ใช่เอกสาร (หัวข้อ 1 · 4.1 · 7 ข้อ 4)
+> เพราะค่าคงที่ของ ADR-19 หัวข้อ 8 ทำงานกับอัตรา sample ของโหมด background ไม่ได้
+> เชิงโครงสร้าง · **โหมด background ที่ทำงานได้จริงเป็นเรื่องของ ADR-22 ไม่ใช่ ADR นี้**
+> · และสมมติฐานเรื่อง `didFailRangingFor` ของหัวข้อ 4 **ถูกหักล้างแล้ว** (ดูหัวข้อ 8)
 >
 > **ขอบเขต:** iOS เท่านั้น — ไม่แตะ Android, ไม่แตะ `proximity_gate.dart` (reference),
 > ไม่แตะ `didDetermineState`/`emitRegionStateIfChanged` **แม้แต่บรรทัดเดียว**
@@ -4277,37 +4257,18 @@ ADR-19 หัวข้อ 4 ข้อ 1 · 6(ค)/(ง)/(ฉ)/(ช)/(ฌ) · ห
 
 ## ADR-22: ชั้นที่ 2 ตอน background — `ProximityGate` ตัวที่สองที่ตั้งค่าแบบ passthrough (เพิ่ม 10 ก.ย. 2026)
 
-> **สถานะ: `observed` (2 รอบ) — พร้อม merge · POC 10 ก.ย. + รอบข้ามคืน 11 ก.ย. 2026**
-> โค้ดครบแล้ว (`IBeaconRangingManager` เลือก gate ตามโหมด · `ProximityGateStore`
-> แยกคีย์ · `mode=fg|bg` ในไฟล์หลักฐาน · บรรทัด `event=notification` ใน example app)
-> ผ่าน `xcodebuild test` **96 เคส: 94 passed / 0 failed / 2 skipped**
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 19.7ก · 19.7ข · 19.10 · 19.11 · 19.12**
 >
-> **เกณฑ์ที่ตั้งไว้ก่อนเดินครบแล้ว** — `docs/test-data/2026-09-10_ios_proximity_background_poc.log`
-> (51 บรรทัด · md5 `513047fda38be6edb4994aaec9239a75` · build `ead3b02`): โปรเซส `2b9d9080`
-> ที่ `relaunchedFromTerminated` + `everActive=false` ได้ `proximity mode=bg bucket=near`
-> **1.014 วินาที**หลัง `enter` แล้วตามด้วย `event=notification mode=bg` ทันที
-> · รอบที่หยุดห่าง 8 เมตรได้ `bucket=far` และ**ไม่ยิงตามที่คาด** · `posted=false` 0 บรรทัด
+> ไฟล์: `IBeaconRangingManager` เลือก gate ตามโหมด · `ProximityGateStore` แยกคีย์ ·
+> `mode=fg|bg` ในไฟล์หลักฐาน · บรรทัด `event=notification` ใน example app
 >
-> เทียบกับสองรอบก่อน ADR นี้ที่ **ไม่เคยไปถึง `near` เลยแม้แต่ครั้งเดียว**ในโปรเซสที่ถูกปลุก
->
-> **ทำซ้ำได้รอบที่ 2 แล้ว (11 ก.ย. 2026)** —
-> `docs/test-data/2026-09-11_ios_overnight_background_proximity.log` (33 บรรทัด ·
-> md5 `8d50dabff5f0815fcdec1e7579e962bc` · build เดียวกัน): โปรเซส `46b89549`
-> `relaunchedFromTerminated` + `everActive=false` ได้ `bucket=near` แล้ว `notification`
-> อีกครั้งหลังวางเครื่องข้ามคืน · `regionExit` ล้างทั้งสอง gate อีก 3 ครั้ง ·
-> invariant การเลือก gate ยังถูกต้อง 100% (`mode=fg` นอก `.active` = 0 · `mode=bg`
-> ตอน `.active` = 0) ตรวจทั้งไฟล์ 146 บรรทัดบนเครื่อง
->
-> 🔴 **แต่รอบที่ 2 ช้ากว่ารอบแรก 10 เท่า** (`enter`→`near` = **10.0 วินาที** เทียบกับ
-> 1.01 วินาที) และ `unknown` ขึ้นจาก 20% เป็น **46%** — **ทั้งที่บิลด์และ
-> `advertising interval` เหมือนกันทุกประการ** · แปลว่า latency ของชั้นนี้**ไม่เสถียร
-> และขึ้นกับปัจจัยที่ยังระบุไม่ได้** ห้ามสัญญาตัวเลข latency กับ product จากรอบเดียว
-> (ตาราง 4 จุดข้อมูลอยู่ที่ `ios_broadcast_scanning.md` หัวข้อ "interval ของบีคอน")
->
-> ⚠️ **`observed` ไม่ใช่ `verified`** — 2 รอบ ยังไม่ครบเกณฑ์ทำซ้ำตาม
-> `android_background_runbook.md` · และ **`posted=requested` พิสูจน์ว่าแอปสั่งยิง
-> ไม่ได้พิสูจน์ว่าผู้ใช้เห็น** (หัวข้อ 4) · **`windowSize = 1` เปิดข้อจำกัดใหม่ทันที**
-> — `near` พลิกเป็น `far` ใน 2 วินาทีขณะยืนนิ่ง (หัวข้อ 6 ข้อ 5)
+> 🔴 **ข้อจำกัดที่ต้องอ่านก่อนสัญญาอะไรกับ product** — latency ของชั้นนี้ **ไม่เสถียร**:
+> วัดได้ทั้ง 1.01 วินาที และ 10.0 วินาที **บนบิลด์และ `advertising interval` เดียวกัน**
+> (`enter`→`near`) · **ห้ามสัญญาตัวเลข latency จากรอบใดรอบหนึ่ง** — ตาราง 4 จุดข้อมูล
+> อยู่ที่ `ios_broadcast_scanning.md` หัวข้อ "interval ของบีคอน"
+> · `posted=requested` **ไม่เท่ากับผู้ใช้เห็น** (หัวข้อ 4) · `windowSize = 1` ไม่กรอง
+> sample เดี่ยว (หัวข้อ 6 ข้อ 5)
 >
 > **ขอบเขต:** iOS เท่านั้น · **ไม่แตะ `ProximityGate.swift` แม้แต่บรรทัดเดียว** ·
 > ไม่แตะ `proximity_gate.dart` · ไม่แตะ Kotlin
