@@ -312,7 +312,25 @@ internal data class ProximityKeyParts(
 
 /**
  * ถอด key ของ `ProximityGate` กลับเป็นส่วนประกอบ — **`null` ทั้งก้อนเมื่อรูปแบบ
- * ไม่ตรง ห้ามเดาค่าแทน** (แนวเดียวกับ `ProximityKeyCodec.Parsed` ฝั่ง iOS)
+ * ไม่ตรง ห้ามเดาค่าแทน**
+ *
+ * **ตัดจากท้ายไม่ใช่จากหัว — ต้องเหมือน `ProximityKeyCodec.parse()` ฝั่ง Swift เป๊ะ**
+ * (`packages/beacon_kit_ios/.../ProximityGate.swift:235-251`, รอบแก้ 11 ก.ย. 2026):
+ * `regionIdentifier` เป็นสตริงที่ host app ตั้งเองได้อิสระ (`BeaconRegionSpec.kt:15`
+ * ไม่มีการกัน `|` เลย) จึงมีตัวคั่น `|` ปนอยู่ในนั้นได้ ส่วนสามส่วนท้าย
+ * (uuid/major/minor) มีรูปแบบตายตัวเสมอ — ถ้าตัดจากหัว region ที่ชื่อมี `|` จะถอดผิด
+ * เงียบ ๆ (ของเดิมก่อนแก้ใช้ `parts.size != 4` + ตัดตำแหน่งคงที่ ซึ่งถอดต่างจาก Swift
+ * และพา [ProximityGateStore] "ไม่รู้จัก" state ของ region ที่มี `|` ในชื่อ ทิ้งทุกรอบ
+ * `load()` โดยไม่มีอะไรฟ้อง)
+ *
+ * เงื่อนไข: `parts.size >= 4` (ไม่ใช่ `== 4`) และสองส่วนท้ายต้องถอดเป็นตัวเลขได้จริง
+ * ในช่วง uint16 (`0..65535`) เหมือน Swift ที่ใช้ `UInt16(...)` ถอดไม่ได้ = คืน `nil`
+ * ทั้งก้อน — ส่วนที่เหลือทั้งหมดก่อนสามส่วนท้ายต่อกลับด้วย `|` เป็น regionIdentifier
+ *
+ * **แหล่งเดียวของตรรกะถอด key ในโมดูลนี้** — [ProximityGateStore.isValidKeyShape]
+ * เรียกฟังก์ชันนี้ตรง ๆ แล้วเช็คว่าไม่เป็น `null` ไม่เขียนตรรกะถอดซ้ำเป็นตัวที่สอง
+ * (ทั้งสองไฟล์อยู่ package เดียวกัน เรียกข้ามไฟล์ได้โดยไม่ต้อง import) — กันไม่ให้
+ * สองที่ตีความรูปร่าง key ต่างกันจน drift อีกแบบที่เพิ่งแก้ไปในรอบนี้เอง
  *
  * จำเป็นเพราะ transition ที่มาจาก [ProximityGate.sweepStale] ไม่มี `ScanResult`
  * สดคู่มาด้วยเลย (เป็นการตรวจความเงียบ ไม่ใช่ sample ใหม่) — **key ที่ผูกอยู่กับ
@@ -320,17 +338,28 @@ internal data class ProximityKeyParts(
  * คืออะไร** ตอนสร้าง [ProximityChangedEvent] (ทั้งเส้นทางที่มี sample สดและเส้นทาง
  * stale ใช้ฟังก์ชันนี้ร่วมกัน ไม่ใช่คนละที่มา — กัน drift)
  *
- * key ที่ถูกกู้จากดิสก์ผ่าน `ProximityGateStore.load()` การันตีรูปร่าง 4 ส่วนอยู่
- * แล้ว (ADR-20 หัวข้อ 3 "Migration ของ state บนดิสก์") จึง**ไม่ควร**เจอ `null` จาก
- * ฟังก์ชันนี้ในทางปฏิบัติ แต่เขียนให้ทนทานไว้เผื่อ state เพี้ยนแบบที่ยังคิดไม่ถึง
+ * key ที่ถูกกู้จากดิสก์ผ่าน `ProximityGateStore.load()` การันตีรูปร่างที่ผ่านฟังก์ชัน
+ * นี้อยู่แล้ว (ADR-20 หัวข้อ 3 "Migration ของ state บนดิสก์") จึง**ไม่ควร**เจอ `null`
+ * จากฟังก์ชันนี้ในทางปฏิบัติ แต่เขียนให้ทนทานไว้เผื่อ state เพี้ยนแบบที่ยังคิดไม่ถึง
  */
 internal fun proximityKeyPartsOrNull(key: String): ProximityKeyParts? {
     val parts = key.split('|')
-    if (parts.size != 4) return null
-    val major = parts[2].toIntOrNull() ?: return null
-    val minor = parts[3].toIntOrNull() ?: return null
-    return ProximityKeyParts(regionIdentifier = parts[0], uuid = parts[1], major = major, minor = minor)
+    if (parts.size < 4) return null
+    val minor = uint16OrNull(parts[parts.size - 1]) ?: return null
+    val major = uint16OrNull(parts[parts.size - 2]) ?: return null
+    val uuid = parts[parts.size - 3]
+    val regionIdentifier = parts.subList(0, parts.size - 3).joinToString("|")
+    return ProximityKeyParts(regionIdentifier = regionIdentifier, uuid = uuid, major = major, minor = minor)
 }
+
+/**
+ * ถอดสตริงเป็นเลข uint16 (`0..65535`) — ตรงกับ `UInt16(String)` ฝั่ง Swift ที่
+ * [proximityKeyPartsOrNull] ต้องเลียนแบบเป๊ะ: ถอดไม่ได้ (ไม่ใช่ตัวเลข) หรือค่าเกินช่วง
+ * (ติดลบ/เกิน 65535) = `null` ทั้งคู่ ไม่ใช่แค่ "ถอดเป็นตัวเลขได้" เฉย ๆ (`Int.
+ * toIntOrNull()` เพียงอย่างเดียวจะยอมรับ `-1` หรือ `999999` ซึ่ง `UInt16(...)` ของ
+ * Swift ปฏิเสธ)
+ */
+private fun uint16OrNull(part: String): Int? = part.toIntOrNull()?.takeIf { it in 0..65535 }
 
 /**
  * ตัวแยกบีคอนสำหรับไฟล์หลักฐาน — **สองไบต์ท้ายของ MAC เท่านั้น**

@@ -61,16 +61,24 @@ class ProximityGateStore(context: Context) {
      * เก่าอยู่ใน `SharedPreferences` ทั้งใต้คีย์ `"states"` เดิม (ก่อนเปลี่ยนชื่อคีย์
      * เป็น [KEY_STATES]) และในทางทฤษฎีปนอยู่ใต้คีย์ใหม่ได้ถ้ามีบั๊กอื่นเขียนทับ —
      * `load()` จึงทำสองอย่างเสมอทุกครั้งที่เรียก:
-     * 1. ถ้าเจอคีย์เก่า [LEGACY_KEY_STATES] ให้ลบทิ้งจาก `SharedPreferences` ทันที
-     *    ครั้งเดียว **ไม่แปลงค่าเดา** (ห้ามพยายาม "เดา" ว่า MAC ส่วนหลัง `|` เดิม
-     *    คือบีคอนตัวไหนแล้วแปลงเป็น key ใหม่เอง — ไม่มีข้อมูลพอจะแปลงถูกต้อง)
-     * 2. filter ทุก entry ใต้ [KEY_STATES] ที่ key ไม่ได้มี 4 ส่วนคั่นด้วย `|`
-     *    ทิ้งไปด้วย (ดู [isValidKeyShape] ที่ [statesFromJson] ใช้ร่วมกัน)
+     * 1. ถ้าเจอคีย์เก่า [LEGACY_KEY_STATES] ให้ลบทิ้งจาก `SharedPreferences` ด้วย
+     *    `commit()` **ไม่แปลงค่าเดา** (ห้ามพยายาม "เดา" ว่า MAC ส่วนหลัง `|` เดิม
+     *    คือบีคอนตัวไหนแล้วแปลงเป็น key ใหม่เอง — ไม่มีข้อมูลพอจะแปลงถูกต้อง) —
+     *    **ต้องเช็คผลของ `commit()` ก่อนนับว่า migrate สำเร็จ** (รอบแก้ 11 ก.ย.
+     *    2026): `commit()` คืน `false` เมื่อเขียนไม่สำเร็จโดยไม่โยน exception เลย
+     *    ถ้าเจอ `false` หรือ exception ถือว่าลบไม่สำเร็จทั้งคู่ — **ไม่นับ**เข้า
+     *    [lastMigrationDroppedCount] ของรอบนี้ ตั้ง [lastError] แทน แล้วปล่อยให้
+     *    รอบถัดไปพยายามลบใหม่เอง (ไม่มี flag ค้างว่า "เคยล้มเหลว") มิฉะนั้นคีย์เก่า
+     *    จะค้างบนดิสก์ตลอดไป → `contains()` เป็น `true` ทุกรอบ → รายงาน
+     *    `store=migrated_dropped=<n>` ซ้ำไม่รู้จบ ขัดกฎข้อ 3 ด้านล่าง
+     * 2. filter ทุก entry ใต้ [KEY_STATES] ที่รูปร่าง key ไม่ผ่าน [isValidKeyShape]
+     *    ทิ้งไปด้วย (ดู [statesFromJson] ที่ใช้ตัวเดียวกัน)
      *
-     * ทั้งสองแบบนับจำนวนที่ทิ้งรวมกันไว้ที่ [lastMigrationDroppedCount] — **ต้อง
-     * แยกออกจาก [lastError] ได้เสมอ** เพราะ migration สำเร็จ ≠ ดิสก์พัง ผู้เรียก
-     * (`BeaconScanReceiver`) เป็นคนรวมสองค่านี้เป็นข้อความเดียวที่แยกส่วนได้ด้วย
-     * เนื้อข้อความสำหรับคอลัมน์ `store=` ของไฟล์หลักฐาน
+     * จำนวนที่ทิ้งจริงของทั้งสองแบบ (ลบคีย์เก่าสำเร็จ + shape ไม่ผ่านใต้คีย์ใหม่)
+     * ถูกนับรวมไว้ที่ [lastMigrationDroppedCount] — **ต้องแยกออกจาก [lastError]
+     * ได้เสมอ** เพราะ migration สำเร็จ ≠ ดิสก์พัง ผู้เรียก (`BeaconScanReceiver`)
+     * เป็นคนรวมสองค่านี้เป็นข้อความเดียวที่แยกส่วนได้ด้วยเนื้อข้อความสำหรับคอลัมน์
+     * `store=` ของไฟล์หลักฐาน
      */
     fun load(): Map<String, ProximityKeyState> {
         var migrationDropped: Int? = null
@@ -80,9 +88,29 @@ class ProximityGateStore(context: Context) {
                 .getOrNull()
                 ?.let(::countTopLevelKeys)
                 ?: 0
-            // ลบทิ้งไม่ว่านับได้เท่าไร — คีย์เก่าต้องไม่ค้างเป็นขยะถาวรบนดิสก์
+            // ต้องเช็คผลของ commit() แบบเดียวกับ [save] (~บรรทัด 149-155) —
+            // commit() คืน false เมื่อเขียนไม่สำเร็จ **โดยไม่โยน exception**
+            // runCatching เพียงอย่างเดียวจับสาขานี้ไม่ได้ ถ้าปล่อยผ่านคีย์เก่าจะ
+            // ค้างบนดิสก์ → prefs.contains(LEGACY_KEY_STATES) เป็น true ตลอด →
+            // load() "migrate" ซ้ำทุก onReceive → รายงาน store=migrated_dropped=<n>
+            // ไม่รู้จบ ขัด "รายงานครั้งเดียวตอนพบ" ที่กฎข้อ 3 ด้านล่างสั่งไว้เอง
+            // (รอบแก้ 11 ก.ย. 2026) — commit() คืน false หรือโยน exception ถือว่า
+            // ลบไม่สำเร็จเหมือนกันทั้งคู่: **ไม่นับ** ว่า migrate สำเร็จ (ห้ามบวก
+            // เข้า migrationDropped ของคีย์เก่ารอบนี้) ตั้ง lastError แทน แล้วปล่อย
+            // ให้รอบถัดไปพยายามลบใหม่ — ไม่มี flag ค้างว่า "เคยล้มเหลว"
             runCatching { prefs.edit().remove(LEGACY_KEY_STATES).commit() }
-            migrationDropped = (migrationDropped ?: 0) + legacyCount
+                .fold(
+                    onSuccess = { committed ->
+                        if (committed) {
+                            migrationDropped = (migrationDropped ?: 0) + legacyCount
+                        } else {
+                            lastError = "load:legacy-remove-commit-returned-false"
+                        }
+                    },
+                    onFailure = { error ->
+                        lastError = "load:legacy-remove-${error.javaClass.simpleName}"
+                    },
+                )
         }
 
         val raw = runCatching { prefs.getString(KEY_STATES, null) }
@@ -217,14 +245,18 @@ class ProximityGateStore(context: Context) {
         }
 
         /**
-         * รูปร่างของ key ที่ถือว่าใช้ได้กับโค้ดเวอร์ชันปัจจุบัน — ต้องมี **4 ส่วน
-         * คั่นด้วย `|`** (`region|uuid|major|minor`, ตรงกับ [proximityKeyFor] ใน
-         * `BeaconScanReceiver.kt`) รูปแบบเก่า `region|MAC` มีแค่ 2 ส่วน จึงถูกกฎนี้
-         * ปฏิเสธทันที (ADR-20 หัวข้อ 3 "Migration ของ state บนดิสก์") ใช้ร่วมกัน
-         * ทั้งใน [statesFromJson] (ตอน filter) และ [countShapeInvalidKeys] (ตอนนับ)
-         * เพื่อไม่ให้กติกาสองจุด drift กัน
+         * รูปร่างของ key ที่ถือว่าใช้ได้กับโค้ดเวอร์ชันปัจจุบัน — เรียก
+         * [proximityKeyPartsOrNull] (`BeaconScanReceiver.kt`) ตรง ๆ แล้วเช็คว่าไม่
+         * เป็น `null` **ไม่เขียนตรรกะถอดรูปร่าง key ซ้ำเป็นตัวที่สอง** (รอบแก้
+         * 11 ก.ย. 2026 — ก่อนหน้านี้ไฟล์นี้เคยเช็คด้วย `key.split('|').size == 4`
+         * ตรง ๆ ของตัวเอง ต่างจาก [proximityKeyPartsOrNull] ที่ตัดจากท้ายแบบ
+         * `>= 4` เพื่อให้ตรงกับ Swift — สองจุดตีความรูปร่าง key ต่างกันจน
+         * `regionIdentifier` ที่มี `|` ปนอยู่ถูกไฟล์นี้ตัดทิ้งทุกรอบ `load()` โดยไม่
+         * มีอะไรฟ้อง) ใช้ร่วมกันทั้งใน [statesFromJson] (ตอน filter) และ
+         * [countShapeInvalidKeys] (ตอนนับ) — และตอนนี้ยังใช้ตรรกะเดียวกับที่
+         * `BeaconScanReceiver` ใช้ถอด key ของ transition ด้วย มีจุดเดียวทั้งโมดูล
          */
-        private fun isValidKeyShape(key: String): Boolean = key.split('|').size == 4
+        private fun isValidKeyShape(key: String): Boolean = proximityKeyPartsOrNull(key) != null
 
         /** จำนวน key ระดับบนสุดของ JSON — ใช้รายงานจำนวน entry ที่ถูกทิ้งตอน migration */
         private fun countTopLevelKeys(raw: String): Int =

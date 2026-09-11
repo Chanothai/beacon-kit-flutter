@@ -3928,6 +3928,25 @@ MAC แล้ว วิธีนี้ใช้ไม่ได้) **ผลท�
    ที่มีการเปลี่ยนรูปร่าง key **เริ่มนับ proximity state จากศูนย์โดยตั้งใจ ไม่ใช่ regression** — ผู้ทดสอบ
    จะเห็น `from=none` ชุดแรกของทุก key หลังติดตั้งบิลด์ใหม่ ต้องรู้ล่วงหน้าก่อนไปเจอเองแล้วสงสัยว่าทำไม
    dwell ไม่จำสถานะเดิม
+6. **codec ของ key ต้องเท่ากันทีละตัวอักษรกับ `ProximityKeyCodec` ฝั่ง Swift ทั้งสองทิศ — ประกอบ
+   (`proximityKeyFor`) และถอดกลับ (`proximityKeyPartsOrNull`) ไม่ใช่แค่ทิศใดทิศหนึ่ง** (พบเพิ่มในรอบแก้
+   11 ก.ย. 2026 หลังรีวิว): ตอน implement รอบแรกฝั่งประกอบ (`proximityKeyFor`) ตรงกับ
+   `ProximityKeyCodec.key()` ของ Swift อยู่แล้ว แต่ฝั่งถอดกลับ (`proximityKeyPartsOrNull`) ใช้
+   `key.split('|').size != 4` ตรง ๆ ต่างจาก `ProximityKeyCodec.parse()` ของ Swift ที่ตัดจากท้าย
+   (`parts.count >= 4` + 3 ส่วนท้ายคงที่เป็น uuid/major/minor + ส่วนที่เหลือทั้งหมดต่อกลับด้วย `|` เป็น
+   regionIdentifier เพราะ `identifier` เป็นสตริงที่ host app ตั้งเองได้อิสระ — `BeaconRegionSpec.kt:15`
+   ไม่มีการกัน `|` เลย) — ความไม่สมมาตรระหว่างทิศประกอบกับทิศถอดนี้ **ไม่มีเทสไหนจับได้เลย** เพราะเทสเดิม
+   ไม่เคยใส่ `|` ปนใน regionIdentifier สักเคส ผลถ้าปล่อยไว้คือ region ที่ตั้งชื่อมี `|` จะถูก
+   `ProximityGateStore.isValidKeyShape` ตัดทิ้งทุกรอบ `load()` เหมือนเป็น key รูปแบบเก่า โดยไม่มีอะไรฟ้อง
+   **กติกาบังคับสำหรับอนาคต:** ทุกครั้งที่แก้ `ProximityKeyCodec.key()`/`.parse()` ฝั่ง Swift หรือฟังก์ชัน
+   คู่กันฝั่ง Kotlin ต้องตรวจทั้งสองทิศ (ประกอบ + ถอด) คู่กันเสมอ ห้ามตรวจแค่ทิศที่กำลังแก้ และตรรกะถอด
+   key ต้องมี**จุดเดียวต่อภาษา** (ฝั่ง Kotlin: `proximityKeyPartsOrNull` เป็นแหล่งเดียว
+   `ProximityGateStore.isValidKeyShape` ต้องเรียกมันตรง ๆ ห้ามเขียนตรรกะถอดรูปร่าง key ซ้ำเป็นตัวที่สอง)
+7. **accepted risk (C3, พบระหว่างรีวิว 11 ก.ย. 2026 — ยอมรับ ไม่แก้):** ถ้า process ถูกฆ่าหลังลบ
+   `LEGACY_KEY_STATES` สำเร็จ (เขียนดิสก์แล้ว) แต่ก่อนถึง `save()`/`emit()` ท้าย `processProximity()` —
+   migration เกิดขึ้นจริงและปลอดภัย แต่บรรทัดหลักฐาน `store=migrated_dropped=<n>` ที่อธิบายเหตุการณ์นั้น
+   หายไปตลอดกาล (รอบถัดไป `contains(LEGACY_KEY_STATES)` เป็น `false` แล้ว) ผลกระทบจำกัดอยู่แค่ขาดบรรทัด
+   หลักฐาน 1 บรรทัด ไม่กระทบ state จริงแต่อย่างใด
 
 state ที่เก็บ (window, bucket ที่ยืนยันแล้ว, ตัวนับ dwell, timestamp ล่าสุด) และเหตุผลที่ต้องเก็บลงดิสก์
 ไม่เปลี่ยนจากเดิม **เหตุผล:** OEM แบบ MIUI ฆ่า process ระหว่าง sighting ได้ตลอด และ receiver มีชีวิตแค่ช่วง
