@@ -113,7 +113,15 @@ object ExampleProximityWatcher {
             title = "ใกล้ ${event.regionIdentifier} ($bucket)",
             body = "reason=${event.reason.wireName} " +
                 "medianM=${formatMeters(event.medianMeters)} · " +
+                "beacon=${event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE} · " +
                 "procUuid=${BackgroundEvidenceLog.processId}",
+            // **ค่าสามตัวนี้คือสิ่งที่ทำให้บรรทัดหลักฐานตอบคำถาม "cooldown ทำงานไหม"
+            // ได้จากไฟล์ตรง ๆ** โดยไม่ต้องไล่จับคู่กับบรรทัดข้างเคียง (ดู kdoc ของ
+            // `ExampleNotifications.post`) — `beaconTag` เป็นตัวเดียวกับที่ใช้เป็น
+            // key ของ cooldown จริง จึงเทียบกันได้ตรง ๆ
+            regionIdentifier = event.regionIdentifier,
+            beacon = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
+            layer = ExampleNotifications.LAYER_PROXIMITY,
         )
     }
 
