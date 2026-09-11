@@ -3,6 +3,7 @@ package com.bigc.beacon_kit_android
 import android.content.Context
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -47,7 +48,14 @@ class ProximityGateStoreTest {
         fun read(): Long = nowMillis
     }
 
-    private val key = "bigc-test|AA:BB:CC:DD:EE:FF"
+    /**
+     * รูปร่างใหม่ `region|uuid|major|minor` (ADR-20 หัวข้อ 3 แก้ 11 ก.ย. 2026) —
+     * **แก้จากรูปร่างเดิม `region|MAC` ที่ไม่ผ่าน `isValidKeyShape` อีกต่อไป**
+     * (เดิมคือ `"bigc-test|AA:BB:CC:DD:EE:FF"`) ทุกเทสต์ที่ใช้ตัวแปรนี้ยังทดสอบ
+     * เจตนาเดิมทุกอย่างครบ (round-trip ข้าม process / clear ล้างจริง) เปลี่ยนแค่
+     * รูปร่างของ key ให้ตรงกับกฎ shape-validation ใหม่ที่ ADR-20 บังคับ
+     */
+    private val key = "bigc-test|e2c56db5-dffb-48d2-b060-d0f5a71096e0|9902|2"
     private val txPower = -40
 
     /** ~2.51 m ที่ `pathLossExponent = 2.0` — อยู่ใน `enterMeters` (3.0) → NEAR */
@@ -184,7 +192,13 @@ class ProximityGateStoreTest {
      *    — เทสต์นี้ล็อกไว้ไม่ให้ใครเปลี่ยนไปใช้ `JSONArray` แล้วเปิดช่องนั้นขึ้นมา)
      * 2. `sweepStale()` ที่มีหลาย key ค้างอยู่ ต้องคืน **transition ละ 1 ตัวต่อ key
      *    และ key ห้ามซ้ำกัน** — สามบรรทัดในไฟล์จริงจึงต้องเป็นบีคอนสามตัว
-     *    (คนละ MAC ใน key เดียวกันไม่ได้) ไม่ใช่ key เดียวยิงสามครั้ง
+     *    (คนละ minor ใน key เดียวกันไม่ได้) ไม่ใช่ key เดียวยิงสามครั้ง
+     *
+     * **อัปเดต ADR-20 หัวข้อ 3 (11 ก.ย. 2026):** เดิมสาม key ต่างกันเฉพาะส่วน MAC
+     * (`"k9p-default|AA:AA:AA:AA:AA:0N"`) เพราะตอนนั้น key คือ `region|MAC` — รูป
+     * ร่างใหม่ไม่มี MAC ใน key แล้ว จึงเปลี่ยนมาต่างกันที่ minor แทน (major/uuid/region
+     * เดิมหมด) เจตนาของเทสต์ไม่เปลี่ยน: ยังคือ "region กว้างเห็นบีคอนหลายตัว
+     * (ADR-8) ต้องได้ entry แยกกันจริง ไม่ใช่ปนกันเป็นตัวเดียว"
      */
     @Test
     fun `หนึ่ง key มีได้ entry เดียว และ sweepStale ยิงได้ key ละครั้งเท่านั้น`() {
@@ -193,12 +207,12 @@ class ProximityGateStoreTest {
         val store = ProximityGateStore(mockContext(prefs))
         val gate = newGate(clock)
 
-        // สาม key ต่างกันเฉพาะส่วน MAC — regionIdentifier เดียวกันทั้งหมด
+        // สาม key ต่างกันเฉพาะส่วน minor — region/uuid/major เดียวกันทั้งหมด
         // (เคสเดียวกับ region กว้างของ ADR-8 ที่เห็นบีคอนหลายตัว)
         val keys = listOf(
-            "k9p-default|AA:AA:AA:AA:AA:01",
-            "k9p-default|AA:AA:AA:AA:AA:02",
-            "k9p-default|AA:AA:AA:AA:AA:03",
+            "k9p-default|e2c56db5-dffb-48d2-b060-d0f5a71096e0|9902|1",
+            "k9p-default|e2c56db5-dffb-48d2-b060-d0f5a71096e0|9902|2",
+            "k9p-default|e2c56db5-dffb-48d2-b060-d0f5a71096e0|9902|3",
         )
         for (k in keys) {
             repeat(3) { gate.push(key = k, rssi = nearRssi, txPower = txPower) }
@@ -259,17 +273,182 @@ class ProximityGateStoreTest {
      *
      * ถ้าไม่มีค่านี้ บรรทัด `stale` ของบีคอนคนละตัวใน region เดียวกันจะอ่านเหมือน
      * บรรทัดซ้ำ และ `from=none` ของ key ที่เพิ่งเจอครั้งแรกจะอ่านเหมือน state หาย
+     *
+     * **อัปเดต ADR-20 หัวข้อ 3 (11 ก.ย. 2026) — [beaconTagOf] เปลี่ยน signature**
+     * เดิมฟังก์ชันนี้รับ gate key เต็ม (`"<region>|<MAC>"`) แล้วถอด MAC ออกจากมัน
+     * เอง เพราะตอนนั้น MAC เป็นส่วนหนึ่งของ key จริง — ตอนนี้ key ไม่มี MAC แล้ว
+     * (`"<region>|<uuid>|<major>|<minor>"`) ฟังก์ชันจึงรับ
+     * `ScanResult.device?.address` **ตรง ๆ** แทน (ดู kdoc ของฟังก์ชันจริงใน
+     * `BeaconScanReceiver.kt`) เทสต์เดิมที่ป้อน compound key เข้าไปตรง ๆ ใช้ไม่ได้
+     * อีกต่อไปเพราะทดสอบผิดสัญญา (ยกตัวอย่างที่พังเงียบ: ป้อน
+     * `"bigc-test|unknown-device"` เข้าไป ฟังก์ชันเห็นว่าไม่มี `:` เลยทั้งสตริง
+     * จึงคืนค่าดิบทั้งก้อนรวม prefix `"bigc-test|"` ด้วย ไม่ใช่ `"unknown-device"`
+     * ตามที่เทสต์เดิมคาดหวัง) เจตนาเดิม (แยกบีคอนคนละตัว + แยก unknown ออกจาก MAC
+     * จริงได้) ยังทดสอบครบ เปลี่ยนแค่ค่าที่ป้อนให้ตรงสัญญาจริง
      */
     @Test
     fun `beaconTagOf คืนสองไบต์ท้ายของ MAC และแยก unknown-device ออกได้`() {
-        assertEquals("EE:FF", beaconTagOf("bigc-test|AA:BB:CC:DD:EE:FF"))
-        assertEquals("AA:01", beaconTagOf("k9p-default|AA:AA:AA:AA:AA:01"))
+        assertEquals("EE:FF", beaconTagOf("AA:BB:CC:DD:EE:FF"))
+        assertEquals("AA:01", beaconTagOf("AA:AA:AA:AA:AA:01"))
         assertEquals(
             "unknown-device",
-            beaconTagOf("bigc-test|unknown-device"),
-            "เคสที่ระบบไม่ส่งที่อยู่มาต้องแยกออกจาก MAC จริงได้ด้วยตาเปล่า",
+            beaconTagOf("unknown-device"),
+            "ที่อยู่ที่ไม่มี ':' เลย (รูปแบบที่ไม่คาดคิดจากระบบ) ต้องคืนค่าดิบทั้งก้อน " +
+                "แทนการตัดผิดตัว — ยังอ่านแยกจาก MAC จริงได้ด้วยตาเปล่าเพราะไม่มีรูปแบบ MAC",
         )
-        assertNull(beaconTagOf("ไม่มีตัวคั่นเลย"), "ไม่มีส่วนที่อยู่ = ตอบไม่ได้ ห้ามเดา")
+        assertNull(
+            beaconTagOf(null),
+            "deviceAddress เป็น null เกิดจริงทุกครั้งกับ transition จาก sweepStale " +
+                "ที่ไม่มี ScanResult คู่มาด้วย (เป็นการตรวจความเงียบ ไม่ใช่ sample ใหม่) " +
+                "ต้องตอบ null ห้ามเดาค่าแทน",
+        )
     }
 
+    // ==== Migration ของ state บนดิสก์ (ADR-20 หัวข้อ 3) ====
+
+    /**
+     * เครื่องที่รันบิลด์เก่าค้างอยู่จะมี entry รูปแบบเดิม 2 ส่วน (`region|MAC`) อยู่ใต้
+     * คีย์เก่า `"states"` — `load()` ต้องลบคีย์นั้นทิ้งจริง (ไม่ใช่แค่ไม่อ่าน) และนับ
+     * จำนวนที่ทิ้งไปให้ถูกต้อง **ห้ามพยายามแปลงค่าเดา** เนื้อหาของแต่ละ entry ปล่อย
+     * ว่างเปล่าได้เพราะ `countTopLevelKeys` นับแค่จำนวน top-level key ไม่สนใจเนื้อใน
+     */
+    @Test
+    fun `migration - คีย์เก่า states รูปแบบเดิม 2 entry ถูกลบออกจากดิสก์จริงและนับ 2`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states",
+            """{"bigc-test|AA:BB:CC:DD:EE:FF":{},"bigc-test|AA:BB:CC:DD:EE:00":{}}""",
+        ).commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        val restored = store.load()
+
+        assertTrue(restored.isEmpty(), "รูปแบบเก่าต้องไม่ถูกแปลงมาเป็น state ใหม่ — เริ่มนับหนึ่งใหม่")
+        assertEquals(
+            2,
+            store.lastMigrationDroppedCount,
+            "คีย์เก่ามี 2 entry ต้องนับให้ครบ ไม่ใช่เดา 0 หรือ 1",
+        )
+        assertFalse(
+            prefs.contains("states"),
+            "คีย์เก่าต้องถูกลบออกจาก SharedPreferences จริง ไม่ใช่แค่ไม่ถูกอ่านตอน load()",
+        )
+        assertNull(store.lastError, "migration สำเร็จ ≠ ดิสก์พัง ต้องไม่ทิ้ง error ปลอมไว้")
+    }
+
+    /**
+     * หลัง migration ลบคีย์เก่าทิ้งแล้ว ต้อง**ไม่มี state อะไรเหลือให้ `sweepStale`
+     * ค้นเจอเลย** จาก key รูปแบบเก่านั้น — ถ้ามี transition โผล่มาแปลว่าค่าที่ควรถูก
+     * drop รอดเข้ามาเป็น state จริงในหน่วยความจำ ซึ่งจะออกมาเป็น `stale` ปลอมที่ไม่มี
+     * ใครเคย push ให้เกิดขึ้นจริง
+     */
+    @Test
+    fun `migration - หลังลบคีย์เก่าแล้ว sweepStale ต้องไม่มี stale ปลอมจากคีย์นั้น`() {
+        val clock = FakeClock()
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states",
+            """{"bigc-test|AA:BB:CC:DD:EE:FF":{"confirmedBucket":"near"}}""",
+        ).commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        val gate = newGate(clock)
+        gate.restoreStates(store.load())
+
+        clock.nowMillis += 61_000L // เกิน staleAfterMillis (60 วินาที) หลายเท่า
+
+        assertTrue(
+            gate.sweepStale().isEmpty(),
+            "key รูปแบบเก่าที่ถูก drop ไปแล้วต้องไม่เหลือ state ให้ sweepStale เจอ",
+        )
+    }
+
+    /**
+     * entry รูปแบบเก่า (2 ส่วน) ที่ปนอยู่ใต้คีย์**ใหม่** `states_v2` เอง (ในทางทฤษฎี
+     * เกิดจากบั๊กอื่นเขียนทับ) ก็ต้องถูก filter ทิ้งเหมือนกัน ไม่ใช่แค่ตอนเจอใต้คีย์
+     * เก่าเท่านั้น — ใช้ [isValidKeyShape] ตัวเดียวกับที่กรองตอนอ่านคีย์เก่า
+     */
+    @Test
+    fun `migration - entry รูปแบบเก่าที่ปนอยู่ใต้คีย์ใหม่ states_v2 ก็ถูก drop เหมือนกัน`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states_v2",
+            """{"bigc-test|AA:BB:CC:DD:EE:FF":{},"$key":{"confirmedBucket":"near"}}""",
+        ).commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        val restored = store.load()
+
+        assertEquals(setOf(key), restored.keys, "เหลือแค่ key รูปแบบใหม่ 4 ส่วนเท่านั้น")
+        assertEquals(
+            1,
+            store.lastMigrationDroppedCount,
+            "key รูปแบบเก่าที่ปนอยู่ใต้คีย์ใหม่ต้องถูกนับว่า drop ด้วยเช่นกัน",
+        )
+    }
+
+    /**
+     * `lastMigrationDroppedCount == null` ต้องแปลว่า **ไม่มี migration เกิดขึ้นเลย
+     * ในรอบนี้** — ต่างจาก `0` ที่แปลว่า "เจอเงื่อนไข migration แต่ไม่มีอะไรให้ทิ้ง"
+     * ความต่างนี้คือสิ่งที่ทำให้บรรทัดหลักฐานอ่านถูก (ดู kdoc ของฟิลด์จริง)
+     */
+    @Test
+    fun `migration - lastMigrationDroppedCount เป็น null เมื่อไม่มี migration เกิดขึ้นเลย`() {
+        val prefs = FakeSharedPreferences()
+        // ไม่มีคีย์เก่า "states" และไม่มี entry รูปแบบเก่าปนอยู่ใต้คีย์ใหม่เลย
+        prefs.edit().putString("states_v2", """{"$key":{"confirmedBucket":"near"}}""").commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        store.load()
+
+        assertNull(
+            store.lastMigrationDroppedCount,
+            "ไม่มี migration เกิดขึ้นเลยในรอบนี้ต้องเป็น null ไม่ใช่ 0",
+        )
+    }
+
+    /** ตรงข้ามกับเทสต์ข้างบน: เจอเงื่อนไข migration จริง (คีย์เก่ามีอยู่) แต่เนื้อหาว่างเปล่า */
+    @Test
+    fun `migration - lastMigrationDroppedCount เป็น 0 เมื่อเจอคีย์เก่าแต่เนื้อหาว่างเปล่า`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString("states", "{}").commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        store.load()
+
+        assertEquals(
+            0,
+            store.lastMigrationDroppedCount,
+            "เจอคีย์เก่าแต่ไม่มีอะไรให้ทิ้งจริง ต้องเป็น 0 ไม่ใช่ null " +
+                "— null แปลว่าไม่มี migration เกิดขึ้นเลย เป็นคนละเหตุการณ์",
+        )
+    }
+
+    /**
+     * [ProximityGateStore.lastMigrationDroppedCount] กับ [ProximityGateStore.lastError]
+     * ต้องเป็นคนละช่องกันเสมอ — migration ของคีย์เก่าสำเร็จได้ **พร้อมกัน** กับที่
+     * `states_v2` เองพังจริงบนดิสก์ (คนละสาเหตุ คนละคอลัมน์) ไม่ใช่ผลของกันและกัน
+     */
+    @Test
+    fun `migration - lastMigrationDroppedCount และ lastError เป็นคนละช่องกัน ไม่ปนกัน`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit()
+            .putString("states", """{"bigc-test|AA:BB:CC:DD:EE:FF":{}}""")
+            .putString("states_v2", "{ ไม่ใช่ JSON เลย ")
+            .commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        val restored = store.load()
+
+        assertTrue(restored.isEmpty())
+        assertEquals(
+            1,
+            store.lastMigrationDroppedCount,
+            "migration ของคีย์เก่ายังนับได้ถูกต้อง แม้ states_v2 จะพังพร้อมกันก็ตาม",
+        )
+        assertNotNull(
+            store.lastError,
+            "states_v2 อ่านไม่ออกจริงต้องมี error — เป็นคนละเรื่องกับ migration ของคีย์เก่า",
+        )
+    }
 }

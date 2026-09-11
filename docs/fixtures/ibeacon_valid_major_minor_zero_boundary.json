@@ -1,0 +1,16 @@
+{
+  "name": "ibeacon_valid_major_minor_zero_boundary",
+  "parser": "ibeacon",
+  "source": "derived_from_sdk_source",
+  "source_detail": "เหมือน ibeacon_valid_basic ทุก byte ยกเว้น major/minor: [20:22)=0000 [22:24)=0000 — ขอบล่างของช่วง uint16 (0) ใช้จับกรณีอ่าน major/minor ผิดเป็น signed ที่ค่า 0 จะไม่ต่างกันระหว่าง signed/unsigned เอง แต่ยังต้องคู่กับ ibeacon_valid_major_minor_max_boundary (65535) ไว้ในชุดเดียวกันตามที่ ADR-20 หัวข้อ 1(ข) ระบุ ไม่ได้จับจากอุปกรณ์จริง",
+  "raw_hex": "4c000215e2c56db5dffb48d2b060d0f5a71096e000000000c5",
+  "expect": {
+    "result": "success",
+    "frame": {
+      "uuid": "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+      "major": 0,
+      "minor": 0,
+      "tx_power": -59
+    }
+  }
+}

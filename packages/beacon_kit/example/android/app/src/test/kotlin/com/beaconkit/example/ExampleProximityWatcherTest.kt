@@ -36,6 +36,7 @@ class ExampleProximityWatcherTest {
         major: Int?,
         minor: Int?,
         beaconTag: String? = "55:4D",
+        droppedNoIdentityCount: Int = 0,
     ) = ProximityChangedEvent(
         regionIdentifier = "bigc-test",
         uuid = "7777772e-6b6b-6d63-6e2e-636f6d000001",
@@ -50,6 +51,7 @@ class ExampleProximityWatcherTest {
         txPower = -51,
         beaconTag = beaconTag,
         storeError = null,
+        droppedNoIdentityCount = droppedNoIdentityCount,
     )
 
     /** **เคสหลัก:** มี major/minor ครบ → ต้องพิมพ์ `<major>/<minor>` ตรง ๆ */
@@ -106,4 +108,73 @@ class ExampleProximityWatcherTest {
 
         assertTrue(first != second, "บีคอนคนละตัวต้องแยกออกจากกันได้เสมอ")
     }
+
+    /**
+     * สองบีคอนที่มี major/minor ถอดจากเฟรมได้จริง (สภาพหลัง ADR-20 หัวข้อ 1 แก้
+     * 11 ก.ย. 2026 — ต่างจากเทสต์ข้างบนที่จำลองสภาพเก่าตอน region ลงทะเบียนด้วย
+     * UUID อย่างเดียว) ต้องได้บรรทัดหลักฐานที่ต่างกันทั้งฟิลด์ตรรกะ (`beacon=`) และ
+     * ข้อความที่จะถูกใช้ประกอบ title ของ notification (`ExampleProximityWatcher
+     * .onProximityChanged` ต่อ `จุด ${beaconField(event)}` ตรง ๆ) — พิสูจน์ที่
+     * `beaconField()` ตรง ๆ เพราะ `onProximityChanged` ที่ประกอบ title จริงเป็น
+     * `private` และเรียก `Context` (ดูหมายเหตุท้ายไฟล์นี้ว่าทำไมส่วนคูลดาวน์จริง
+     * ยังทดสอบเป็น unit test ไม่ได้ในรอบนี้)
+     */
+    @Test
+    fun rawSignalsSuffixDiffersAcrossRealBeaconsInSameRegion() {
+        val first = ExampleProximityWatcher.rawSignalsSuffix(event(9902, 2, "55:4D"))
+        val second = ExampleProximityWatcher.rawSignalsSuffix(event(9903, 3, "55:50"))
+
+        assertTrue(first != second, "บีคอนคนละตัว (9902/2 vs 9903/3) ต้องได้บรรทัดที่ต่างกันเสมอ")
+        assertTrue(first.contains("beacon=9902/2"))
+        assertTrue(second.contains("beacon=9903/3"))
+    }
+
+    /**
+     * `droppedNoIdentity=<n>` ต้องพิมพ์**เสมอ**ทุกบรรทัด ไม่ใช่แค่ตอนมากกว่า 0
+     * (ต่างจากพฤติกรรมของ `store=` ที่มีค่า `ok` เป็น sentinel — ที่นี่ใช้ตัวเลข `0`
+     * ตรง ๆ เป็น sentinel ของ "ถามแล้วไม่มีอะไรถูกทิ้ง") ถ้าฟิลด์นี้หายไปจากบรรทัด
+     * จะแยกไม่ออกระหว่าง "ไม่มีอะไรถูกทิ้งจริง" กับ "log รุ่นเก่าที่ยังไม่มีคอลัมน์นี้"
+     */
+    @Test
+    fun droppedNoIdentityAlwaysPrintedEvenWhenZero() {
+        val zero = ExampleProximityWatcher.rawSignalsSuffix(event(9902, 2, droppedNoIdentityCount = 0))
+        val nonZero = ExampleProximityWatcher.rawSignalsSuffix(event(9902, 2, droppedNoIdentityCount = 3))
+
+        assertTrue(zero.contains("droppedNoIdentity=0"), zero)
+        assertTrue(nonZero.contains("droppedNoIdentity=3"), nonZero)
+    }
 }
+
+/*
+ * ## หนี้ที่ยังไม่ได้ทดสอบในไฟล์นี้ (บันทึกโดย beacon-qa, 11 ก.ย. 2026)
+ *
+ * ข้อ 5 ของโจทย์ ADR-20 ขั้นทดสอบต้องการยืนยันสามเรื่องที่**ต้องการ `Context` จริง
+ * หรือ mock**:
+ * 1. บีคอนสองตัวในเวลาใกล้กัน → 2 notification จริง (ไม่ถูกคูลดาวน์กลืนเป็นใบเดียว)
+ * 2. บีคอนตัวเดิมซ้ำภายใน 60 วินาที → ยังคูลดาวน์เหมือนเดิม 1 ใบ
+ * 3. บรรทัด log (`event=proximity`) เขียนทุกครั้งแม้ notification ติดคูลดาวน์
+ *
+ * ทั้งสามข้อทดสอบไม่ได้ที่นี่เพราะ `consumeCooldown()`/`onProximityChanged()`
+ * (private) ต้องมี `android.content.Context` จริงเพื่อเปิด `SharedPreferences`
+ * (คูลดาวน์) และเขียนไฟล์ผ่าน `BackgroundEvidenceLog.append()` (`context.filesDir`)
+ * — โมดูล `beacon_kit_android` มี `mockito-core` + `FakeSharedPreferences` ให้ mock
+ * `Context` ได้แล้ว (ดู `ProximityGateStoreTest.kt`) แต่โมดูล `app` **ไม่มี**
+ * `mockito-core` เป็น dependency เลย (ดู `packages/beacon_kit/example/android/app/
+ * build.gradle.kts`) และ QA agent ไม่มีสิทธิ์แก้ไฟล์ build/dependency เพื่อเพิ่มเอง
+ * ในรอบนี้ (ขอบเขตงานระบุห้ามไว้ตรง ๆ)
+ *
+ * **ทางแก้ที่แนะนำ (ให้ flutter-dev ตัดสินใจ ไม่ใช่ QA แก้เอง):**
+ * (ก) เพิ่ม `testImplementation("org.mockito:mockito-core:5.0.0")` ใน
+ *     `app/build.gradle.kts` ให้เหมือน `beacon_kit_android/build.gradle.kts` แล้ว
+ *     เขียน `FakeSharedPreferences`/mock `Context` แบบเดียวกับที่นั่น หรือ
+ * (ข) แยกตรรกะการตัดสินใจของคูลดาวน์ (เทียบเวลา/สร้าง key) ออกจาก I/O ของ
+ *     `SharedPreferences` เป็น pure function ที่รับ "เวลาที่ยิงล่าสุดของ key นี้"
+ *     เป็นพารามิเตอร์ตรง ๆ (แพทเทิร์นเดียวกับที่ `ProximityGate` แยกออกจาก
+ *     `ProximityGateStore`) — จะทำให้ทดสอบตรรกะคูลดาวน์ได้แบบ pure Kotlin ล้วน ๆ
+ *     โดยไม่ต้องมี `Context` เลย ซึ่งน่าจะยั่งยืนกว่าทางเลือก (ก) ในระยะยาว
+ *
+ * ก่อนมีทางแก้ใดทางหนึ่ง พฤติกรรมคูลดาวน์รายบีคอนของ example app ยังอยู่ในสถานะ
+ * **code-complete, unverified by unit test** — ยืนยันได้จริงเฉพาะ (1) การอ่านโค้ด
+ * (`cooldownKeyFor` ใน `ExampleProximityWatcher.kt` ใช้ `region|major|minor`) และ
+ * (2) การทดสอบบนอุปกรณ์จริงเท่านั้น
+ */
