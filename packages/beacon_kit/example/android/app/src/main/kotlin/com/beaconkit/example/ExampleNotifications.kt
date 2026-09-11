@@ -101,7 +101,12 @@ object ExampleNotifications {
      *
      * @param regionIdentifier region ที่ผูกกับ notification ใบนี้ — ส่ง `"-"` เมื่อ
      *   ไม่มีจริง ๆ (ปุ่มทดสอบบน UI) **ห้ามเดาจากข้อความ `title`**
-     * @param beacon `"<major>/<minor>"` หรือ [BEACON_NOT_APPLICABLE]
+     * @param beacon `"<major>/<minor>"` หรือ [BEACON_NOT_APPLICABLE] — **ตัวระบุ
+     *   เชิงตรรกะ ตรงกับฝั่ง iOS** ใช้จับคู่บรรทัดข้ามแพลตฟอร์มและเทียบกับ
+     *   `docs/beacon-inventory.md`
+     * @param mac สองไบต์ท้ายของ MAC หรือ [BEACON_NOT_APPLICABLE] — **ตัวแยกเชิง
+     *   กายภาพ** เป็นค่าเดียวกับที่อยู่ใน gate key จึงเป็นตัวเดียวที่แยกบีคอนคนละตัว
+     *   ใน region เดียวกันได้จริง · **ห้ามรวมกับ [beacon] เป็นฟิลด์เดียว**
      * @param layer [LAYER_REGION] (enter/exit) หรือ [LAYER_PROXIMITY] (ความใกล้)
      */
     fun post(
@@ -110,6 +115,7 @@ object ExampleNotifications {
         body: String,
         regionIdentifier: String = "-",
         beacon: String = BEACON_NOT_APPLICABLE,
+        mac: String = BEACON_NOT_APPLICABLE,
         layer: String = BEACON_NOT_APPLICABLE,
     ) {
         runCatching {
@@ -134,7 +140,7 @@ object ExampleNotifications {
                         // ยิงได้จากทั้ง observer ในเส้นทาง receiver และจากปุ่มบน UI
                         // — ไม่อ้างว่ามาจาก receiver เพราะพิสูจน์จากตรงนี้ไม่ได้
                         receiverEntry = false,
-                    ) + " beacon=$beacon layer=$layer" +
+                    ) + " beacon=$beacon mac=$mac layer=$layer" +
                         " posted=${reason == REASON_GRANTED} reason=$reason id=$id",
                 ),
             )

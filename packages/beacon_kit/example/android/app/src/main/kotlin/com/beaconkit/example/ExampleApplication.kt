@@ -85,6 +85,7 @@ class ExampleApplication : Application() {
                     // `beacon` จึงเป็น `n/a` ตามจริง **ห้ามใส่บีคอนตัวแรกที่เจอ**
                     regionIdentifier = event.regionIdentifier,
                     beacon = ExampleNotifications.BEACON_NOT_APPLICABLE,
+                    mac = ExampleNotifications.BEACON_NOT_APPLICABLE,
                     layer = ExampleNotifications.LAYER_REGION,
                     // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ
                     // [BackgroundEvidenceLog.processId] ไม่ใช่ pid ของ Linux
