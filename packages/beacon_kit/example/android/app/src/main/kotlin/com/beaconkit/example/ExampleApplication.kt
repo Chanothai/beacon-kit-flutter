@@ -210,7 +210,8 @@ class ExampleApplication : Application() {
                     context = this,
                     state = processState,
                     receiverEntry = false,
-                ) + " " + restoredField + " " + deviceIdentityField(),
+                ) + " " + restoredField + " " + deviceIdentityField() +
+                    " build=" + BuildConfig.GIT_SHORT_SHA,
             ),
         )
     }
