@@ -156,6 +156,29 @@ import beacon_kit_ios
     // ทดสอบก่อนหน้าแยกไม่ออกเลยเพราะไม่มีบรรทัดอะไรทั้งสิ้นให้ดู
     logLaunch(restoredRegionIdentifiers: restoredRegionIdentifiers)
 
+    // **ชั้นที่ 2 (ADR-21) — ต่อจากของเดิม ไม่แตะตรรกะข้างบนเลยแม้แต่บรรทัดเดียว**
+    //
+    // ตั้งที่นี่ด้วยเหตุผลเดียวกับที่ชั้น 1 ตั้ง hook ที่นี่: นี่คือจุดเดียวที่
+    // ทำงานเสมอไม่ว่า process จะเกิดด้วยเหตุใด (ผู้ใช้เปิดเอง / iOS ปลุกขึ้นมา
+    // เบื้องหลัง) และจบก่อนที่ CoreLocation จะเรียก delegate ได้เสมอ — SDK ไม่มี
+    // คิว event ให้ (ADR-21 หัวข้อ 6) ถ้าตั้ง observer ช้ากว่านี้ event จะหายจริง ๆ
+    BackgroundProximityMonitor.setProximityObserver { [weak self] event in
+      self?.recordProximityEvent(event)
+    }
+
+    // นับ `didFailRangingFor` ให้เห็นเป็นบรรทัดจริง — **ห้ามอนุมานจากการไม่มีบรรทัด**
+    // (รอบเดินจริง 10 ก.ย. 2026 ได้ 0 บรรทัด ซึ่งเป็น**ผลลัพธ์** ไม่ใช่ความว่างเปล่า:
+    // พิสูจน์ว่า `didFailRangingFor` ไม่ใช่สัญญาณว่าบีคอนหาย — ADR-21 หัวข้อ 8)
+    BackgroundProximityMonitor.setRangingFailureObserver { [weak self] regionIdentifier in
+      self?.recordRangingFailure(regionIdentifier: regionIdentifier)
+    }
+
+    // ชีพจรของ ranging (ADR-21 หัวข้อ 9 "ของเพิ่ม") — บรรทัด `rangetick` อย่างมากทุก
+    // 30 วินาทีต่อ process **ไม่ยิง notification** ถ้าไม่ต้องการแล้วลบทั้งบล็อกนี้ได้
+    BackgroundProximityMonitor.setRangeTickObserver { [weak self] event in
+      self?.recordRangeTick(event)
+    }
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -168,6 +191,27 @@ import beacon_kit_ios
   /// "during this or previous launches of your application" จะอยู่ในเซ็ตนี้)
   /// ถ้าบรรทัด launch แสดง `monitoredRegions=[]` แปลว่าไม่มีอะไรให้ iOS ปลุกแอป
   /// ตั้งแต่แรก ซึ่งเป็นคนละสาเหตุกับ "ปลุกแล้วแต่ event หาย" โดยสิ้นเชิง
+  /// git short SHA ของซอร์สที่ build บิลด์นี้ — ประทับลง `Info.plist` ตอน build
+  /// ด้วย build phase "Stamp git SHA" (`Runner.xcodeproj`)
+  ///
+  /// ## ทำไมไฟล์หลักฐานต้องบอกเองว่ามาจากบิลด์ไหน
+  ///
+  /// รอบทดสอบฝั่ง Android เมื่อ 9 ก.ย. 2026 เสียเวลาไปทั้งช่วงเพราะ **แฮชของ APK
+  /// ที่ติดตั้งอยู่บนเครื่องไม่ตรงกับบิลด์ใดที่สร้างในเซสชันนั้นเลย** ต้องไล่ย้อนจาก
+  /// เนื้อ log ("มีบรรทัด `event=notification` ไหม") เพื่ออนุมานว่าเป็นบิลด์หลังคอมมิต
+  /// ไหน — เป็นการอนุมาน ไม่ใช่หลักฐาน
+  ///
+  /// บรรทัด `launch` เป็นที่ที่ถูกต้องเพราะเขียนทุกครั้งที่ process เกิด และค่านี้คงที่
+  /// ตลอดอายุ process (เหตุผลเดียวกับที่ฝั่ง Android วาง `model`/`os` ไว้ที่บรรทัดนี้
+  /// บรรทัดเดียว ไม่ใช่ทุกบรรทัด)
+  ///
+  /// `unknown` = build จากที่ที่ไม่มี git · **`-dirty` ต่อท้าย = ตอน build มีไฟล์ที่ยัง
+  /// ไม่ commit ห้ามอ้างผลรอบนั้นว่าตรงกับคอมมิตใด**
+  ///
+  /// ⚠️ **ฝั่ง Android ยังไม่มีฟิลด์นี้** — เป็นหนี้ที่ต้องใช้คืน ไม่ใช่ความตั้งใจให้ต่างกัน
+  static let gitShortSHA: String =
+    (Bundle.main.object(forInfoDictionaryKey: "GitShortSHA") as? String) ?? "unknown"
+
   private func logLaunch(restoredRegionIdentifiers: [String]) {
     BackgroundEvidenceLog.shared.append(
       line: BackgroundEvidenceLog.line(
@@ -185,7 +229,17 @@ import beacon_kit_ios
         // โดยเฉพาะ ซึ่งคือสิ่งที่ B5 ต้องพิสูจน์
         rawSignals:
           "\(rawSignalSummary(receiverEntry: false)) "
-          + "monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))]"
+          + "monitoredRegions=[\(restoredRegionIdentifiers.joined(separator: ","))] "
+          + "build=\(Self.gitShortSHA)"
+          // `rangeCb=0` เป็น **ข้อเท็จจริงเชิงโครงสร้าง ไม่ใช่ค่าที่อ่านมา**: บรรทัดนี้
+          // เขียนใน `didFinishLaunchingWithOptions` ซึ่งจบก่อน CoreLocation จะเรียก
+          // `didRange` ได้เสมอ — มีไว้เป็น **เส้นฐานของ process** ให้บรรทัด
+          // `rangetick`/`proximity` ที่ตามมาถูกอ่านเป็น "เพิ่มจาก 0" ได้โดยไม่ต้องเดา
+          // และเป็นตัวบอกว่าบิลด์นี้มีคอลัมน์ตัวนับแล้ว (ต่างจาก log รุ่นก่อน 10 ก.ย.)
+          //
+          // `inArray`/`unknown` เป็น `n/a` เพราะบรรทัด launch **ไม่ได้พูดถึง key ใด**
+          // — `n/a` ไม่ใช่ค่าว่าง: อ่านออกได้ว่า "ตอบไม่ได้ที่บรรทัดนี้"
+          + Self.rangeCounterSuffix(rangeCb: 0, inArray: nil, unknown: nil)
       )
     )
   }
@@ -222,6 +276,285 @@ import beacon_kit_ios
       title: "Region \(event.state): \(event.regionIdentifier)",
       body: "สถานะแอป: \(currentRunContext())"
     )
+  }
+
+  // MARK: - หลักฐานของชั้นที่ 2 (proximity — ADR-21)
+
+  /// เว้นช่วง notification ต่อหนึ่งบีคอนอย่างน้อย 60 วินาที
+  ///
+  /// **เป็นค่าสำหรับ demo ล้วน ๆ ไม่ใช่ค่าที่ calibrate อะไร** — และเป็น**บทเรียน
+  /// ตรง ๆ จากรอบทดสอบ Android 9 ก.ย. 2026 ที่ผู้ทดสอบได้ notification 13 ใบใน 15
+  /// นาทีทั้งที่ยืนอยู่กับที่** (bucket แกว่ง near ⇄ immediate เพราะขอบนั้นไม่มี
+  /// hysteresis ตาม ADR-19 หัวข้อ 6(ข) — ADR-21 หัวข้อ 7 ข้อ 3 สั่งไว้ว่า iOS ต้อง
+  /// ไม่ทำซ้ำ)
+  private static let proximityNotificationCooldownMillis: Int64 = 60_000
+
+  /// suite แยกของ cooldown — **ต้องรอดข้าม process** (ดู [consumeProximityCooldown])
+  private static let proximityCooldownSuiteName = "beacon_kit_example.proximity_cooldown"
+
+  /// เขียน log + ยิง notification ของ transition ชั้นที่ 2 จาก **โค้ด native ล้วน**
+  ///
+  /// เหตุผลเดียวกับ [recordRegionEvent] เป๊ะ: เส้นทางที่ ADR-21 มีอยู่เพื่อรองรับ
+  /// คือช่วงที่ Flutter engine อาจยังไม่มีตัวตน — ถ้าเขียน log ฝั่ง Dart เครื่องมือ
+  /// วัดจะตายพร้อมกับสิ่งที่มันควรวัด
+  ///
+  /// **ลำดับที่ห้ามสลับ: log ก่อน notification เสมอ** และ **cooldown มีผลกับ
+  /// notification เท่านั้น บรรทัด log เขียนทุก transition** ไม่งั้นหลักฐานจะหายไป
+  /// พร้อมกับการกันสแปม ซึ่งกลับหัวกลับหางกับเหตุผลข้างบน — บรรทัด `farther`/`stale`
+  /// คือสิ่งเดียวที่ตอบได้ว่า `staleAfter = 10 วินาที` (ADR-19 หัวข้อ 8) ใช้ได้จริง
+  /// กับอัตราการยิงของ `didRange` บน iOS หรือไม่ ซึ่งเป็นคำถามเปิดข้อใหญ่ที่สุดของ
+  /// ADR-21 หัวข้อ 4
+  /// เขียนบรรทัด `rangefail` ทุกครั้งที่ `didFailRangingFor` ยิง
+  ///
+  /// **ไม่ใช่การรายงาน error** — เป็นการ**นับความเงียบให้เป็นตัวเลข** เพื่อตอบคำถามเปิด
+  /// ข้อใหญ่ที่สุดของ ADR-21 หัวข้อ 4: `didFailRangingFor` ยิงจริงไหม ยิงถี่แค่ไหน และ
+  /// พึ่งเป็นจุด sweep ที่สองได้หรือไม่ (`apple_proximity_ranging.md` หัวข้อ 8 บันทึกว่า
+  /// **เอกสาร Apple ไม่ระบุ** ว่ามันยิงซ้ำเป็นจังหวะหรือครั้งเดียว)
+  ///
+  /// ถ้าไม่มีบรรทัดนี้ ไฟล์หลักฐานจะแยกไม่ออกระหว่าง "callback ไม่เคยยิงเลย" กับ "ยิงแต่
+  /// ไม่มีอะไรให้รายงาน" — ซึ่งเป็นความกำกวมชนิดเดียวกับที่ทำให้รอบสอบสวนฝั่ง Android
+  /// (`android_background_scanning.md` ข้อ B) ตอบคำถามไม่ได้ทั้งรอบ
+  ///
+  /// **ไม่ยิง notification** — นี่เป็นข้อมูลของผู้ทดสอบ ไม่ใช่เหตุการณ์ที่ผู้ใช้ต้องรู้
+  private func recordRangingFailure(regionIdentifier: String) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: Date(),
+        event: "rangefail",
+        regionIdentifier: regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+      )
+    )
+  }
+
+  private func recordProximityEvent(_ event: BeaconKitProximityChangedEvent) {
+    // 1) หลักฐานก่อน — **schema 6 คอลัมน์เดิมทุกประการ ไม่เพิ่ม/ลด/สลับคอลัมน์**
+    //    ข้อมูลใหม่ของ ADR-21 ทั้งหมดต่อท้ายอยู่ใน**คอลัมน์สัญญาณดิบ**เท่านั้น
+    //    (ตัวอ่านที่มีอยู่ — หน้า "ดู log" ฝั่ง Dart และ `tool/analyze_region_log.dart`
+    //    — จึงไม่พัง)
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "proximity",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        // receiverEntry = true เป็น **ข้อเท็จจริงของเส้นทางเรียก ไม่ใช่การเดา**:
+        // `BackgroundProximityMonitor.emit` ถูกเรียกจาก
+        // `IBeaconRangingManager.runProximityLayer` ที่เดียว และเมธอดนั้นมีผู้เรียก
+        // แค่สองตัวคือ `didRange` กับ `didFailRangingFor` ซึ่งเป็น
+        // `CLLocationManagerDelegate` ที่ระบบเรียกเข้ามาทั้งคู่
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + Self.proximityRawSignalsSuffix(event)
+      )
+    )
+
+    // 2) notification เฉพาะ transition ที่ยืนยันว่า "ใกล้" — **ตัวกรองอยู่ที่แอป
+    //    ไม่ใช่ที่ SDK** (ADR-21 หัวข้อ 6 · ADR-11 หัวข้อ 7 เรื่องตำแหน่งของ
+    //    debounce) ผู้ทดสอบไม่ควรถูกเด้งตอนเดินออกห่าง เพราะจะกลบสัญญาณที่กำลังจะ
+    //    พิสูจน์
+    guard event.to == .near || event.to == .immediate else { return }
+
+    // 3) **ยิงเฉพาะตอน "เข้าสู่ความใกล้" เท่านั้น ไม่ใช่ทุกการขยับภายในความใกล้**
+    //
+    //    ขอบ `immediate`/`near` ไม่มี dead zone อะไรคั่นเลยบนเส้นทางนี้ (มีแค่ mode
+    //    ของหน้าต่าง + dwell) — ผู้ที่ยืนนิ่งอยู่ราวหนึ่งเมตรจึงทำให้ candidate
+    //    สลับไป-กลับได้เรื่อย ๆ และ **ทั้งสองทิศผ่านตัวกรองข้อ 2 ได้หมด** นี่คือ
+    //    ช่องว่างของ ADR-19 หัวข้อ 6(ข) เอง (ใส่ hysteresis ไว้เฉพาะขอบ far/close)
+    //    ซึ่ง **ห้ามแก้ที่ `ProximityGate` ฝั่ง Swift ฝ่ายเดียวเด็ดขาด** เพราะจะ
+    //    drift จาก reference implementation ทันที (ADR-21 หัวข้อ 2/7 ข้อ 3) —
+    //    รอบนี้จึงกันที่ชั้นนโยบายของแอปแทน เหมือนที่ ADR-20 ทำฝั่ง Android
+    //
+    //    **บรรทัดหลักฐานยังเขียนครบทุก flap** (ข้อ 1) ตัวเลข "สลับ near↔immediate
+    //    กี่ครั้ง" ที่ ADR-21 หัวข้อ 7 ข้อ 3 สั่งให้เก็บจึงไม่หายไปไหน
+    guard event.from == nil || event.from == .far else { return }
+
+    // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown)
+    //
+    //    **cooldown เป็นระดับ key (บีคอนหนึ่งตัวในหนึ่ง region) 60 วินาที** เท่ากับ
+    //    ฝั่ง Android เป๊ะ และ**รอดข้าม process** — จำเป็นบนเส้นทาง ADR-22 เพราะ
+    //    โปรเซสที่ถูกปลุกเกิด/ตายได้หลายรอบในนาทีเดียว cooldown ที่อยู่ใน memory
+    //    อย่างเดียวจะไม่กันอะไรเลย
+    guard consumeProximityCooldown(key: proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
+    else { return }
+
+    // 5) **เขียนบรรทัด `notification` ก่อนยิงเสมอ** (ADR-20 หัวข้อ 7 / บทเรียนจาก
+    //    รอบ MIUI 9 ก.ย. 2026) — ถ้าไม่มีบรรทัดนี้ "ระบบบล็อก notification" กับ
+    //    "เงื่อนไขไม่เคยเข้า" จะจบที่อาการเดียวกันเป๊ะ: ไม่มีอะไรเด้ง · ฝั่ง iOS
+    //    เพิ่งมีในรอบ ADR-22 เพราะข้อ 19.7 ของไฟล์สถานะต้องการหลักฐานตรงจุดนี้พอดี
+    recordNotificationEvent(event)
+
+    postNotification(
+      title: "ใกล้ \(event.regionIdentifier) (\(event.to?.wireName ?? "n/a"))",
+      body: "reason=\(event.reason.wireName) · beacon=\(event.beacon) · "
+        + "mode=\(event.mode.rawValue) · procUuid=\(BackgroundEvidenceLog.processId)"
+    )
+  }
+
+  /// บรรทัด `event=notification` — หลักฐานว่า**เงื่อนไขยิงเข้าเกิดขึ้นจริงเมื่อไร**
+  ///
+  /// ⚠️ **`posted=requested` ไม่ใช่ `posted=true`** และความต่างนี้สำคัญ: ฝั่ง iOS
+  /// ถามสถานะสิทธิ์แบบ synchronous ไม่ได้ (`getNotificationSettings` เป็น async
+  /// และโปรเซสที่ถูกปลุกอาจถูก suspend ก่อน callback มาถึง) — บรรทัดนี้จึงยืนยันได้
+  /// แค่ว่า **แอปสั่งยิงแล้ว** ไม่ได้ยืนยันว่าผู้ใช้เห็น ต่างจากฝั่ง Android ที่
+  /// `deliveryReason()` ตอบได้ทันทีก่อนยิง (`ExampleNotifications.kt`)
+  ///
+  /// ถ้า `UNUserNotificationCenter.add` คืน error กลับมา จะมีบรรทัดที่สอง
+  /// `posted=false` ตามมา — **สองบรรทัด ไม่ใช่บรรทัดเดียวที่แก้ทีหลัง** เพราะไฟล์
+  /// หลักฐานเป็น append-only และการมีบรรทัดแรกค้างไว้คือสิ่งที่พิสูจน์ว่าโปรเซสไป
+  /// ถึงจุดนั้นจริงแม้จะถูกฆ่าต่อจากนั้น
+  private func recordNotificationEvent(_ event: BeaconKitProximityChangedEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "notification",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + " bucket=\(event.to?.wireName ?? "n/a")"
+          + " from=\(event.from?.wireName ?? "none")"
+          + " beacon=\(event.beacon)"
+          + " mode=\(event.mode.rawValue)"
+          + " posted=requested"
+      )
+    )
+  }
+
+  /// ส่วนต่อท้ายของคอลัมน์สัญญาณดิบสำหรับบรรทัด `event=proximity` — **pure function**
+  /// จึงมี XCTest คลุมได้จริงโดยไม่ต้องมีอุปกรณ์ (เหตุผลเดียวกับ
+  /// `BackgroundEvidenceLog.line`)
+  ///
+  /// ```
+  ///  bucket=near from=none reason=closer beacon=1/42 store=ok mode=bg
+  /// ```
+  ///
+  /// รูปแบบเดียวกับฝั่ง Android: ขึ้นต้นด้วยช่องว่าง และทุกค่าที่ไม่มีเขียนเป็น
+  /// `n/a` **ห้ามปล่อยว่างและห้ามมีช่องว่างในค่า** เพราะคอลัมน์สัญญาณดิบคั่นค่าด้วย
+  /// ช่องว่าง ถ้าค่าใดว่างหรือมีช่องว่างปน ตัวอ่านจะเห็นเป็นคนละ key โดยไม่มีอะไรฟ้อง
+  ///
+  /// - `from=none` (ไม่ใช่ `n/a`) เมื่อไม่เคยมี bucket ที่ยืนยันมาก่อน — คนละความ
+  ///   หมายกัน: `none` = "ยืนยัน bucket แรกของบีคอนตัวนี้" ซึ่งเป็นข้อเท็จจริงที่รู้
+  ///   แน่ ส่วน `n/a` = "ตอบไม่ได้"
+  /// - `beacon=<major>/<minor>` — **ต้องมีตั้งแต่คอมมิตแรกตาม ADR-21 หัวข้อ 7 ข้อ 1**
+  ///   ไม่งั้น `stale` หลายบรรทัดติดกันของคนละบีคอนจะอ่านเหมือนบั๊กยิงซ้ำ (เกิดจริง
+  ///   รอบ Android 9 ก.ย. 2026)
+  /// - `store=ok|<error>` — **ต้องมีตั้งแต่คอมมิตแรกตาม ADR-21 หัวข้อ 7 ข้อ 2**
+  ///   `ok` ไม่ใช่ค่าว่าง: ต้องอ่านออกได้ว่า "ถามแล้วและไม่มี error" ต่างจาก "ไม่มี
+  ///   คอลัมน์นี้เพราะเป็น log รุ่นเก่า"
+  /// - `mode=fg|bg` — **ADR-22** gate ตัวไหนเป็นคนตัดสิน · ขาดไม่ได้เพราะสอง gate
+  ///   มีค่า `dwellSamples`/`staleAfterMillis` คนละชุด ถ้าไม่มีคอลัมน์นี้ "dwell ครบ
+  ///   เร็วผิดปกติ" กับ "ไม่มี `stale` เลยทั้งช่วง" จะอ่านเป็นบั๊กทั้งคู่
+  static func proximityRawSignalsSuffix(_ event: BeaconKitProximityChangedEvent) -> String {
+    var parts = ""
+    parts += " bucket=\(event.to?.wireName ?? "n/a")"
+    parts += " from=\(event.from?.wireName ?? "none")"
+    parts += " reason=\(event.reason.wireName)"
+    parts += " beacon=\(event.beacon)"
+    parts += " store=\(event.storeError?.replacingOccurrences(of: " ", with: "_") ?? "ok")"
+    parts += " mode=\(event.mode.rawValue)"
+    parts += Self.rangeCounterSuffix(
+      rangeCb: event.rangeCallbackCount,
+      inArray: event.inArrayCount,
+      unknown: event.unknownCount
+    )
+    return parts
+  }
+
+  /// ตัวนับ 3 ตัวของ **ADR-21 หัวข้อ 9** ในรูปคอลัมน์สัญญาณดิบ — **pure function**
+  ///
+  /// ```
+  ///  rangeCb=41 inArray=12 unknown=3
+  /// ```
+  ///
+  /// **ทั้งสามตัวต้องอยู่ด้วยกันและห้ามรวมเป็นตัวเดียว** เพราะบน iOS "ไม่มี sample"
+  /// มีสองความหมายที่แก้คนละทางเลย:
+  /// - `rangeCb` ไม่ขยับ = **ranging ไม่เดิน** (process ถูก suspend / ไม่มีใครเรียก
+  ///   `startRangingBeacons` ในรอบที่ถูกปลุก) → แก้ที่ lifecycle
+  /// - `rangeCb` ขยับถี่ ~1 Hz แต่ `inArray` ห่าง = **CoreLocation ถอดบีคอนออกจาก
+  ///   array เอง** → `stale` 33% ของรอบ 10 ก.ย. คือพฤติกรรมของ OS ไม่ใช่การขาด callback
+  /// - `unknown` สูง = คำตอบอยู่ที่กฎ "`unknown` ไม่ต่ออายุ `lastSampleAt`"
+  ///   (ADR-19 6(ง)) **ไม่ใช่ที่ตัวเลข `staleAfter`** — ข้อนี้สำคัญกว่าการไปปรับ
+  ///   `staleAfter` มั่ว ๆ (ADR-21 หัวข้อ 9 สมมติฐาน B)
+  ///
+  /// - Parameters:
+  ///   - inArray: `nil` = บรรทัดนี้ไม่ได้พูดถึง key ใด (เช่นบรรทัด `launch`) เขียน
+  ///     เป็น `n/a` **ห้ามเขียน `0`** ซึ่งแปลว่า "นับแล้วได้ศูนย์" คนละความหมายกัน
+  ///   - unknown: เช่นเดียวกับ [inArray]
+  static func rangeCounterSuffix(rangeCb: Int, inArray: Int?, unknown: Int?) -> String {
+    var parts = ""
+    parts += " rangeCb=\(rangeCb)"
+    parts += " inArray=\(inArray.map(String.init) ?? "n/a")"
+    parts += " unknown=\(unknown.map(String.init) ?? "n/a")"
+    return parts
+  }
+
+  /// เขียนบรรทัด `rangetick` — **ของเพิ่มจากรอบ 10 ก.ย. 2026 (ADR-21 หัวข้อ 9)**
+  ///
+  /// ตอบคำถามเดียวที่บรรทัด transition ตอบไม่ได้: **"หน้าต่างจริงหลังถูกปลุกยาวแค่ไหน"**
+  /// — ถ้า process ถูก suspend/ฆ่าเงียบ ๆ ตอนบีคอนนิ่งอยู่ บรรทัดสุดท้ายของ process
+  /// นั้นจะเป็น transition เมื่อนานมาแล้ว แล้ว "เวลาที่ ranging หยุดจริง" จะแยกไม่ออก
+  /// จาก "เวลาที่ความใกล้หยุดเปลี่ยน" (ความกำกวมชนิดเดียวกับ `rangefail` 0 บรรทัด)
+  ///
+  /// **ไม่ยิง notification** — เป็นข้อมูลของผู้ทดสอบ ไม่ใช่เหตุการณ์ที่ผู้ใช้ต้องรู้
+  ///
+  /// `inArray`/`unknown` ของบรรทัดนี้เป็น **ผลรวมทุก key ใน process** ต่างจากบรรทัด
+  /// `proximity` ที่เป็นของ key เดียว — ตัวอ่านแยกได้จากคอลัมน์ `event=` (ดู kdoc ของ
+  /// `BeaconKitRangeTickEvent`)
+  private func recordRangeTick(_ event: BeaconKitRangeTickEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "rangetick",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + Self.rangeCounterSuffix(
+            rangeCb: event.rangeCallbackCount,
+            inArray: event.inArrayCount,
+            unknown: event.unknownCount
+          )
+      )
+    )
+  }
+
+  /// key ของ cooldown — ระดับ **บีคอนหนึ่งตัวในหนึ่ง region**
+  ///
+  /// ตรงกับ key ของ `ProximityGate` (ADR-21 หัวข้อ 3) โดยตั้งใจ เพราะข้อความที่
+  /// ผู้ใช้เห็นมี `beacon=<major>/<minor>` อยู่ด้วย — บีคอนคนละตัวจึงให้ข้อความคนละ
+  /// ใบที่อ่านแล้วแยกออก ต่างจากฝั่ง Android ที่จงใจ**ไม่**ใส่ตัวแยกบีคอนลง key
+  /// เพราะที่นั่นไม่มี major/minor รายเฟรมให้ใส่ในข้อความตั้งแต่แรก
+  private func proximityCooldownKey(for event: BeaconKitProximityChangedEvent) -> String {
+    return [
+      event.regionIdentifier,
+      event.uuid ?? "-",
+      event.major.map(String.init) ?? "-",
+      event.minor.map(String.init) ?? "-",
+    ].joined(separator: "|")
+  }
+
+  /// `true` เมื่อยิง notification ได้ (และจดเวลาไว้แล้ว) · `false` เมื่อยังติด
+  /// cooldown อยู่
+  ///
+  /// **เก็บลง `UserDefaults` ไม่ใช่ตัวแปรใน memory** เพราะ process ตายและถูกปลุก
+  /// ใหม่ได้ตลอดในเส้นทางที่ ADR-21 รองรับ — cooldown ที่อยู่ใน memory อย่างเดียวจะ
+  /// รีเซ็ตทุกครั้งที่ระบบสร้าง process ใหม่ ซึ่งแปลว่ามันจะไม่ทำงานเลยในเคสที่มัน
+  /// ถูกสร้างมาเพื่อแก้ (เหตุผลเดียวกับที่ฝั่ง Android ใช้ `SharedPreferences`)
+  ///
+  /// นาฬิกาที่เทียบคือเวลาแบบ wall clock ที่ติดมากับ event เอง — ยอมแลกความเสี่ยง
+  /// เรื่องผู้ใช้ปรับนาฬิกาเครื่อง (ซึ่งทำให้เกิด/หายไปได้แค่ notification ใบเดียว
+  /// ตอน demo) กับการไม่ต้องจัดการโทเคนรอบบูต
+  private func consumeProximityCooldown(key: String, nowMillis: Int64) -> Bool {
+    guard let defaults = UserDefaults(suiteName: Self.proximityCooldownSuiteName) else {
+      // อ่าน/เขียนที่เก็บ cooldown ไม่ได้ = ยอมให้เด้ง ดีกว่าเงียบไปทั้งรอบทดสอบ
+      // (ความล้มเหลวของ "ตัวกันสแปม" ต้องไม่กลืน event ที่กำลังจะพิสูจน์)
+      return true
+    }
+    let lastMillis = Int64(defaults.double(forKey: key))
+    if lastMillis != 0 && nowMillis - lastMillis < Self.proximityNotificationCooldownMillis {
+      return false
+    }
+    defaults.set(Double(nowMillis), forKey: key)
+    return true
   }
 
   /// **ตรรกะการตัดสินล้วน (pure)** — แยกออกจาก `currentRunContext()` เพื่อให้
@@ -310,7 +643,23 @@ import beacon_kit_ios
         content: content,
         trigger: nil
       )
-    )
+    ) { error in
+      // เขียนบรรทัดที่สอง **เฉพาะตอนล้มเหลว** — เส้นทางสำเร็จมีบรรทัด
+      // `posted=requested` อยู่แล้ว การเขียนซ้ำตอนสำเร็จจะทำให้ไฟล์หลักฐานยาวขึ้น
+      // เท่าตัวโดยไม่เพิ่มข้อมูล · callback นี้อาจ**ไม่มาถึงเลย**ถ้าระบบ suspend
+      // โปรเซสก่อน ซึ่งเป็นเหตุผลที่บรรทัดแรกต้องถูกเขียนก่อนยิงเสมอ
+      guard let error = error else { return }
+      BackgroundEvidenceLog.shared.append(
+        line: BackgroundEvidenceLog.line(
+          timestamp: Date(),
+          event: "notification",
+          regionIdentifier: "-",
+          conclusion: "notifyFailed",
+          rawSignals: "posted=false "
+            + "reason=\(String(describing: error).replacingOccurrences(of: " ", with: "_"))"
+        )
+      )
+    }
   }
 
   /// แสดง notification แม้ตอนแอปอยู่ **foreground**
