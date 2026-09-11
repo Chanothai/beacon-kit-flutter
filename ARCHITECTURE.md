@@ -4412,12 +4412,20 @@ CoreLocation มีเฟรมให้ประมวลผลถี่แค�
    `verified`) · **อุปสรรค:** `runProximityLayer` รับ `[CLBeacon]` ซึ่งสร้างในเทสต์ไม่ได้
    (Apple ไม่เปิด initializer) — ทางแก้คือแยกชั้นแปลง `CLBeacon` → `ProximitySample`
    ออกมาให้ทดสอบส่วนที่เหลือได้ **ยังไม่ทำในรอบนี้**
-7. **~~ฝั่ง Android ขาด `beacon=` ในบรรทัด `notification` และขาด `build=` ทั้งไฟล์~~
-   — ปิดแล้วใน PR #27** (11 ก.ย. 2026): บรรทัด `notification` มี `beacon=`/`layer=`
-   และ region จริงแล้ว · บรรทัด `launch` มี `build=<git short sha>` แล้ว
-   · **หนี้ที่เหลืออยู่จริง:** ฟิลด์ `beacon=` ฝั่ง Android ยังเป็น **MAC สองไบต์ท้าย**
-   ไม่ใช่ `<major>/<minor>` แบบ iOS ทำให้**แมปบรรทัดของสองแพลตฟอร์มเข้าหากันไม่ได้**
-   (ดู `docs/beacon-inventory.md` หัวข้อ "หนี้ที่ผูกกับไฟล์นี้" ข้อ 1)
+7. **~~ฝั่ง Android ขาด `beacon=`/`build=` และ `beacon=` ยังเป็น MAC ไม่ใช่ major/minor~~
+   — ปิดแล้ว** (PR #27 · 11 ก.ย. 2026): บรรทัด `notification` มี `beacon=`/`layer=`
+   และ region จริง · บรรทัด `launch` มี `build=<git short sha>` · และรอบ follow-up
+   แยก `beacon=<major>/<minor>` (ตรงกับ iOS) ออกจาก `mac=<2 ไบต์ท้าย>` เป็นสองฟิลด์
+   ในบรรทัดเดียวกันแล้ว พร้อม unit test ล็อกรูปแบบ
+
+   🔴 **หนี้ที่เหลืออยู่จริงคือคนละเรื่องกับรูปแบบ: `beacon=` ให้ค่า `n/a` ทุกบรรทัด
+   ในสนามจริง** — `ProximityChangedEvent.major/minor` มาจาก **region spec ที่ลงทะเบียนไว้**
+   ไม่ใช่จากเฟรม (ADR-14 หัวข้อ 4.1: ฝั่ง Kotlin ไม่มี parser) และ example app
+   ลงทะเบียนทั้งสอง region ด้วย **UUID อย่างเดียว** (`main.dart:109-110, 642-643`)
+   · ผลคือยัง**แมปบรรทัดของสองแพลตฟอร์มเข้าหากันไม่ได้** ต้องพึ่ง `mac=` ต่อไป
+   · **ทางแก้ต้องแตะ SDK:** parser ที่อ่าน `ibeaconTxPower` อยู่แล้วใน
+   `BeaconScanReceiver` อ่าน major/minor ได้ด้วย offset ที่ติดกัน — **ยังไม่ทำ
+   ต้องเป็น PR/ADR ของตัวเอง** (ดู `docs/beacon-inventory.md` หนี้ข้อ 1)
 8. **CI ไม่เคยรัน `xcodebuild test` เลย** (ผลรีวิว 10 ก.ย. 2026) — `.github/workflows/ci.yml`
    job `build-ios` รันแค่ `flutter build ios --no-codesign` (คอมไพล์เฉย ๆ) แปลว่าตัวเลข
    "94 passed / 0 failed / 2 skipped" ที่อ้างในทุกคอมมิต **มาจากการรันมือทั้งหมด** และ
