@@ -71,9 +71,15 @@ note_fail() {
 
 # แถวในตารางเช็คลิสต์เขียนได้หลายรูปแบบ: `| 10 (ใหม่) |` · `| 19.12 |` · `| 1. ข้อความ |`
 # จึงยอมรับตัวคั่นหลังเลขเป็น `|` `.` `(` หรือช่องว่างแล้วตามด้วยหนึ่งในนั้น
+# **ใช้ `grep -F` (สตริงตรง ๆ) ไม่ใช่ regex โดยตั้งใจ** — เลขข้อมีจุดและอักษรไทย
+# ปนอยู่ การ escape ให้ปลอดภัยข้าม grep สองสายพันธุ์ (BSD บน macOS · GNU บน CI)
+# เปราะเกินไป และ bracket expression ที่มี `[.` ติดกันถูกตีความเป็น collating symbol
+# จนพังใต้ locale UTF-8 — ปัญหาเดียวกับที่ทำให้ CI แดงรอบแรก
 row_exists() {
   local target="$1" ref="$2"
-  grep -qE "^\| *$(sed 's/[.[\*^$()+?{|]/\\&/g' <<<"$ref") *[.|(]" "$target"
+  grep -qF "| $ref |" "$target" ||
+    grep -qF "| $ref." "$target" ||
+    grep -qF "| $ref (" "$target"
 }
 
 # รองรับการอ้างหัวข้อแบบซ้อน `"A → B"` ซึ่งอ่านง่ายกว่าการยกหัวข้อเต็มมาทั้งบรรทัด
@@ -114,7 +120,18 @@ def flush():
             continue
         rest = joined[i + len(lead):]
         end = rest.find("**")
-        print(f"{adr}\t{start}\t{rest if end < 0 else rest[:end]}")
+        seg = rest if end < 0 else rest[:end]
+        # แยก "เลขข้อ" ที่นี่ **ไม่ใช่ใน shell** — ตัวอักษรไทยที่ต่อท้ายเลข (19.7ก)
+        # ต้องใช้ช่วงอักขระหลายไบต์ ซึ่ง GNU grep ปฏิเสธด้วย
+        # "Invalid collation character" ใต้ locale C.UTF-8 ของ CI (พังจริงบน
+        # ubuntu รอบแรก) · ที่นี่เป็น Python ซึ่งไม่ขึ้นกับ locale เลย
+        refs = []
+        for m2 in re.finditer(r"ข้อ ([0-9][0-9.\u0e00-\u0e7f-]*(?: *· *[0-9][0-9.\u0e00-\u0e7f-]*)*)", seg):
+            for tok in re.split(r"\s*·\s*|\s+", m2.group(1)):
+                tok = tok.strip().rstrip(".")
+                if tok and tok[0].isdigit():
+                    refs.append(tok)
+        print(f"{adr}\t{start}\t{seg}\t{','.join(sorted(set(refs)))}")
         break
 for i, l in enumerate(lines, 1):
     m = re.match(r"^## (ADR-[0-9]+)", l)
@@ -128,7 +145,7 @@ for i, l in enumerate(lines, 1):
 flush()
 PY
 
-while IFS=$'\t' read -r adr lineno text; do
+while IFS=$'\t' read -r adr lineno text refs_csv; do
   # การกรองว่า "บล็อกนี้มีตัวชี้ไหม" ทำไปแล้วในขั้น python ข้างบน — ที่มาถึงตรงนี้
   # คือ **ประโยคตัวชี้ล้วน ๆ** ไม่ใช่ทั้งแบนเนอร์
   # 1) ไฟล์ที่ถูกอ้างในเครื่องหมาย backtick และลงท้าย .md
@@ -170,13 +187,12 @@ while IFS=$'\t' read -r adr lineno text; do
     (( found )) || note_fail "$adr (บรรทัด $lineno): ไม่พบหัวข้อ \"$h\" ในไฟล์ที่ชี้ไป (${ok_targets[*]})"
   done < <(grep -oE 'หัวข้อ "[^"]+"' <<<"$text" | sed 's/^หัวข้อ "//; s/"$//')
 
-  # 3) เลขข้อที่อ้าง: `ข้อ 10` · `ข้อ 19.7ก · 19.7ข` · `ข้อ 19.1-19.12` · `ข้อ 1-6 · 3ก`
-  refs_raw="$(grep -oE 'ข้อ [0-9][0-9.ก-ฮ·\ -]*' <<<"$text" | sed 's/^ข้อ //')"
-  [[ -n "$refs_raw" ]] || continue
+  # 3) เลขข้อที่อ้าง — **แยกมาแล้วจากขั้น python** (ดูเหตุผลเรื่อง locale ที่นั่น)
+  [[ -n "${refs_csv:-}" ]] || continue
   refs=()
   while IFS= read -r r; do
     [[ -n "$r" ]] && refs+=("$r")
-  done < <(tr '·' '\n' <<<"$refs_raw" | tr -s ' ' '\n' | grep -E '^[0-9]' | sed 's/[^0-9.ก-ฮ-]*$//' | sort -u)
+  done < <(tr ',' '\n' <<<"$refs_csv")
   [[ ${#refs[@]} -gt 0 ]] || continue
 
   for ref in "${refs[@]}"; do
