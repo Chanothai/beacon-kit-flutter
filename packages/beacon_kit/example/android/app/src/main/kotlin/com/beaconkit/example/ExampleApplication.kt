@@ -81,6 +81,11 @@ class ExampleApplication : Application() {
                 ExampleNotifications.post(
                     context = this,
                     title = "Region ${event.state}: ${event.regionIdentifier}",
+                    // ชั้นที่ 1 พูดถึง **ทั้ง region** ไม่ใช่บีคอนตัวใดตัวหนึ่ง —
+                    // `beacon` จึงเป็น `n/a` ตามจริง **ห้ามใส่บีคอนตัวแรกที่เจอ**
+                    regionIdentifier = event.regionIdentifier,
+                    beacon = ExampleNotifications.BEACON_NOT_APPLICABLE,
+                    layer = ExampleNotifications.LAYER_REGION,
                     // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ
                     // [BackgroundEvidenceLog.processId] ไม่ใช่ pid ของ Linux
                     // การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat` หาไม่เจอ
@@ -205,7 +210,8 @@ class ExampleApplication : Application() {
                     context = this,
                     state = processState,
                     receiverEntry = false,
-                ) + " " + restoredField + " " + deviceIdentityField(),
+                ) + " " + restoredField + " " + deviceIdentityField() +
+                    " build=" + BuildConfig.GIT_SHORT_SHA,
             ),
         )
     }

@@ -64,7 +64,54 @@ object ExampleNotifications {
      * **เขียน log ก่อน `notify()` เสมอ** ตามหลักการเดียวกับที่เหลือของไฟล์หลักฐาน:
      * log คือสิ่งที่ต้องรอด notification เป็นแค่สัญญาณให้คนเห็น
      */
-    fun post(context: Context, title: String, body: String) {
+    /**
+     * บีคอนที่จุดชนวน notification ใบนี้ — `"n/a"` เมื่อบรรทัดนี้ไม่ได้พูดถึงบีคอน
+     * ตัวใดตัวหนึ่ง (เช่น notification ของชั้นที่ 1 ที่พูดถึงทั้ง region)
+     *
+     * **`"n/a"` ไม่ใช่ค่าว่าง** — ต้องอ่านออกได้ว่า "ถามแล้วและไม่มีคำตอบ" ต่างจาก
+     * "ไม่มีคอลัมน์นี้เพราะเป็น log รุ่นเก่า" (หลักการเดียวกับ `store=ok` ฝั่ง iOS)
+     */
+    const val BEACON_NOT_APPLICABLE = "n/a"
+
+    /** ชั้นที่เป็นเจ้าของ notification ใบนี้ — ดู kdoc ของ [post] */
+    const val LAYER_REGION = "1"
+    const val LAYER_PROXIMITY = "2"
+
+    /**
+     * ยิง notification พร้อมเขียนบรรทัดหลักฐานที่ **แยกที่มาได้จากบรรทัดเดียว**
+     *
+     * ## ทำไมต้องมี `beacon=` และ `layer=` (เพิ่ม 11 ก.ย. 2026)
+     *
+     * ก่อนหน้านี้บรรทัด `event=notification` ฝั่ง Android เขียน `regionIdentifier`
+     * เป็น `-` และไม่มี `beacon=` เลย ผลคือ **notification ทุกใบพิมพ์ออกมาเหมือนกันหมด**
+     * — รอบตรวจ log 11 ก.ย. 2026 ต้องไล่จับคู่ 114 ใบกับบรรทัดที่อยู่ก่อนหน้าเองทีละใบ
+     * เพื่อจะตอบแค่ว่า "ใบไหนมาจากชั้น 1 ใบไหนมาจากชั้น 2" (ได้ผล: ชั้น 1 = 104 ·
+     * ชั้น 2 = 9 · ตอบไม่ได้ 1) และ **คำถาม "cooldown 60 วินาทีต่อบีคอนทำงานจริงไหม"
+     * ตอบจากไฟล์ตรง ๆ ไม่ได้เลย** ต้องเดาบีคอนจากบรรทัดข้างเคียง
+     *
+     * นี่คือ**ช่องว่างเดียวกับที่ ADR-21 หัวข้อ 7 ข้อ 1 บังคับให้ฝั่ง iOS แก้ตั้งแต่
+     * คอมมิตแรก** ("บรรทัดหลักฐานต้องแยกบีคอนออกจากกันได้") — ฝั่ง Android ทำชั้น
+     * `proximity` ไปแล้วแต่ลืมบรรทัด `notification`
+     *
+     * ## ลำดับคอลัมน์
+     *
+     * ฟิลด์ใหม่ถูกวาง **ก่อน** `posted=`/`reason=`/`id=` ที่มีอยู่เดิม — คอลัมน์
+     * สัญญาณดิบอ่านแบบ key=value ลำดับจึงไม่ใช่สัญญา แต่จัดให้ "ใครยิง" มาก่อน
+     * "ยิงขึ้นไหม" เพราะเป็นลำดับที่คนอ่านไล่จริง
+     *
+     * @param regionIdentifier region ที่ผูกกับ notification ใบนี้ — ส่ง `"-"` เมื่อ
+     *   ไม่มีจริง ๆ (ปุ่มทดสอบบน UI) **ห้ามเดาจากข้อความ `title`**
+     * @param beacon `"<major>/<minor>"` หรือ [BEACON_NOT_APPLICABLE]
+     * @param layer [LAYER_REGION] (enter/exit) หรือ [LAYER_PROXIMITY] (ความใกล้)
+     */
+    fun post(
+        context: Context,
+        title: String,
+        body: String,
+        regionIdentifier: String = "-",
+        beacon: String = BEACON_NOT_APPLICABLE,
+        layer: String = BEACON_NOT_APPLICABLE,
+    ) {
         runCatching {
             ensureChannel(context)
             val id = synchronized(this) { nextId++ }
@@ -75,9 +122,11 @@ object ExampleNotifications {
                 BackgroundEvidenceLog.line(
                     timestampMillis = System.currentTimeMillis(),
                     event = "notification",
-                    // ไม่มี region ผูกกับบรรทัดนี้ — ใช้ `-` แบบเดียวกับบรรทัด
-                    // `launch`/`selftest` ห้ามเดาชื่อ region จากข้อความ title
-                    regionIdentifier = "-",
+                    // **ผู้เรียกส่งมาตามจริงตั้งแต่ 11 ก.ย. 2026** — เดิมบรรทัดนี้
+                    // ฮาร์ดโค้ด `-` เสมอเพราะ `post()` ไม่เคยรู้จัก region
+                    // ตอนนี้รู้แล้ว จึงเขียนตามจริง · ยังเป็น `-` ได้เมื่อไม่มี
+                    // region ผูกจริง ๆ (ปุ่มทดสอบบน UI) **ห้ามเดาจากข้อความ title**
+                    regionIdentifier = regionIdentifier,
                     conclusion = ExampleApplication.processState.conclusion,
                     rawSignals = BackgroundEvidenceLog.rawSignals(
                         context = context,
@@ -85,7 +134,8 @@ object ExampleNotifications {
                         // ยิงได้จากทั้ง observer ในเส้นทาง receiver และจากปุ่มบน UI
                         // — ไม่อ้างว่ามาจาก receiver เพราะพิสูจน์จากตรงนี้ไม่ได้
                         receiverEntry = false,
-                    ) + " posted=${reason == REASON_GRANTED} reason=$reason id=$id",
+                    ) + " beacon=$beacon layer=$layer" +
+                        " posted=${reason == REASON_GRANTED} reason=$reason id=$id",
                 ),
             )
 
