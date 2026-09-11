@@ -113,14 +113,16 @@ object ExampleProximityWatcher {
             title = "ใกล้ ${event.regionIdentifier} ($bucket)",
             body = "reason=${event.reason.wireName} " +
                 "medianM=${formatMeters(event.medianMeters)} · " +
-                "beacon=${event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE} · " +
+                "beacon=${beaconField(event)} · " +
+                "mac=${event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE} · " +
                 "procUuid=${BackgroundEvidenceLog.processId}",
             // **ค่าสามตัวนี้คือสิ่งที่ทำให้บรรทัดหลักฐานตอบคำถาม "cooldown ทำงานไหม"
             // ได้จากไฟล์ตรง ๆ** โดยไม่ต้องไล่จับคู่กับบรรทัดข้างเคียง (ดู kdoc ของ
             // `ExampleNotifications.post`) — `beaconTag` เป็นตัวเดียวกับที่ใช้เป็น
             // key ของ cooldown จริง จึงเทียบกันได้ตรง ๆ
             regionIdentifier = event.regionIdentifier,
-            beacon = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
+            beacon = beaconField(event),
+            mac = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
             layer = ExampleNotifications.LAYER_PROXIMITY,
         )
     }
@@ -150,11 +152,27 @@ object ExampleProximityWatcher {
         append(" medianM=${formatMeters(event.medianMeters)}")
         append(" rssi=${event.rssi ?: "n/a"}")
         append(" txPower=${event.txPower ?: "n/a"}")
-        // แยกว่าบรรทัดนี้เป็นของบีคอนตัวไหนใน region เดียวกัน — ถ้าไม่มีค่านี้
-        // `stale` หลายบรรทัดติดกันจะอ่านเหมือนบั๊กยิงซ้ำ และ `from=none` ของ key
-        // ที่เพิ่งเจอครั้งแรกจะอ่านเหมือน state หายไปเอง (เกิดจริง 9 ก.ย. 2026
-        // ช่วง 16:45-16:48 — ดู kdoc ของ ProximityChangedEvent.beaconTag)
-        append(" beacon=${event.beaconTag ?: "n/a"}")
+        // **สองฟิลด์นี้ตอบคนละคำถาม ห้ามรวมเป็นตัวเดียว** (เปลี่ยนรูปแบบ 11 ก.ย. 2026)
+        //
+        // `beacon=<major>/<minor>` — **ตัวระบุเชิงตรรกะ ตรงกับฝั่ง iOS** ใช้จับคู่
+        // บรรทัดของสองแพลตฟอร์มเข้าหากันและเทียบกับ `docs/beacon-inventory.md` ได้
+        //
+        // `mac=<2 ไบต์ท้าย>` — **ตัวแยกเชิงกายภาพ** เป็นสิ่งเดียวกับที่อยู่ใน gate key
+        // (ADR-20 หัวข้อ 3) จึงเป็นตัวเดียวที่แยกบีคอนคนละตัวใน region เดียวกันได้จริง
+        // ถ้าไม่มี `stale` หลายบรรทัดติดกันจะอ่านเหมือนบั๊กยิงซ้ำ (เกิดจริง 9 ก.ย. 2026
+        // ช่วง 16:45-16:48) · เก็บแค่สองไบต์ท้ายเพราะพอแยกได้โดยไม่ต้องเขียนที่อยู่เต็ม
+        // ลงไฟล์ที่ถูก commit เข้า repo
+        //
+        // ⚠️ **`beacon=` เป็น `n/a` ทุกบรรทัดบนค่าปัจจุบันของ example app** เพราะ
+        // `ProximityChangedEvent.major/minor` มาจาก **region spec ที่ลงทะเบียนไว้**
+        // ไม่ใช่จากเฟรม (ADR-14 หัวข้อ 4.1: ฝั่ง Kotlin ไม่มี parser) และ
+        // `main.dart` ลงทะเบียนทั้งสอง region ด้วย **UUID อย่างเดียว ไม่ระบุ major/minor**
+        // — **นี่คือสิ่งที่ต้องเห็น ไม่ใช่บั๊กที่ต้องกลบ**: ค่าที่ตอบไม่ได้ต้องอ่านออก
+        // ว่าตอบไม่ได้ · ทางแก้จริงคือให้ SDK ถอด major/minor จากเฟรม (parser เดิมที่
+        // อ่าน `txPower` อยู่แล้วใน `BeaconScanReceiver` อ่านสองค่านี้ได้ด้วย offset
+        // ที่ติดกัน) ซึ่งเป็นการแก้ **SDK** จึงอยู่นอกขอบเขตของ PR ที่แตะแค่ `example/`
+        append(" beacon=${beaconField(event)}")
+        append(" mac=${event.beaconTag ?: "n/a"}")
         // `ok` ไม่ใช่ค่าว่าง — ต้องอ่านออกได้ว่า "ถามแล้วและไม่มี error" ต่างจาก
         // "ไม่มีคอลัมน์นี้เพราะเป็น log รุ่นเก่า"
         append(" store=${event.storeError?.replace(' ', '_') ?: "ok"}")
@@ -166,6 +184,20 @@ object ExampleProximityWatcher {
      * `Double` ไม่ได้บนเครื่องที่ตั้งภาษาต่างกัน (ความแม่นยำระดับ 0.1 ม. ก็เกินพอ
      * อยู่แล้วสำหรับค่าที่ ADR-19 เตือนว่าห้ามอ่านเป็นตำแหน่งที่แม่นยำ)
      */
+    /**
+     * `"<major>/<minor>"` หรือ `"n/a"` — **pure function มี unit test ล็อกไว้**
+     *
+     * ต้องได้ `n/a` เมื่อ**ค่าใดค่าหนึ่งหาย** ไม่ใช่เฉพาะตอนหายทั้งคู่: `"9902/null"`
+     * เป็นสตริงที่อ่านแล้วเข้าใจผิดว่ารู้ major แต่ไม่รู้ minor ทั้งที่ในทางปฏิบัติ
+     * ทั้งคู่มาจากแหล่งเดียวกัน (region spec) และหายพร้อมกันเสมอ
+     */
+    fun beaconField(event: ProximityChangedEvent): String {
+        val major = event.major
+        val minor = event.minor
+        if (major == null || minor == null) return "n/a"
+        return "$major/$minor"
+    }
+
     private fun formatMeters(meters: Double?): String =
         if (meters == null) "n/a" else String.format(Locale.US, "%.1f", meters)
 

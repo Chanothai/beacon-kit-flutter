@@ -2768,10 +2768,12 @@ open question ในไฟล์เช็คลิสต์เองเป็น
 
 ## ADR-17: `reconcile()` — กู้สถานะ `inside` ที่ค้างข้ามคืนเมื่อนาฬิกาปลุกไม่มาถึง (เพิ่ม 4 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified (Track B)**
-> นี่คือขั้นที่ 1/4 ตาม `PIPELINE.md` (ออกแบบ) เท่านั้น **ห้ามมีโค้ด Kotlin ใน
-> เอกสารนี้** หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev` เมื่อ
-> สถาปัตยกรรมในหัวข้อนี้ถูก sign-off แล้วเท่านั้น
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> หัวข้อ "สถานะรวม → ADR-17" และตารางผล ข้อ 10**
+>
+> ไฟล์: `BackgroundRegionMonitor.reconcile()` · `BackgroundRegionStore` ·
+> `BeaconScanReceiver` · `RegionExitAlarmReceiver` · ฟิลด์ `exitReason=`/`sinceLastSeenMs=`
+> ในคอลัมน์สัญญาณดิบ
 > **ขอบเขต:** `beacon_kit_android` (`BackgroundRegionMonitor`,
 > `BackgroundRegionStore`, `BeaconScanReceiver`, `RegionExitAlarmReceiver`,
 > `BootCompletedReceiver`, `BeaconKitAndroidPlugin`) และรูปแบบ `rawSignals` /
@@ -3291,13 +3293,15 @@ foreground service) นาฬิกาปลุกเดิมยังทำห
 
 ## ADR-19: `ProximityGate` — ชั้นตัดสินใจ "ใกล้พอหรือยัง" จาก RSSI/proximity ระดับ Dart (เพิ่ม 8 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified**
-> นี่คือขั้นที่ 1/4 ตาม `PIPELINE.md` (ออกแบบ) เท่านั้น **ห้ามมีโค้ด Dart/Swift/Kotlin
-> ใด ๆ ในเอกสารนี้** หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev`
-> เมื่อสถาปัตยกรรมในหัวข้อนี้ถูก sign-off แล้วเท่านั้น **แบนเนอร์นี้ต้องถูกเปลี่ยนเป็น
-> `code-complete, unverified` ในพร้อมกับ PR ที่ implement ADR นี้** (ตามกฎ
-> CONTRIBUTING ข้อ 8 — `beacon-reviewer` ต้องตรวจข้อนี้ทุกครั้ง เหมือนที่เคยพลาดมาแล้ว
-> 2 ครั้งกับ ADR-16/ADR-17)
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> หัวข้อ "สถานะรวม → ADR-20" และ `docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 19.1-19.12**
+>
+> ไฟล์: `packages/beacon_kit/lib/src/proximity/proximity_gate.dart` (reference) ·
+> port ฝั่ง Kotlin (ADR-20) และ Swift (ADR-21/ADR-22)
+>
+> ⚠️ **ADR นี้ไม่มีแถวสถานะของตัวเองในไฟล์เช็คลิสต์** เพราะเป็น *reference implementation*
+> ที่ไม่เคยรันบนอุปกรณ์โดยตรง — พฤติกรรมของมันถูกพิสูจน์ผ่าน port ทั้งสองฝั่งเท่านั้น
 > **ขอบเขต:** เฉพาะ `docs/sources/apple_proximity_ranging.md`,
 > `docs/sources/rssi_path_loss_model.md`, และหัวข้อนี้ — **ไม่แตะ** region
 > monitoring/enter-exit ที่มีอยู่แล้ว (ADR-9/ADR-14/ADR-17), ไม่แตะ `reconcile()`,
@@ -3762,7 +3766,7 @@ bucket หนึ่งไปอีก bucket" ซึ่งสมมติว่�
 ## ADR-20: ProximityGate ตอนแอปไม่ทำงาน — port ตรรกะเป็น Kotlin ใน `BeaconScanReceiver` (เพิ่ม 9 ก.ย. 2026)
 
 > **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
-> ข้อ 8 · 9 · 10**
+> หัวข้อ "สถานะรวม → ADR-20" และตารางรอบเดินจริง 9 ก.ย. (ข้อ 1-6 · 3ก)**
 >
 > ไฟล์: `ProximityGate.kt` · `ProximityGateStore.kt` · `BackgroundProximityMonitor.kt` ·
 > hook ใน `BeaconScanReceiver` · observer ใน example app
@@ -4412,15 +4416,20 @@ CoreLocation มีเฟรมให้ประมวลผลถี่แค�
    `verified`) · **อุปสรรค:** `runProximityLayer` รับ `[CLBeacon]` ซึ่งสร้างในเทสต์ไม่ได้
    (Apple ไม่เปิด initializer) — ทางแก้คือแยกชั้นแปลง `CLBeacon` → `ProximitySample`
    ออกมาให้ทดสอบส่วนที่เหลือได้ **ยังไม่ทำในรอบนี้**
-7. **🔶 ฝั่ง Android ยังขาด `beacon=` ในบรรทัด `notification` และขาด `build=` ทั้งไฟล์**
-   (พบจากการตรวจ log 11 ก.ย. 2026) — บรรทัด `event=notification` ฝั่ง Android เขียน
-   region เป็น `-` และไม่มี `beacon=` ทำให้**แยกไม่ออกว่า notification ใบไหนมาจากบีคอน
-   ตัวไหน หรือแม้แต่มาจากชั้น 1 หรือชั้น 2** — ตรวจ 114 ใบต้องใช้การจับคู่กับบรรทัดก่อน
-   หน้าเอา (ได้ผล: ชั้น 1 `enter` 52 + `exit` 52 · ชั้น 2 เพียง 9 · ไม่รู้ที่มา 1) ·
-   **เป็นช่องว่างเดียวกับ ADR-21 หัวข้อ 7 ข้อ 1 ที่ฝั่ง iOS แก้ไปแล้วแต่ Android ยังไม่แก้**
-   · ส่วน `build=` ฝั่ง iOS มีแล้ว (ADR-21) แต่ Android ยังไม่มี ทำให้ไฟล์ 11 ก.ย. แยกไม่ได้ว่า
-   318 บรรทัดแรกมาจากบิลด์เก่า (เดาได้จากการไม่มีคอลัมน์ `store=` เท่านั้น)
-   · **แยกเป็น PR ต่างหาก ไม่รวมกับ ADR นี้** (แตะเฉพาะ `example/` ฝั่ง Android)
+7. **~~ฝั่ง Android ขาด `beacon=`/`build=` และ `beacon=` ยังเป็น MAC ไม่ใช่ major/minor~~
+   — ปิดแล้ว** (PR #27 · 11 ก.ย. 2026): บรรทัด `notification` มี `beacon=`/`layer=`
+   และ region จริง · บรรทัด `launch` มี `build=<git short sha>` · และรอบ follow-up
+   แยก `beacon=<major>/<minor>` (ตรงกับ iOS) ออกจาก `mac=<2 ไบต์ท้าย>` เป็นสองฟิลด์
+   ในบรรทัดเดียวกันแล้ว พร้อม unit test ล็อกรูปแบบ
+
+   🔴 **หนี้ที่เหลืออยู่จริงคือคนละเรื่องกับรูปแบบ: `beacon=` ให้ค่า `n/a` ทุกบรรทัด
+   ในสนามจริง** — `ProximityChangedEvent.major/minor` มาจาก **region spec ที่ลงทะเบียนไว้**
+   ไม่ใช่จากเฟรม (ADR-14 หัวข้อ 4.1: ฝั่ง Kotlin ไม่มี parser) และ example app
+   ลงทะเบียนทั้งสอง region ด้วย **UUID อย่างเดียว** (`main.dart:109-110, 642-643`)
+   · ผลคือยัง**แมปบรรทัดของสองแพลตฟอร์มเข้าหากันไม่ได้** ต้องพึ่ง `mac=` ต่อไป
+   · **ทางแก้ต้องแตะ SDK:** parser ที่อ่าน `ibeaconTxPower` อยู่แล้วใน
+   `BeaconScanReceiver` อ่าน major/minor ได้ด้วย offset ที่ติดกัน — **ยังไม่ทำ
+   ต้องเป็น PR/ADR ของตัวเอง** (ดู `docs/beacon-inventory.md` หนี้ข้อ 1)
 8. **CI ไม่เคยรัน `xcodebuild test` เลย** (ผลรีวิว 10 ก.ย. 2026) — `.github/workflows/ci.yml`
    job `build-ios` รันแค่ `flutter build ios --no-codesign` (คอมไพล์เฉย ๆ) แปลว่าตัวเลข
    "94 passed / 0 failed / 2 skipped" ที่อ้างในทุกคอมมิต **มาจากการรันมือทั้งหมด** และ
