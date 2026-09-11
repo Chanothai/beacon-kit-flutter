@@ -424,6 +424,154 @@ class ProximityGateStoreTest {
         )
     }
 
+    // ==== C1: regionIdentifier ที่มี | ปนอยู่ต้องรอดข้าม load() (ADR-20 หัวข้อ 3 ข้อ 6) ====
+
+    /**
+     * นี่คือเทสต์ที่พิสูจน์อาการจริงของบั๊ก C1: key ที่ `regionIdentifier` มี `|`
+     * ปนอยู่ (เช่นตั้งชื่อ region ด้วยรหัสสาขาที่คั่นด้วย `|` เอง) ต้อง**ไม่**ถูก
+     * `isValidKeyShape` ตัด state ทิ้งตอน `load()` — ก่อนแก้ C1 ฟังก์ชันนี้เช็คด้วย
+     * `parts.size != 4` ตรง ๆ ซึ่งเห็น key 5 ส่วนนี้ (region มี `|` ทำให้ split ได้
+     * 5 ส่วนแทนที่จะเป็น 4) เหมือน "รูปแบบเก่า" แล้วตัดทิ้งทุกรอบ — state หายเงียบ
+     * ทุกรอบ ไม่ใช่แค่ event field เป็น null เหมือนที่เทสต์ pure function ใน
+     * [ProximityKeyCodecTest] พิสูจน์แยกไว้แล้ว
+     */
+    @Test
+    fun `round-trip - regionIdentifier ที่มี pipe ปนอยู่ต้องรอดข้าม load ไม่ถูก isValidKeyShape ตัดทิ้ง`() {
+        val keyWithPipe = proximityKeyFor(
+            regionIdentifier = "a|b",
+            uuid = "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0",
+            major = 9902,
+            minor = 2,
+        )
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states_v2",
+            """{"$keyWithPipe":{"confirmedBucket":"near"}}""",
+        ).commit()
+
+        val store = ProximityGateStore(mockContext(prefs))
+        val restored = store.load()
+
+        assertEquals(
+            setOf(keyWithPipe),
+            restored.keys,
+            "key ที่ regionIdentifier มี pipe ปนอยู่ต้องไม่ถูก isValidKeyShape ตัดทิ้ง — " +
+                "นี่คืออาการจริงของบั๊ก C1: state หายเงียบทุกรอบ",
+        )
+        assertEquals(ProximityBucket.NEAR, restored.getValue(keyWithPipe).confirmedBucket)
+        assertNull(
+            store.lastMigrationDroppedCount,
+            "ไม่มี key ไหนควรถูกนับว่า drop ในเคสนี้เลย — ไม่มีเงื่อนไข migration เกิดขึ้น",
+        )
+        assertNull(store.lastError)
+
+        // ต้องถอดกลับตรงกับที่ประกอบไว้เป๊ะ — regionIdentifier ครบ "a|b" ไม่ใช่ถูก
+        // ตัดเหลือแค่ "a" (เทียบพฤติกรรมเดียวกับ ProximityKeyCodecTest ที่เทสต์
+        // pure function ตรง ๆ โดยไม่ผ่านชั้น store)
+        val parts = assertNotNull(proximityKeyPartsOrNull(keyWithPipe))
+        assertEquals("a|b", parts.regionIdentifier)
+        assertEquals("e2c56db5-dffb-48d2-b060-d0f5a71096e0", parts.uuid)
+        assertEquals(9902, parts.major)
+        assertEquals(2, parts.minor)
+    }
+
+    // ==== C2: commit() ตอนลบคีย์เก่าคืน false หรือโยน exception (ADR-20 หัวข้อ 3 ข้อ 1) ====
+
+    /**
+     * `commit()` คืน `false` โดยไม่โยน exception เมื่อเขียนไม่สำเร็จ — `runCatching`
+     * เพียงอย่างเดียวจับสาขานี้ไม่ได้ ถ้า `load()` ไม่เช็คผลของ `commit()` ตรง ๆ
+     * คีย์เก่าจะถูกนับว่า migrate สำเร็จทั้งที่ยังค้างอยู่บนดิสก์จริง
+     *
+     * เทสต์นี้ล็อกทั้งสามผลที่ต้องเกิดพร้อมกัน:
+     * 1. ไม่มีการนับ migrated ของรอบนี้ ([lastMigrationDroppedCount] ต้องเป็น `null`)
+     * 2. [lastError] ถูกตั้งแทน
+     * 3. คีย์เก่ายังอยู่บนดิสก์จริง (ไม่ใช่ถูกลบไปแล้วทั้งที่รายงานว่าไม่สำเร็จ) —
+     *    รอบถัดไป (จำลองด้วย store ตัวใหม่ ตรงกับที่ `BeaconScanReceiver.onReceive()`
+     *    สร้าง `ProximityGateStore(context)` ใหม่ทุกครั้ง) ต้องพยายามลบใหม่ ไม่ใช่
+     *    ยอมแพ้ถาวร
+     */
+    @Test
+    fun `migration - commit() คืน false ตอนลบคีย์เก่า ไม่นับ migrated และคีย์เก่ายังอยู่ให้ลองใหม่รอบถัดไป`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states",
+            """{"bigc-test|AA:BB:CC:DD:EE:FF":{},"bigc-test|AA:BB:CC:DD:EE:00":{}}""",
+        ).commit()
+
+        // รอบที่ 1: จำลอง commit() ตอนลบคีย์เก่าคืน false (ดิสก์เขียนไม่สำเร็จ แต่ไม่ throw)
+        prefs.commitOverride = { false }
+        val store1 = ProximityGateStore(mockContext(prefs))
+        val restored1 = store1.load()
+
+        assertTrue(restored1.isEmpty(), "ยังไม่มี state ใหม่อยู่ดี ไม่เกี่ยวกับผลของ migration")
+        assertNull(
+            store1.lastMigrationDroppedCount,
+            "commit() คืน false ต้องไม่นับว่า migrate สำเร็จ — ไม่บวกเข้า migrationDropped",
+        )
+        assertEquals(
+            "load:legacy-remove-commit-returned-false",
+            store1.lastError,
+            "ต้องตั้ง lastError แทนการนับ migrated เงียบ ๆ",
+        )
+        assertTrue(
+            prefs.contains("states"),
+            "commit() ล้มเหลว คีย์เก่าต้องยังอยู่บนดิสก์ ไม่ใช่ถูกลบไปแล้วทั้งที่รายงานว่าไม่สำเร็จ",
+        )
+
+        // รอบที่ 2: ดิสก์กลับมาเขียนได้ตามปกติ + store ใหม่ (ตรงกับที่ onReceive() สร้าง
+        // ProximityGateStore ใหม่ทุกครั้ง) — ต้องพยายามลบคีย์เก่าอีกครั้ง ไม่มี flag
+        // ค้างว่า "เคยล้มเหลว" มาบล็อกไว้
+        prefs.commitOverride = null
+        val store2 = ProximityGateStore(mockContext(prefs))
+        val restored2 = store2.load()
+
+        assertTrue(restored2.isEmpty())
+        assertEquals(
+            2,
+            store2.lastMigrationDroppedCount,
+            "รอบถัดไปต้องลบสำเร็จและนับ 2 entry ของคีย์เก่าได้ถูกต้อง — ไม่ใช่ยอมแพ้ถาวร",
+        )
+        assertNull(store2.lastError, "รอบที่ลบสำเร็จต้องไม่มี error ค้าง")
+        assertFalse(prefs.contains("states"), "คีย์เก่าต้องถูกลบออกจริงในรอบที่ 2")
+    }
+
+    /**
+     * `commit()` ที่โยน exception ตรง ๆ (ต่างจากคืน `false` เฉย ๆ) ต้องเข้าทางเดียวกัน
+     * ทุกอย่าง — ไม่นับ migrated, ตั้ง lastError, คีย์เก่ายังอยู่ให้ลองใหม่รอบถัดไป
+     */
+    @Test
+    fun `migration - commit() ที่ลบคีย์เก่าโยน exception ก็เข้าทางเดียวกับคืน false`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states",
+            """{"bigc-test|AA:BB:CC:DD:EE:FF":{}}""",
+        ).commit()
+
+        prefs.commitOverride = { throw RuntimeException("disk-io") }
+        val store = ProximityGateStore(mockContext(prefs))
+        val restored = store.load()
+
+        assertTrue(restored.isEmpty())
+        assertNull(
+            store.lastMigrationDroppedCount,
+            "exception ตอนลบคีย์เก่าต้องไม่นับว่า migrate สำเร็จเช่นกัน",
+        )
+        assertEquals("load:legacy-remove-RuntimeException", store.lastError)
+        assertTrue(
+            prefs.contains("states"),
+            "คีย์เก่าต้องยังอยู่หลัง exception เหมือนกรณีคืน false",
+        )
+
+        // รอบถัดไปยังพยายามลบใหม่ได้เหมือนกัน
+        prefs.commitOverride = null
+        val retried = ProximityGateStore(mockContext(prefs))
+        retried.load()
+
+        assertEquals(1, retried.lastMigrationDroppedCount)
+        assertNull(retried.lastError)
+        assertFalse(prefs.contains("states"))
+    }
+
     /**
      * [ProximityGateStore.lastMigrationDroppedCount] กับ [ProximityGateStore.lastError]
      * ต้องเป็นคนละช่องกันเสมอ — migration ของคีย์เก่าสำเร็จได้ **พร้อมกัน** กับที่
