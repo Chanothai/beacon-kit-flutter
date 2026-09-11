@@ -141,6 +141,20 @@ medianM=0.8` → 13:49:25 `near←immediate medianM=1.7` → 13:49:53 `immediate
 รอบนี้จึงกันที่ชั้นนโยบายของ example app แทน (ยิงเฉพาะตอนเข้าสู่ความใกล้) **ยังไม่มีอะไร
 กันในตัว SDK** และ **ยังไม่ได้ทดสอบซ้ำหลังแก้**
 
+### ⚠️ บิลด์ถัดไปจะรีเซ็ต proximity state ทั้งหมด — ตั้งใจ ไม่ใช่ regression (เพิ่ม 11 ก.ย. 2026)
+
+รอบแก้ ADR-20 ที่เปลี่ยน gate key จาก `region|MAC` เป็น `region|uuid|major|minor` (ดู ARCHITECTURE.md
+ADR-20 หัวข้อ 3 — ส่วน "Migration ของ state บนดิสก์") บังคับให้เปลี่ยน `KEY_STATES` เป็น `"states_v2"`
+และ drop entry รูปแบบเก่าทิ้งทั้งหมดตอนอัปเกรด **เครื่องที่รันบิลด์เก่าค้างอยู่ (รวม Redmi Note 9 ที่จะ
+ติดตั้งบิลด์ใหม่ในรอบทดสอบถัดไป) จะเห็น:**
+
+- บรรทัดหลักฐาน `store=migrated dropped=<n>` หนึ่งครั้งตอน `onReceive` แรกหลังอัปเกรด
+- `from=none` สำหรับ**ทุกบีคอนที่เคยยืนยัน bucket ไว้** ในรอบ sighting แรกหลังอัปเกรด (dwell/window
+  เริ่มนับใหม่จากศูนย์เพราะ key รูปแบบเก่าอ่านไม่ได้แล้วโดยตั้งใจ ไม่ใช่ถูก parse ผิดเงียบ ๆ)
+
+**ห้ามตีความสองอาการนี้ว่าเป็น regression ของ ADR-14/ADR-17 (enter/exit)** — ชั้น 1 ไม่ถูกแตะเลยในรอบนี้
+ผลกระทบจำกัดอยู่แค่ชั้น 2 (proximity) เท่านั้น และเป็นผลที่คาดไว้ล่วงหน้าตามกติกา migration ของ ADR-20
+
 ### 🔎 สอบสวนก่อนบันทึก ADR-20 เป็น `observed` — ผลคือ **ยังบันทึกไม่ได้**
 
 ไฟล์ที่สอบสวน: [`docs/test-data/2026-09-09_android_proximity_background_round3.log`](../test-data/2026-09-09_android_proximity_background_round3.log)
