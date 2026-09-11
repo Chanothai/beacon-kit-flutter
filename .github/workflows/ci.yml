@@ -33,6 +33,21 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # เร็วที่สุดและไม่ต้องใช้ Flutter เลย — วางไว้บนสุดเพื่อให้ล้มก่อน job ที่กินเวลา
+  docs:
+    name: Verify ADR banner pointers (tool/check_adr_banners.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # กฎ CONTRIBUTING ข้อ 8 ห้ามแบนเนอร์ ADR เก็บสถานะผลทดสอบเอง ให้ชี้ไปไฟล์
+      # เช็คลิสต์แทน — กฎนั้นแก้ปัญหา "สถานะอยู่สองที่แล้วไม่ตรงกัน" ได้ แต่เปิดช่อง
+      # ผิดใหม่คือ **ตัวชี้ที่ชี้ผิด** ซึ่ง `grep` ของกฎข้อ 8 จับไม่ได้เลย
+      # (เกิดจริง: ADR-20 เคยชี้ไป "ข้อ 8 · 9 · 10" ซึ่งเป็นคนละเรื่องทั้งสามข้อ)
+      - name: ตรวจตัวชี้ในแบนเนอร์ ADR
+        run: tool/check_adr_banners.sh
+
   format:
     name: Verify formatting (dart format, ทั้ง repo)
     runs-on: ubuntu-latest
