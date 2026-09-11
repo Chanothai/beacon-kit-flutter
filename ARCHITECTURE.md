@@ -2768,10 +2768,12 @@ open question ในไฟล์เช็คลิสต์เองเป็น
 
 ## ADR-17: `reconcile()` — กู้สถานะ `inside` ที่ค้างข้ามคืนเมื่อนาฬิกาปลุกไม่มาถึง (เพิ่ม 4 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified (Track B)**
-> นี่คือขั้นที่ 1/4 ตาม `PIPELINE.md` (ออกแบบ) เท่านั้น **ห้ามมีโค้ด Kotlin ใน
-> เอกสารนี้** หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev` เมื่อ
-> สถาปัตยกรรมในหัวข้อนี้ถูก sign-off แล้วเท่านั้น
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> หัวข้อ "สถานะรวม → ADR-17" และตารางผล ข้อ 10**
+>
+> ไฟล์: `BackgroundRegionMonitor.reconcile()` · `BackgroundRegionStore` ·
+> `BeaconScanReceiver` · `RegionExitAlarmReceiver` · ฟิลด์ `exitReason=`/`sinceLastSeenMs=`
+> ในคอลัมน์สัญญาณดิบ
 > **ขอบเขต:** `beacon_kit_android` (`BackgroundRegionMonitor`,
 > `BackgroundRegionStore`, `BeaconScanReceiver`, `RegionExitAlarmReceiver`,
 > `BootCompletedReceiver`, `BeaconKitAndroidPlugin`) และรูปแบบ `rawSignals` /
@@ -3291,13 +3293,15 @@ foreground service) นาฬิกาปลุกเดิมยังทำห
 
 ## ADR-19: `ProximityGate` — ชั้นตัดสินใจ "ใกล้พอหรือยัง" จาก RSSI/proximity ระดับ Dart (เพิ่ม 8 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified**
-> นี่คือขั้นที่ 1/4 ตาม `PIPELINE.md` (ออกแบบ) เท่านั้น **ห้ามมีโค้ด Dart/Swift/Kotlin
-> ใด ๆ ในเอกสารนี้** หรือในการเปลี่ยนแปลงรอบนี้ — ขั้นเขียนโค้ดเป็นของ `flutter-dev`
-> เมื่อสถาปัตยกรรมในหัวข้อนี้ถูก sign-off แล้วเท่านั้น **แบนเนอร์นี้ต้องถูกเปลี่ยนเป็น
-> `code-complete, unverified` ในพร้อมกับ PR ที่ implement ADR นี้** (ตามกฎ
-> CONTRIBUTING ข้อ 8 — `beacon-reviewer` ต้องตรวจข้อนี้ทุกครั้ง เหมือนที่เคยพลาดมาแล้ว
-> 2 ครั้งกับ ADR-16/ADR-17)
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> หัวข้อ "สถานะรวม → ADR-20" และ `docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 19.1-19.12**
+>
+> ไฟล์: `packages/beacon_kit/lib/src/proximity/proximity_gate.dart` (reference) ·
+> port ฝั่ง Kotlin (ADR-20) และ Swift (ADR-21/ADR-22)
+>
+> ⚠️ **ADR นี้ไม่มีแถวสถานะของตัวเองในไฟล์เช็คลิสต์** เพราะเป็น *reference implementation*
+> ที่ไม่เคยรันบนอุปกรณ์โดยตรง — พฤติกรรมของมันถูกพิสูจน์ผ่าน port ทั้งสองฝั่งเท่านั้น
 > **ขอบเขต:** เฉพาะ `docs/sources/apple_proximity_ranging.md`,
 > `docs/sources/rssi_path_loss_model.md`, และหัวข้อนี้ — **ไม่แตะ** region
 > monitoring/enter-exit ที่มีอยู่แล้ว (ADR-9/ADR-14/ADR-17), ไม่แตะ `reconcile()`,
@@ -3762,7 +3766,7 @@ bucket หนึ่งไปอีก bucket" ซึ่งสมมติว่�
 ## ADR-20: ProximityGate ตอนแอปไม่ทำงาน — port ตรรกะเป็น Kotlin ใน `BeaconScanReceiver` (เพิ่ม 9 ก.ย. 2026)
 
 > **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
-> ข้อ 8 · 9 · 10**
+> หัวข้อ "สถานะรวม → ADR-20" และตารางรอบเดินจริง 9 ก.ย. (ข้อ 1-6 · 3ก)**
 >
 > ไฟล์: `ProximityGate.kt` · `ProximityGateStore.kt` · `BackgroundProximityMonitor.kt` ·
 > hook ใน `BeaconScanReceiver` · observer ใน example app
