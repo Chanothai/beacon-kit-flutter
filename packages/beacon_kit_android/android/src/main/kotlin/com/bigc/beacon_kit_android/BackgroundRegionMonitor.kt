@@ -11,6 +11,7 @@ import android.bluetooth.le.ScanSettings
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
@@ -49,6 +50,14 @@ import androidx.core.content.ContextCompat
  *    ภายใน 30 วินาที
  */
 object BackgroundRegionMonitor {
+
+    /**
+     * tag ของ `Log` — **ห้ามใช้ชื่อคลาสเต็ม `"BackgroundRegionMonitor"`** (23 ตัวอักษร
+     * เป๊ะ) แม้จะผ่านกฎจริงของ Android (`<=23`) แต่ไม่ผ่านกฎที่เข้มกว่าที่คอมเมนต์ของ
+     * `BeaconScanReceiver.kt` เขียนไว้เอง ("สั้นกว่า 23 ตัวอักษร") — `"BgRegionMonitor"`
+     * ยาว 15 ตัว ผ่านทั้งสองกฎ (ดู §3.2 ของ `docs/briefs/2026-09-14_pr-a-exit-clear-design.md`)
+     */
+    private const val TAG = "BgRegionMonitor"
 
     /** action ของ broadcast ผลสแกน — ภายในแอปเท่านั้น (receiver ไม่ exported) */
     const val ACTION_SCAN_RESULT = "com.bigc.beacon_kit_android.SCAN_RESULT"
@@ -126,6 +135,12 @@ object BackgroundRegionMonitor {
         store.clearRegionStates()
         store.stampBootToken()
 
+        // ชั้น 2 (proximity) — ล้างทั้งหมด (ไม่ใช่แค่ region เดิม) คู่กับ store.regions
+        // ที่ถูกเขียนทับข้างบน (§1.3.1 ของ PR A design) — ห่อด้วย runCatching ของตัวเอง
+        // ที่ call site นี้โดยตรง เพราะการสร้าง `ProximityGateStore(context)` ไม่ได้ถูก
+        // ห่อในตัวคลาสเอง (เหตุผลเดียวกับ §3.2)
+        clearProximityStoreAll(appContext, source = "start")
+
         return registerScans(appContext, regions)
     }
 
@@ -139,6 +154,11 @@ object BackgroundRegionMonitor {
         // ล้างทั้งหมดรวมคิว event — ผู้เรียกสั่งหยุดแล้ว การส่ง event เก่าให้ทีหลัง
         // จะทำให้แอปเข้าใจผิดว่ายังเฝ้าอยู่
         store.clearAll()
+
+        // ชั้น 2 (proximity) — ย้ายมาจาก example app (`MainActivity.logMonitorLifecycle`)
+        // ตาม §1.1 ของ PR A design เพื่อให้ล้างคู่กับ store.clearAll() ของชั้น 1 เสมอ
+        // ไม่ผ่าน emitExitAndMarkOutside() เลย (คนละ code path) จึง try/catch แยกของตัวเอง
+        clearProximityStoreAll(appContext, source = "stop")
     }
 
     /**
@@ -156,6 +176,15 @@ object BackgroundRegionMonitor {
         }
         store.clearRegionStates()
         store.stampBootToken()
+
+        // ชั้น 2 (proximity) — ล้างทั้งหมดคู่กับ store.clearRegionStates() ข้างบน
+        // (§1.3.2 ของ PR A design) เหตุผลไม่ใช่ "เวลาแบบ elapsed รีเซ็ตตอนรีบูต" (เหตุผล
+        // นั้นใช้กับ epoch clock ของ proximity ไม่ได้โดยตรง) แต่เป็นเพราะชั้น 1 ลืมสถานะ
+        // inside/outside ของทุก region ไปแล้วอย่างไม่มีเงื่อนไข — entry ของชั้น 2 ที่ยัง
+        // ค้างอยู่จะกลายเป็นสถานะที่ชั้น 1 ไม่รู้จักอีกต่อไป (ขัด invariant หลักของเอกสาร
+        // นี้) และเครื่องอาจถูกยกไปที่อื่นระหว่างปิดเครื่องเช่นเดียวกับเหตุผลของชั้น 1
+        clearProximityStoreAll(appContext, source = "restoreAfterBoot")
+
         return registerScans(appContext, store.regions)
     }
 
@@ -507,6 +536,7 @@ object BackgroundRegionMonitor {
                     // กว่าการไม่มีค่า · บรรทัด exit ที่ทั้งสามฟิลด์เป็น `n/a`
                     // จึงอ่านได้ว่า "มาจากสาขานี้" — เป็นสาขาเดียวที่ให้ผลแบบนั้น
                 ),
+                source = "onExitAlarm",
             )
             return
         }
@@ -545,6 +575,7 @@ object BackgroundRegionMonitor {
                 exitScheduledAtElapsedMillis = scheduledAt,
                 exitFiredAtElapsedMillis = now,
             ),
+            source = "onExitAlarm",
         )
     }
 
@@ -641,7 +672,7 @@ object BackgroundRegionMonitor {
                     )
                 }
 
-                emitExitAndMarkOutside(appContext, store, identifier, event)
+                emitExitAndMarkOutside(appContext, store, identifier, event, source = "reconcile")
             }
         }
     }
@@ -746,12 +777,30 @@ object BackgroundRegionMonitor {
      * ADR-11 วางไว้แล้วสำหรับ region flapping) เพราะ **`exit` ซ้ำกู้คืนได้
      * ด้วยการกรองซ้ำ ส่วน `exit` หายไม่มีทางกู้คืนได้เลย** — สองความเสี่ยง
      * นี้ไม่เท่ากัน จึงเลือกความเสี่ยงที่แก้ไขได้ในฝั่งผู้อ่านเสมอ
+     *
+     * ## ขั้นที่ 3 — ล้าง `ProximityGateStore` ของ region นี้ (PR A, §3.2 ของ
+     * `docs/briefs/2026-09-14_pr-a-exit-clear-design.md`)
+     *
+     * นี่คือ**จุดคอขวดเดียว**ที่ทั้ง [onExitAlarm] (สองจุดเรียก) และ [reconcile]
+     * (หนึ่งจุดเรียก) ใช้ร่วมกัน — วางไว้**หลังจาก**ขั้นตอนของชั้น 1 (เรียก
+     * observer/sink แล้วพลิกสถานะ) เสร็จสมบูรณ์แล้วเท่านั้น ไม่ใช่ก่อนหน้านั้น
+     * เพื่อให้ถ้า `clearRegion()` throw ขึ้นมาระหว่างทาง หลักฐาน + การพลิกสถานะ
+     * ของชั้น 1 ได้เกิดไปแล้วเรียบร้อยก่อนเสมอ — ห่อด้วย `runCatching` ที่ call
+     * site นี้เอง (ไม่ใช่ในตัว `ProximityGateStore`) เพราะการสร้าง instance
+     * (`ProximityGateStore(context)`) ไม่ได้ถูกห่อในตัวคลาสเอง — ถ้าปล่อยให้
+     * exception ลอยขึ้นไปจะทำให้ `RegionExitAlarmReceiver.onReceive()` ทั้งเมธอด
+     * crash ซึ่งเป็นอาการที่ ADR-20 หัวข้อ 1 ห้ามไว้ตรง ๆ (ชั้น 2 ทำให้ชั้น 1 พัง)
+     *
+     * [source] แยกที่มาของการเรียก (`"onExitAlarm"`/`"reconcile"`) ให้ log บรรทัด
+     * นี้เอง — `event.exitReason` เดิมแยกไม่ได้ครบทุกกรณีเพราะ `staleBootMismatch`
+     * มาได้จากทั้งสองทาง (ดู §4.2 ของเอกสารออกแบบเดียวกัน)
      */
     private fun emitExitAndMarkOutside(
         context: Context,
         store: BackgroundRegionStore,
         regionIdentifier: String,
         event: BackgroundRegionStateEvent,
+        source: String,
     ) {
         runCatching { observer?.onRegionStateEvent(event) }
 
@@ -761,6 +810,45 @@ object BackgroundRegionMonitor {
         } else {
             runCatching { sink.onRegionStateEvent(event) }
             store.markOutside(regionIdentifier)
+        }
+
+        runCatching {
+            val removedCount = ProximityGateStore(context).clearRegion(regionIdentifier)
+            Log.i(
+                TAG,
+                "proximityGateStore.clearRegion region=$regionIdentifier removed=$removedCount " +
+                    "source=$source",
+            )
+        }.onFailure { throwable ->
+            Log.w(
+                TAG,
+                "proximityGateStore.clearRegion ล้มเหลว region=$regionIdentifier source=$source",
+                throwable,
+            )
+        }
+    }
+
+    /**
+     * ล้าง [ProximityGateStore] ทั้งหมด (ไม่ใช่เฉพาะ region เดียว) — ใช้ร่วมกันโดย
+     * [start]/[stop]/[restoreAfterBoot] (§1.3 ของ PR A design) ต่างจาก
+     * [emitExitAndMarkOutside] ที่ล้างเฉพาะ region เดียวตอนประกาศ exit จริง
+     *
+     * ครอบด้วย `runCatching` ของตัวเองเสมอที่นี่ (ไม่ใช่ในตัว `ProximityGateStore`)
+     * ด้วยเหตุผลเดียวกับ [emitExitAndMarkOutside] — ผู้เรียกทั้งสาม ([start]/[stop]/
+     * [restoreAfterBoot]) ต้องไม่ได้รับ exception ที่มาจากชั้น 2 (proximity) เลย
+     *
+     * เรียก `load()` ก่อน `clear()` เพื่อเอาจำนวน key ไปล็อกเป็นหลักฐานว่าเส้นทาง
+     * นี้ถูกเรียกจริง (ต้นทุนอ่านครั้งเดียวตอน start/stop/restoreAfterBoot เป็นการ
+     * ดำเนินการที่ไม่ถี่ ยอมรับได้ ต่างจากเส้นทาง onExitAlarm/reconcile)
+     */
+    private fun clearProximityStoreAll(context: Context, source: String) {
+        runCatching {
+            val proximityStore = ProximityGateStore(context)
+            val removedCount = proximityStore.load().size
+            proximityStore.clear()
+            Log.i(TAG, "proximityGateStore.clear removed=$removedCount source=$source")
+        }.onFailure { throwable ->
+            Log.w(TAG, "proximityGateStore.clear ล้มเหลว source=$source", throwable)
         }
     }
 

@@ -2,6 +2,7 @@ package com.bigc.beacon_kit_android
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -44,6 +45,17 @@ import org.mockito.Mockito
  * ครอบเฉพาะช่วงที่จำเป็น **ไม่แตะ `System.currentTimeMillis()`** เพราะนั่นคือ
  * `java.lang` จริง ทำงานได้ปกติบน JVM อยู่แล้วโดยไม่ต้อง mock (ไม่ใช่ android
  * stub)
+ *
+ * ## ทำไมต้อง `Mockito.mockStatic(Log::class.java)` รอบการเรียก `onExitAlarm` ที่ไป
+ * ถึงสาขา `alarm`/`staleBootMismatch` (เพิ่มพร้อม PR A —
+ * `docs/briefs/2026-09-14_pr-a-exit-clear-design.md`)
+ *
+ * `BackgroundRegionMonitor.emitExitAndMarkOutside()` เรียก `Log.i`/`Log.w` เสมอตอน
+ * ล้าง `ProximityGateStore` ของ region ที่ออก (ดู kdoc ของฟังก์ชันนั้น) — `android.util.Log`
+ * เป็นคลาสจริงของ android.jar ที่มี body และโยน "not mocked" บน JVM ธรรมดาเหมือนกับ
+ * `SystemClock` จึงต้อง mock ด้วยรูปแบบเดียวกัน (เหมือนที่ `BeaconScanReceiverProximityTest.kt`
+ * ทำอยู่แล้วสำหรับ Log ของเส้นทาง proximity) — เทสต์ที่ไม่ไปถึงสาขา exit จริง (`notActive`/
+ * `notInside`/`stillSeen`) ไม่ต้อง mock เพิ่มเพราะไม่เรียก `emitExitAndMarkOutside()` เลย
  *
  * ## ทำไมต้องมี `testImplementation("org.json:json:20240303")`
  *
@@ -212,7 +224,13 @@ class BackgroundRegionMonitorOnExitAlarmTest {
             // ไม่ตั้ง flutterSink -> เดินเส้นทาง markOutsideAndEnqueueEvent()
             // (JSON) ซึ่งเป็นเส้นทางที่บั๊กจริงของ ADR-17 เกิด
 
-            BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            // PR A (docs/briefs/2026-09-14_pr-a-exit-clear-design.md §4.1) เพิ่ม
+            // Log.i/Log.w ให้ emitExitAndMarkOutside() ตอนล้าง ProximityGateStore —
+            // ต้อง mock Log แบบเดียวกับ BeaconScanReceiverProximityTest.kt ไม่งั้น
+            // "Method i in android.util.Log not mocked" จะโยนขึ้นมาจริง
+            Mockito.mockStatic(Log::class.java).use {
+                BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            }
 
             assertEquals(1, events.size)
             val event = events.single()
@@ -272,7 +290,9 @@ class BackgroundRegionMonitorOnExitAlarmTest {
                 sinkEvents += event
             }
 
-            BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            Mockito.mockStatic(Log::class.java).use {
+                BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            }
 
             assertEquals(1, observerEvents.size)
             assertEquals(1, sinkEvents.size)
@@ -341,7 +361,9 @@ class BackgroundRegionMonitorOnExitAlarmTest {
             }
             // ไม่ตั้ง flutterSink -> เดินเส้นทาง markOutsideAndEnqueueEvent() (JSON)
 
-            BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            Mockito.mockStatic(Log::class.java).use {
+                BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            }
 
             assertEquals(1, events.size)
             val event = events.single()
@@ -390,7 +412,9 @@ class BackgroundRegionMonitorOnExitAlarmTest {
                 sinkEvents += event
             }
 
-            BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            Mockito.mockStatic(Log::class.java).use {
+                BackgroundRegionMonitor.onExitAlarm(context, regionIdentifier)
+            }
 
             assertEquals(1, observerEvents.size)
             assertEquals(1, sinkEvents.size)
