@@ -1,189 +1,36 @@
 # beacon_kit
 
-Flutter SDK กลางของ BigC สำหรับรับข้อมูล BLE beacon แบบ broadcast (iBeacon / Eddystone)
-ออกแบบให้ **ไม่ผูกกับยี่ห้อ** — ใช้ได้กับ beacon ทุกยี่ห้อที่ broadcast ตามมาตรฐานเปิด
-โดยไม่ต้องรอ SDK เฉพาะของผู้ผลิต
+[![CI](https://github.com/Chanothai/beacon-kit-flutter/actions/workflows/ci.yml/badge.svg)](https://github.com/Chanothai/beacon-kit-flutter/actions/workflows/ci.yml)
 
-> **สถานะ: 0.x — API ยังไม่ stable** อาจมี breaking change ระหว่าง minor version
-> อ่านตารางสถานะฟีเจอร์ด้านล่างให้ครบก่อนตัดสินใจใช้ในงานจริง
+Flutter SDK กลางของ BigC สำหรับรับข้อมูล BLE beacon แบบ broadcast (iBeacon /
+Eddystone) ทั้งตอนเปิดแอปและตอนแอปตาย (background) บน iOS + Android — ผ่าน
+[`GenericIBeaconEddystoneAdapter`](packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart)
+
+ออกแบบให้ **ไม่ผูกกับยี่ห้อ** ใช้มาตรฐานเปิด (iBeacon/Eddystone) เป็นหลัก
+(ดู [หลักการออกแบบ ข้อ 2](ARCHITECTURE.md#หลักการออกแบบ) และ
+["รองรับหลายยี่ห้อ" ไม่ต้องแยก adapter ต่อยี่ห้อ](ARCHITECTURE.md#ข้อค้นพบสำคัญ-รองรับหลายยี่ห้อ-ไม่ต้องแยก-adapter-ต่อยี่ห้อ-แก้ไข-27-สค-2026))
+— **ยังไม่รองรับ GATT** (connect/auth/config/OTA) การเรียก `connect()` จะ throw
+`UnsupportedError` ทันที
+([`generic_ibeacon_eddystone_adapter.dart:148-157`](packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart#L148-L157))
+
+> **สถานะ: 0.x — API ยังไม่ stable** อาจมี breaking change ระหว่าง minor
+> version สถานะการทดสอบบนอุปกรณ์จริงล่าสุดอยู่ที่
+> [`docs/test-checklists/ios_broadcast_scanning.md`](docs/test-checklists/ios_broadcast_scanning.md)
+> และ [`docs/test-checklists/android_background_scanning.md`](docs/test-checklists/android_background_scanning.md)
+> ที่เดียวเท่านั้น — README ฉบับนี้ไม่ซ้ำสถานะนั้น
+
+| Platform | OS ขั้นต่ำ | สิทธิ์ที่ต้องขอ |
+|---|---|---|
+| iOS | 15.0 | `NSLocationWhenInUseUsageDescription` / `NSLocationAlwaysAndWhenInUseUsageDescription` / `NSBluetoothAlwaysUsageDescription` / `UIBackgroundModes` = `[location, bluetooth-central]` |
+| Android | minSdk 24 (compileSdk 36) | `BLUETOOTH_SCAN` + `ACCESS_FINE_LOCATION` (plugin ประกาศให้เองใน manifest) |
 
 ---
 
-## ตารางสถานะฟีเจอร์ (ณ 2 ก.ย. 2026)
+## Quick start
 
-| ฟีเจอร์ | สถานะ | อ่านว่ายังไง |
-|---|---|---|
-| **Broadcast scan: iBeacon ranging** บน **iOS** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | เจอ K9P จริง 2 ตัวพร้อมกัน แยกอุปกรณ์ด้วย major/minor ได้ถูก proximity/RSSI เปลี่ยนตามระยะจริง |
-| **Broadcast scan: Eddystone (URL frame)** บน **iOS** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | decode จากอุปกรณ์บุคคลที่สามที่ไม่รู้จักมาก่อนได้ถูก — ยืนยัน vendor-agnostic จริง (UID/TLM frame ยังไม่เจอของจริง) |
-| **Region enter/exit ตอนแอปอยู่เบื้องหลัง (process ยังไม่ถูก kill)** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | enter มาใน 5-8 วินาที exit มาใน 30-50 วินาที — **วัดครั้งเดียว ยังไม่ทำซ้ำหาค่าเฉลี่ย** อย่าเอาไปตั้ง timeout โดยตรง |
-| **ปลุกแอปหลังผู้ใช้ปัดแอปทิ้งเอง (B5)** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว — **เฉพาะเคส force-quit** | ทดสอบ 2 รอบด้วย release/profile build หลังลบแอปติดตั้งใหม่: iOS ปลุก process ที่ตายแล้วขึ้นมาส่ง event จริง (exit 55/30 วิ · enter 5/3 วิ) **ยังไม่ได้ทดสอบกรณีระบบฆ่าแอปเองจากหน่วยความจำ ซึ่งเกิดบ่อยกว่ามากในการใช้งานจริง** |
-| **GATT connect / auth / config / OTA** | ❌ **ยังไม่ implement** | ไม่มีโค้ดส่วนนี้อยู่เลย `connect()` throw `UnsupportedError` ทันที |
-| **อ่านประวัติ sensor ย้อนหลัง** | ❌ **ยังไม่ implement** | มีแต่ interface ว่าง ๆ ไม่มี implementation |
-| **Android — สแกนตอนแอปเปิดอยู่** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | (แพ็กเกจ `beacon_kit_android` — Kotlin) เห็น K9P จริงบนเครื่อง Xiaomi (MIUI 13.0.2.0 SJOMIXM · Android 12) — มี event `enter` เข้ามาจริงและ `lastSeenElapsed` เดินต่อเนื่อง · **ยังไม่ได้วัดความแม่นของ RSSI/proximity บน Android** เหมือนที่วัดบน iOS |
-| **Android — ทำงานเบื้องหลัง** | ✅ ทดสอบบนอุปกรณ์จริงแล้ว | รันต่อเนื่อง **14 ชม. 45 นาที** ใช้แบต **0.35%** (~0.6%/วัน) ไม่มีข้อมูลสูญหาย · พิสูจน์ซ้ำ 3 รอบว่า **ระบบสร้าง process ที่ถูกฆ่าแล้วขึ้นมาใหม่เพื่อส่ง event** (`importance=service`, process อายุ 35–87 ms) · ผ่านทั้งตอน Autostart ปิด และตอนตั้ง "Restrict background apps" ซึ่งเข้มที่สุด — **ผู้ใช้ไม่ต้องตั้งค่าอะไรเพิ่ม** · ⚠️ ยังไม่ทดสอบ: รีบูต · ปิด-เปิด Bluetooth · ยี่ห้ออื่น · Android 13+ |
-| **Android — iBeacon region monitoring / สิทธิ์แบบ Always** | ❌ **ยังไม่มี** | เมธอดกลุ่มนี้อยู่ที่ `beacon_kit_ios` เท่านั้นโดยตั้งใจ (ADR-13) |
-| **ความเสถียรของสัญญาณ enter/exit** | 🔴 **ปัญหาที่รู้แล้ว ยังไม่แก้** | คืนเดียวเกิด **exit ปลอม 58 ครั้ง** แต่ละครั้งตามด้วย enter ทันที (หลายคู่ห่างกัน 1–2 วินาที) · **เกิดทั้ง Android และ iOS** · สาเหตุยืนยันด้วยการวัดตรงแล้วว่าเป็น **ความล่าช้าในการส่งผลสแกนของ OS ไม่ใช่ beacon หาย** — วัดได้ 22.5 วิ · 22.5 วิ · และ **4 นาที 11 วินาที ขณะที่ `doze=false`** · แก้ด้วยการตั้งค่าไม่ได้ เป็นข้อจำกัดของแพลตฟอร์ม · 🛑 **ห้ามต่อการแจ้งเตือนเข้ากับ event ดิบโดยไม่มีชั้นกรอง** ลูกค้าจะได้ 58 ครั้งต่อคืน ไม่ใช่ 1 |
-| **ชั้นกรอง visit (แก้ปัญหาข้างบน)** | ⚠️ ต้นแบบเสร็จ — **ยังไม่ได้ต่อเข้า SDK** | `prototype/visit_filter/` — reducer บริสุทธิ์ + สัญญากลาง `spec/visit_filter/vectors.json` 24 เคส · เทสต์ 73 ตัวเขียว · ป้อน log จริงทั้งสองคืน (Android + iOS) ได้ **1 การมาเยือน** ตรงความจริงภาคสนาม โดยใช้พารามิเตอร์ชุดเดียวกัน · **ยังไม่เคยรันบนโทรศัพท์สักครั้ง** งานที่เหลือคือพอร์ตเป็น Kotlin/Swift แล้ววัดยืนยันว่าได้ 1 แจ้งเตือนต่อคืน ไม่ใช่ 58 |
-| **แจ้งเตือนโปรโมชันตอนเข้าระยะ beacon** | ❌ **ยังไม่ implement** | ขอบเขตที่ตกลงกันคือขาเข้าอย่างเดียว · ยังไม่มีโค้ดส่วนนี้เลย — ไม่มี notification channel, ไม่มีการขอสิทธิ์ `POST_NOTIFICATIONS` (จำเป็นบน Android 13+ · **เครื่องทดสอบเป็น Android 12 จึงยังไม่เจอปัญหานี้**), ไม่มีการเก็บเนื้อหาแจ้งเตือนไว้ให้อ่านได้ตอนถูกปลุก |
-
-**คำที่ใช้ในตารางนี้แปลว่า:**
-
-- **ทดสอบบนอุปกรณ์จริงแล้ว** — มีคนรันบน iPhone จริงและเห็นผลจริง
-- **code-complete, ยังไม่ verified** — โค้ดครบ คอมไพล์ผ่าน unit test เขียว แต่**ไม่มีใครเคยเห็นมันทำงานบนอุปกรณ์จริง** unit test ที่เขียวเป็น mock ซึ่งพิสูจน์ได้แค่ว่าโค้ดเราเรียกตามสัญญาที่เรา*คิดว่า*ถูก ไม่ได้พิสูจน์ว่า OS ตอบแบบนั้นจริง
-- **ยังไม่ implement** — ไม่มีโค้ดอยู่เลย
-- **ปัญหาที่รู้แล้ว ยังไม่แก้** — วัดเจอแล้ว เข้าใจสาเหตุแล้ว มีทางแก้ที่ออกแบบไว้แล้ว แต่**ยังไม่ได้ลงมือแก้ในโค้ดที่รันจริง** อย่าสมมติว่าหายไปแล้วเพราะมีเอกสารอธิบายมัน
-
-เอกสารนี้ **เลี่ยงคำว่า "รองรับ"** โดยตั้งใจ เพราะคำนั้นถูกอ่านว่า "ใช้งานได้จริงแล้ว"
-ซึ่งจริงเฉพาะแถวที่ติด ✅ เท่านั้น และจริงเฉพาะในขอบเขตที่ระบุไว้ในแต่ละแถว
-
-### ⚠️ ขอบเขตของ background region monitoring — อ่านก่อนพึ่งพา
-
-แถว B5 ผ่านแล้วจริง แต่ **ห้ามอ่านว่า "background scan ใช้งานได้"** แบบเหมารวม
-สิ่งที่ทดสอบคือเส้นทางเดียวในเงื่อนไขเดียว รายการข้างล่างนี้ **ยังไม่มีใครพิสูจน์**:
-
-| ยังไม่ทดสอบ | ทำไมถึงสำคัญ |
-|---|---|
-| **ระบบฆ่าแอปเองเพราะหน่วยความจำ** | เกิดบ่อยกว่า force-quit มากในการใช้งานจริง และเป็นคนละเส้นทางของ OS — นี่คือช่องว่างที่ใหญ่ที่สุดที่เหลืออยู่ |
-| **เครื่องล็อกอยู่ตอนถูกปลุก** | Data Protection อาจทำให้เขียนไฟล์ไม่ได้ · หลังรีบูตแล้วยังไม่ปลดล็อกครั้งแรก Apple ระบุว่า monitoring เริ่มไม่ได้เลย |
-| **ไม่มีอินเทอร์เน็ต** | Apple ระบุว่า region monitoring ต้องการ network connectivity เพื่อรายงานได้ทันเวลา |
-| **region ซ้อนทับกัน** | ยังไม่รู้ว่าได้ `didEnterRegion` ซ้ำหรือไม่ — ห้ามเขียน dedupe logic จนกว่าจะรู้ผล (ADR-8 open question) |
-| **Eddystone: UID/TLM frame** | ที่ผ่านคือ **URL frame เท่านั้น** ยังไม่เคยเจอ UID/TLM ของจริง |
-| **Android ทั้งหมด** | มีโค้ดครบทั้งสองก้อนแล้ว แต่**ยังไม่เคยรันบนเครื่องจริงเลย** — เช็คลิสต์อยู่ที่ `docs/test-checklists/android_background_scanning.md` |
-
-ทั้งหมดนี้อยู่ใน `docs/test-checklists/ios_broadcast_scanning.md` พร้อมวิธีทดสอบ
-
-### 🔴 ต้องมีชั้น debounce เสมอ — ห้าม deploy โดยไม่มี
-
-การทดสอบข้ามคืน 30-31 ส.ค. 2026 (**มือถือวางนิ่ง จอดับ ล็อกเครื่อง K9P ไม่ถอดแบต
-ไม่มีใครขยับอะไรเลย**) ได้ **enter 86 ครั้ง / exit 86 ครั้งใน 14 ชั่วโมง**
-
-แปลว่าถ้ายิง event ตรงไป backend ทุกครั้ง **ลูกค้าหนึ่งคนที่นอนใกล้ beacon จะสร้าง
-"เข้าสาขา" 86 ครั้งในคืนเดียวโดยไม่ได้ขยับเลย** — และถ้ามี push notification ผูกอยู่
-ลูกค้าจะได้ 86 ครั้ง
-
-**นี่ไม่ใช่บั๊กของ SDK** เป็นพฤติกรรมของ CoreLocation กับสภาพสัญญาณจริง SDK จึงรายงาน
-สิ่งที่แพลตฟอร์มบอกอย่างซื่อสัตย์และ**ไม่กรองให้เอง** — ผู้ใช้ SDK ต้องใส่ชั้น
-debounce เอง ค่าเริ่มต้นที่คำนวณจากข้อมูลจริงและวิธีคิดอยู่ใน ARCHITECTURE.md ADR-11
-(ย่อ: รวม session ถ้าห่างน้อยกว่า 5 นาที + ต้องอยู่ต่อเนื่องอย่างน้อย 2 นาที →
-ลด 85 ครั้งเหลือ 1)
-
-### 🤖 Android — สิ่งที่ต้องรู้ก่อนใช้
-
-**สิทธิ์:** `BLUETOOTH_SCAN` + `ACCESS_FINE_LOCATION` (ทั้งคู่เป็น runtime
-permission ต้องขอตอนรัน) — แพ็กเกจประกาศให้ใน manifest ของ plugin แล้ว แอปแค่
-เรียก `BeaconKitAndroid().requestScanPermissions()`
-
-⚠️ **`ACCESS_FINE_LOCATION` ตัดออกไม่ได้** แม้เอกสาร Android จะเสนอทางลัด
-`neverForLocation` ให้ — เพราะ (1) use case ของ SDK นี้คือการอนุมานว่าผู้ใช้อยู่
-สาขาไหน ซึ่งคือการอนุมานตำแหน่งตรงตัว การประกาศว่าไม่ใช่จึงผิดความจริง และ (2)
-เอกสารทางการเตือนเองว่าถ้าใส่ flag นั้น *"some BLE beacons are filtered from the
-scan results"* (ADR-12)
-
-**MIUI / Xiaomi — วัดแล้ว ไม่เป็นอย่างที่กังวลไว้:** เดิมเอกสารฉบับนี้ระบุว่าผู้ใช้
-อาจต้องเปิด **Autostart** และตั้ง battery saver เป็นไม่จำกัดด้วยมือ ไม่งั้นแอปถูกฆ่า
-— **ทดสอบบนเครื่องจริงแล้วเมื่อ 2 ก.ย. และไม่เป็นเช่นนั้น**
-
-- ทดสอบบน Xiaomi (MIUI 13.0.2.0 SJOMIXM · Android 12) โดยตั้ง **Autostart = ปิด**
-  และ battery saver ค่าเริ่มต้นของ MIUI → ระบบยังปลุก process ขึ้นมาส่ง event ได้ปกติ
-- ทดสอบซ้ำภายใต้ **"Restrict background apps"** ซึ่งเข้มที่สุดที่ MIUI มีให้ → ยังส่ง
-  event ได้ครบเช่นกัน · ผลข้างเคียงที่วัดได้คือระบบฆ่า process ถี่ขึ้น
-  (จำนวน launch เพิ่ม) แต่**ไม่ได้ทำให้ event หาย**
-- รันต่อเนื่องข้ามคืน 14 ชม. 45 นาที ไม่มีข้อมูลสูญหาย
-
-⚠️ **ขอบเขตของข้อสรุปนี้ — อ่านก่อนเอาไปอ้าง:** วัดบนเครื่องเดียว MIUI เวอร์ชันเดียว
-Android เวอร์ชันเดียว · **ยังไม่ได้วัด** ยี่ห้ออื่น (Huawei / OPPO / vivo ซึ่งมีระบบ
-จัดการพลังงานของตัวเองคนละแบบ) และยังไม่ได้วัดบน Android 13+ · ถ้าจะปล่อยให้
-ลูกค้าใช้จริงในวงกว้าง ต้องวัดซ้ำบนยี่ห้อที่ลูกค้าใช้จริง ไม่ใช่อนุมานจากผลนี้
-
-⚠️ **"Autostart ไม่จำเป็น" ใช้ได้กับเคสสั้นเท่านั้น (ไม่เกินหนึ่งคืนที่ยังมี
-sighting เข้ามาต่อเนื่อง) — ยังไม่ครอบคลุมเคสความเงียบยาวข้ามคืนที่ไม่มีใครแตะ
-เครื่องเลย** หลักฐานคืน 3-4 ก.ย. 2026
-(`docs/test-data/2026-09-03_android_overnight_stale_inside.log`, เครื่อง
-Xiaomi/MIUI เดียวกัน, Autostart/battery optimization ตั้งค่าเดียวกับที่วัด
-14 ชม. 45 นาทีข้างบน) แสดง `enter` เวลา 18:00:14 → **เงียบสนิทไม่มีบรรทัด log
-เลย 14 ชม. 14 นาที** → ไม่มี `exit` และไม่มี `enter` ตอนเช้าจนกว่าจะมีคนเปิดแอป
-— คนละอาการกับ "รันต่อเนื่องไม่มีข้อมูลสูญหาย" ที่วัดไว้ก่อนหน้า (ตรวจแล้วว่า
-เป็นบั๊กของตรรกะ exit ไม่ใช่ของ Autostart — ดู ARCHITECTURE.md ADR-17 — แต่
-ผลลัพธ์ที่ผู้ใช้เห็นคือ "เหมือนแอปไม่ทำงาน" เหมือนกัน) จนกว่า `reconcile()`
-(ADR-17) จะถูกทดสอบยืนยันบนอุปกรณ์จริง **ห้ามสรุปว่า "ไม่ต้องเปิด Autostart"
-ครอบคลุมเคสที่มือถือถูกพกออกนอกระยะสัญญาณข้ามคืนด้วย**
-
-**ไม่มี API ให้แอปเปิด Autostart ให้ตัวเองได้** — ข้อนี้ยังจริงอยู่ ถ้าวันหนึ่งเจอ
-ยี่ห้อที่จำเป็นต้องเปิดจริง ทางแก้เดียวคือ **UX ที่พาผู้ใช้ไปตั้งค่า** (หน้าจออธิบาย
-+ ปุ่มลัดไปหน้า setting) ซึ่งต้องวางแผนร่วมกับทีมออกแบบตั้งแต่ต้น · **แต่จากผลวัด
-ปัจจุบัน ยังไม่มีหลักฐานว่าเคสของเราต้องใช้** — อย่าเพิ่งลงแรงสร้าง UX นี้จนกว่าจะ
-เจอเครื่องที่พังจริง
-
-**การขอยกเว้น battery optimization ให้แอปเอง: ทำไม่ได้ในทางนโยบาย** แม้ API มีจริง
-(`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) แต่เอกสารทางการระบุว่า *"Google Play
-policies prohibit apps from requesting direct exemption from Power Management
-features—Doze and App Standby—in Android 6.0 and above unless the core function of
-the app is adversely affected"* และตารางเคสที่ยอมรับได้ในหน้าเดียวกันจัดแอปที่
-*"only needs to connect to a peripheral device periodically to sync"* ไว้ที่
-**Not Acceptable** ซึ่งตรงกับเคสของเรา — ทางที่เหลือคือ UX พาผู้ใช้ไปตั้งค่าเอง
-เหมือนเรื่อง Autostart (ADR-14 หัวข้อ 2.3)
-
-### ⚠️ Android ทำงานเบื้องหลัง **ไม่เท่ากับ** iOS — สามข้อที่ต้องรู้ก่อนสัญญากับใคร
-
-ผลการค้นคว้าใน ADR-14 หัวข้อ 1 ตอบตารางคำถามที่ค้างใน ADR-9 ครบแล้ว และคำตอบคือ
-ทำไม่ได้เทียบเท่า:
-
-| | iOS | Android |
-|---|---|---|
-| ใครคำนวณ enter/exit | **ระบบ** (CoreLocation ยิง `didEnterRegion`/`didExitRegion` ให้) | **เรา** — ระบบบอกได้แค่ "เจอ advertisement" การไม่เจอไม่ใช่ event |
-| ผู้ใช้ force-stop แอป | ระบบยังปลุกแอปขึ้นมาได้ (*"Even if killed by the user, launch events triggered by monitoring APIs will cause a relaunch"*) | **หยุดถาวร** จนกว่าผู้ใช้เปิดแอปเอง — แก้ด้วยโค้ดไม่ได้ |
-| รีบูตเครื่อง | region อยู่ในระบบ ไม่ต้องทำอะไร | ต้องลงทะเบียนใหม่เองผ่าน `BOOT_COMPLETED` และ **ไม่ได้เฝ้าอะไรเลยจนกว่าผู้ใช้จะปลดล็อกครั้งแรก** |
-
-**เลือกไม่ใช้ foreground service โดยตั้งใจ** — มันไม่ได้แก้ปัญหาที่ยากที่สุด
-(service ตายไปกับ process เหมือนกัน) แต่ราคาคือ **notification ค้างที่ผู้ใช้เห็น
-ตลอดเวลา** ถ้าวันหนึ่งเพิ่มเข้ามาเป็นโหมดเสริม ต้องบอกผู้ใช้ตรง ๆ ว่าจะเห็น
-notification ค้าง และมันไม่เท่ากับพฤติกรรมของ iOS (ADR-14 หัวข้อ 3.1)
-
-**ข้อควรระวังสำหรับคนที่จะเขียนโค้ดตรวจว่าแอปถูกปลุกด้วย location event:**
-จากการทดสอบจริง `UIApplication.LaunchOptionsKey.location` ได้ `false` ทั้งที่แอปถูก
-ปลุกจากสถานะ terminated จริง — ถ้าใช้ key นี้เป็นสัญญาณเดียวจะได้ **false negative**
-สาเหตุยังเป็น open question (ดูเช็คลิสต์ข้อ 12)
-
-### ขอบเขตของการทดสอบบนอุปกรณ์จริง (อ่านก่อนพึ่งพา 2 แถวแรก)
-
-ทดสอบไปแล้ว 3 รอบบน iPhone จริง ร่วมกับ K9P จริง 2 ตัว และอุปกรณ์ Eddystone ของ
-บุคคลที่สามที่บังเอิญอยู่ในระยะ — รายละเอียดครบพร้อมหลักฐานอยู่ที่
-`docs/test-checklists/ios_broadcast_scanning.md`
-
-**ยืนยันแล้วบนอุปกรณ์จริง:**
-
-- **iBeacon ranging** — เห็น K9P 2 ตัวพร้อมกันที่ใช้ UUID เดียวกัน
-  (`7777772e-…000001`) และแยกเป็นคนละอุปกรณ์ได้ถูกด้วย major/minor
-  (`229/24333` กับ `228/24332`) — เป็นหลักฐานตรงว่า BigC ID Scheme (UUID เดียว
-  ทั้งบริษัท แยกอุปกรณ์ด้วย major/minor) ใช้ได้จริง ไม่ใช่แค่ทฤษฎีจากเอกสาร Apple
-- **proximity / RSSI** — resolve จริงและเปลี่ยนตามระยะ ไม่ค้างที่ `unknown` หรือ 0 dBm
-- **Eddystone ผ่าน CoreBluetooth** — decode
-  `EddystoneUrlFrame(txPower: -38, url: https://www.google.com/)` ที่ -88 dBm จาก
-  **อุปกรณ์ที่ไม่ได้ตั้งค่าเองและไม่รู้ยี่ห้อ** ซึ่งมีน้ำหนักกว่าการทดสอบกับอุปกรณ์
-  ที่รู้คำตอบล่วงหน้า
-- **permission flow ปกติ** — Allow ครั้งเดียวแล้วสแกนเริ่มเอง ไม่ต้องกด Start ซ้ำ
-  และการกด Start รัว ๆ ระหว่าง prompt ค้างไม่ทำให้ crash หรือค้าง
-
-**ยังไม่ได้ทดสอบ — อย่าเพิ่งพึ่งพา:**
-
-| ยังไม่ทดสอบ | สถานะ |
-|---|---|
-| Don't Allow → เปิดสิทธิ์ใน Settings → กลับแอปโดยไม่ force quit | เคยเป็นบั๊ก **แก้แล้ว รอ retest** — ยังไม่ใช่ "ผ่าน" |
-| beacon หายจากระยะ / ปิดเครื่อง | ยังไม่ทดสอบเลย |
-| Bluetooth ปิดกลางคัน | ยังไม่ทดสอบเลย |
-| เพดาน 20 regions | ยังไม่ทดสอบเลย |
-| background mode / wake-on-terminate | ยังไม่ทดสอบเลย |
-| Eddystone UID frame และ TLM frame | ยังไม่เจอของจริง (ผ่านแต่ unit test) |
-
-**การที่ ranging กับ Eddystone URL ผ่าน ไม่ได้แปลว่าฟีเจอร์ broadcast ทั้งก้อนผ่าน**
-ให้ถือเช็คลิสต์เป็นแหล่งความจริงที่ละเอียดกว่าตารางนี้เสมอ
-
----
-
-## วิธีติดตั้ง
-
-`beacon_kit` **ไม่ได้เผยแพร่บน pub.dev** (เป็น internal SDK — ดู LICENSE)
-ให้ใช้ผ่าน git dependency และ **pin ที่ tag เสมอ อย่า pin ที่ branch**
+`beacon_kit` **ไม่ได้เผยแพร่บน pub.dev** (internal SDK — ดู `LICENSE`) ใช้ผ่าน
+git dependency และ **pin ที่ tag เสมอ อย่า pin ที่ branch** (`ref: main` จะดึง
+commit ล่าสุดทุกครั้งที่ resolve ใหม่ — reproduce บิลด์เก่าไม่ได้):
 
 ```yaml
 dependencies:
@@ -194,126 +41,129 @@ dependencies:
       path: packages/beacon_kit
 ```
 
-**ทำไมต้อง pin ที่ tag ไม่ใช่ branch:** `ref: main` จะดึงคอมมิตล่าสุดของ branch นั้นมา
-ทุกครั้งที่ resolve ใหม่ แปลว่าบิลด์ของคุณเปลี่ยนพฤติกรรมได้เองโดยไม่มีใครแก้อะไรในแอป
-และ reproduce บิลด์เก่าไม่ได้ — อันตรายมากกับ SDK ที่ API ยังไม่ stable อย่าง 0.x
+**iOS** — ใส่ 4 key นี้ใน `Info.plist` ของแอป (ตัวอย่างครบใน
+[`example/ios/Runner/Info.plist`](packages/beacon_kit/example/ios/Runner/Info.plist)):
+`NSLocationWhenInUseUsageDescription`,
+`NSLocationAlwaysAndWhenInUseUsageDescription`,
+`NSBluetoothAlwaysUsageDescription`, `UIBackgroundModes` = `[location, bluetooth-central]`
+iOS ไม่ให้แอปขอสิทธิ์ Always ซ้ำเองหลังผู้ใช้เลือก When In Use ไปแล้ว — ผู้ใช้ต้อง
+ไปเปิดเป็น Always ที่ Settings เอง ([`example/lib/main.dart:1180-1181`](packages/beacon_kit/example/lib/main.dart#L1180-L1181))
 
-### สิ่งที่ต้องตั้งค่าเพิ่มฝั่ง iOS
+**Android** — สิทธิ์ที่ plugin ประกาศให้เองใน manifest แล้ว: `BLUETOOTH_SCAN`,
+`ACCESS_FINE_LOCATION`, `BLUETOOTH`/`BLUETOOTH_ADMIN` (maxSdk 30),
+`RECEIVE_BOOT_COMPLETED` ([`AndroidManifest.xml`](packages/beacon_kit_android/android/src/main/AndroidManifest.xml))
+— ยังต้องขอ runtime เอง ผ่าน
+[`BeaconKitAndroid().requestScanPermissions()`](packages/beacon_kit_android/lib/beacon_kit_android.dart#L52)
+`POST_NOTIFICATIONS` (Android 13+) **ไม่ได้อยู่ในสิทธิ์ของ plugin** — เป็นหน้าที่
+host app ขอเอง (ตัวอย่างจริงที่
+[`example/.../MainActivity.kt:189-232`](packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/MainActivity.kt#L189-L232))
 
-ใส่ key เหล่านี้ใน `Info.plist` ของแอปที่เรียกใช้ (ดูตัวอย่างครบใน
-`packages/beacon_kit/example/ios/Runner/Info.plist`):
+เริ่มเฝ้า region แล้วฟัง enter/exit — ดูโค้ดเต็มที่
+[`example/lib/snippets/region_monitoring_quickstart.dart`](packages/beacon_kit/example/lib/snippets/region_monitoring_quickstart.dart)
+(API แยกกันจริงตามแพลตฟอร์มตอนนี้ — ดู §ฟีเจอร์ด้านล่าง)
 
-| Key | จำเป็นเมื่อ |
-|---|---|
-| `NSLocationWhenInUseUsageDescription` | สแกน iBeacon ขณะใช้งานแอป |
-| `NSLocationAlwaysAndWhenInUseUsageDescription` | ต้องการ background region monitoring |
-| `NSBluetoothAlwaysUsageDescription` | สแกน non-iBeacon (Eddystone) ผ่าน CoreBluetooth |
-| `UIBackgroundModes` = `location`, `bluetooth-central` | ทำงานต่อเนื่องตอน background |
-
-**ถ้าต้องการให้แอปถูกปลุกตอนถูก kill (B5)** ต้องเรียกเพิ่มหนึ่งบรรทัดใน
-`AppDelegate` ด้วย:
-
-```swift
-import beacon_kit_ios
-
-override func application(
-  _ application: UIApplication,
-  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-) -> Bool {
-  BeaconKitIosPlugin.startBackgroundRegionMonitoring { event in
-    // ทำอะไรกับ event ก็ได้ — SDK ไม่บังคับ (เขียน log / ยิง notification / ส่งขึ้น server)
-  }
-  return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-}
-```
-
-**ทำไม SDK ทำให้เองไม่ได้:** ตอน iOS ปลุก process ที่ถูกฆ่าขึ้นมาเบื้องหลัง จะไม่มี
-UI ถูกสร้าง จึงไม่มีการ register plugin ของ Flutter เลย — SDK ยังไม่มีตัวตนในรอบนั้น
-จึงแทรกตัวเข้าไปเองไม่ได้ ต้องเป็น host app เรียก แอปที่ไม่ต้องการพฤติกรรมนี้ข้ามได้
-เหตุผลเต็มอยู่ใน ARCHITECTURE.md ADR-10
+จะเห็น stream ของ region state event
+([`IBeaconRegionStateEvent`](packages/beacon_kit_ios/lib/src/ibeacon_region_state_event.dart)
+บน iOS / `AndroidBackgroundRegionEvent` บน Android) ยิง enter/exit เข้ามาดิบ ๆ
+ไม่มีการกรองใด ๆ
 
 ---
 
-## ตัวอย่างการใช้งาน
+## ฟีเจอร์/แนวคิด
 
-```dart
-import 'package:beacon_kit/beacon_kit.dart';
+SDK ส่ง **event ดิบ** เท่านั้น — debounce/visit/session, notification policy,
+cooldown, และ mapping (major/minor → สาขา/โซน) เป็นหน้าที่ **host app ทั้งหมด**
+(ดู [ADR-11](ARCHITECTURE.md#adr-11-region-flapping--ข้อกำหนดเรื่อง-debounce-และการรวม-session-เพิ่ม-31-สค-2026))
 
-// 1. สร้าง adapter พร้อมระบุ region ที่จะเฝ้าฟัง
-//    iOS บังคับให้รู้ proximity UUID ล่วงหน้า — ไม่มีโหมด wildcard สแกนหาทุก UUID
-//    (ดู ARCHITECTURE.md หัวข้อ "ข้อจำกัดของ iOS")
-final adapter = GenericIBeaconEddystoneAdapter(
-  iBeaconRegions: const [
-    IBeaconRegionConfig(identifier: 'bigc-fleet', uuid: '<BIGC_PROXIMITY_UUID>'),
-  ],
-);
+| ฟีเจอร์ | คำอธิบาย | ADR | โค้ด |
+|---|---|---|---|
+| Region enter/exit background | ยิง event enter/exit แม้แอปถูกฆ่า (iOS) หรือระบบจำ registration ไว้หลัง reboot (Android) | [ADR-6](ARCHITECTURE.md#adr-6-จาก-ranging-only-เป็น-region-monitoring-enterexit--เพิ่ม-28-สค-2026), [ADR-10](ARCHITECTURE.md#adr-10-รับ-region-event-ได้ตั้งแต่รอบ-launch--แก้เหตุที่-b5-ไม่ผ่าน-เพิ่ม-30-สค-2026) | [`generic_ibeacon_eddystone_adapter.dart:195`](packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart#L195), [`beacon_kit_android.dart:71`](packages/beacon_kit_android/lib/beacon_kit_android.dart#L71) |
+| `reconcile()` กู้สถานะข้ามคืน | กู้สถานะ `inside` ที่ค้างเมื่อนาฬิกาปลุกไม่มาถึง (Android) | [ADR-17](ARCHITECTURE.md#adr-17-reconcile--กู้สถานะ-inside-ที่ค้างข้ามคืนเมื่อนาฬิกาปลุกไม่มาถึง-เพิ่ม-4-กย-2026) | [`BackgroundRegionMonitor.kt:597`](packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BackgroundRegionMonitor.kt#L597) |
+| Two-tier region registration | ตาข่ายกว้าง 1 region + เจาะจงสาขาไม่เกิน 19 (รวม 20 ตามเพดาน iOS) | [ADR-8](ARCHITECTURE.md#adr-8-two-tier-region-registration--ตาข่ายกว้าง-1-อัน--เจาะจงสาขาไม่เกิน-19-อัน-เพิ่ม-29-สค-2026) | [`IBeaconRangingManager.swift:182`](packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift#L182) (`TOO_MANY_REGIONS`) |
+| UUID scheme กลางของ BigC | UUID เดียวทั้งบริษัท แยกอุปกรณ์ด้วย major/minor | [ADR-5](ARCHITECTURE.md#adr-5-bigc-id-scheme-สำหรับ-multi-vendor-provisioning-เพิ่ม-28-สค-2026) | [`docs/sources/bigc_provisioning.md`](docs/sources/bigc_provisioning.md) |
+| `ProximityGate` (foreground) | ชั้นตัดสินใจ "ใกล้พอหรือยัง" จาก RSSI/proximity เหนือ scan ที่มีอยู่แล้ว | [ADR-19](ARCHITECTURE.md#adr-19-proximitygate--ชั้นตัดสินใจ-ใกล้พอหรือยัง-จาก-rssiproximity-ระดับ-dart-เพิ่ม-8-กย-2026) | [`proximity_gate.dart:259`](packages/beacon_kit/lib/src/proximity/proximity_gate.dart#L259) |
+| Background proximity — Android | พอร์ตตรรกะ `ProximityGate` เป็น Kotlin คีย์บีคอนอ่านจากเฟรมจริง | [ADR-20](ARCHITECTURE.md#adr-20-proximitygate-ตอนแอปไม่ทำงาน--port-ตรรกะเป็น-kotlin-ใน-beaconscanreceiver-เพิ่ม-9-กย-2026) | [`BackgroundProximityMonitor.kt`](packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BackgroundProximityMonitor.kt) |
+| Background proximity — iOS | พอร์ตเป็น Swift + gate ตัวที่ทำงานตอน background ตั้งเป็น passthrough | [ADR-21](ARCHITECTURE.md#adr-21-proximitygate-ฝั่ง-ios--port-เป็น-swift-ใน-ibeaconrangingmanager-เพิ่ม-10-กย-2026), [ADR-22](ARCHITECTURE.md#adr-22-ชั้นที่-2-ตอน-background--proximitygate-ตัวที่สองที่ตั้งค่าแบบ-passthrough-เพิ่ม-10-กย-2026) | [`IBeaconRangingManager.swift`](packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift), `BackgroundProximityMonitor.swift` |
+| Cooldown ต่อบีคอน | **ไม่ใช่ default ของ SDK** — ตัวอย่าง policy ที่ example app ตั้งเอง | [ADR-19 §8](ARCHITECTURE.md#8-ค่าตั้งต้นของ-sdk-สำหรับ-poc--ไม่ใช่ค่าที่ได้จากภาคสนาม) | [`example/lib/main.dart:42-62`](packages/beacon_kit/example/lib/main.dart#L42-L62) |
+| Evidence log | บันทึกเหตุการณ์ดิบ 6 คอลัมน์จากโค้ด native ทั้งสองแพลตฟอร์ม | [ADR-10](ARCHITECTURE.md#adr-10-รับ-region-event-ได้ตั้งแต่รอบ-launch--แก้เหตุที่-b5-ไม่ผ่าน-เพิ่ม-30-สค-2026) | [`evidence_log_line.dart`](packages/beacon_kit/example/lib/diagnostics/evidence_log_line.dart) |
+| Debounce / visit / session | ไม่ได้ทำใน SDK — ส่ง event ดิบเท่านั้น host app ต้องใส่ชั้นกรองเอง | [ADR-11](ARCHITECTURE.md#adr-11-region-flapping--ข้อกำหนดเรื่อง-debounce-และการรวม-session-เพิ่ม-31-สค-2026) | ไม่มีใน `beacon_kit` — ต้นแบบที่ [`prototype/visit_filter/`](prototype/visit_filter/) ยังไม่ต่อเข้า SDK |
 
-BeaconManager.register(adapter);
-
-// 2. ฟัง stream — event มาจากทั้ง CoreLocation (iBeacon) และ CoreBluetooth (Eddystone)
-final subscription = BeaconManager.scanAll().listen(
-  (advertisement) {
-    switch (advertisement.source) {
-      case AdvertisementSource.osDecoded:
-        // OS ถอด uuid/major/minor/proximity มาให้แล้ว ไม่ต้อง parse เอง
-        print('${advertisement.ibeaconMajor}/${advertisement.ibeaconMinor} '
-            '${advertisement.rssi} dBm ${advertisement.proximity?.name}');
-      case AdvertisementSource.rawParsed:
-        // ได้ raw bytes มา Dart parser ถอดให้แล้ว — ibeacon* กับ raw['eddystone']
-        // มีค่าก็ต่อเมื่อ parse สำเร็จ ต้องเช็ค null เสมอ
-        print(advertisement.ibeaconUuid ?? advertisement.raw['eddystone']);
-    }
-  },
-  onError: (Object error) => print('scan error: $error'),
-);
-
-// 3. ยกเลิกเมื่อเลิกใช้ — ไม่ยกเลิกจะปล่อยให้ native scan ค้างกินแบต
-await subscription.cancel();
-```
-
-`<BIGC_PROXIMITY_UUID>` คือ proximity UUID กลางของบริษัท — ค่าจริงอยู่ที่
-`docs/sources/bigc_provisioning.md` ให้ดึงจาก config/backend ตอน runtime
-อย่า hardcode ลงในแอป (เหตุผล: ADR-5 ใน `ARCHITECTURE.md`)
+**หมายเหตุ:** notification policy, cooldown ต่อบีคอน, และ mapping
+major/minor → สาขา/โซน **ไม่ใช่หน้าที่ของ `beacon_kit`** — ดูหัวข้อ Integration
+guide ด้านล่าง
 
 ---
 
-## โครงสร้าง repo
+## Integration guide
+
+สิ่งที่ host app ต้องทำเอง (SDK ไม่ทำให้): notification policy + cooldown ·
+mapping table major/minor → สาขา/โซน + cache · outbox/upload ขึ้น server
+(`beacon_kit` ไม่มี dependency network ใด ๆ) · consent/PDPA · provisioning
+(ไม่อยู่ใน SDK นี้ — ดู [`docs/sources/bigc_provisioning.md`](docs/sources/bigc_provisioning.md))
+
+รายละเอียดเต็มอยู่ที่ [`docs/integration-guide.md`](docs/integration-guide.md)
+
+---
+
+## ข้อจำกัด
+
+- **exit ไม่ใช่ real-time** — [ADR-15](ARCHITECTURE.md#adr-15-ฉบับร่าง--ยังไม่ตัดสิน-exittimeoutseconds-เป็นสัญญาที่ทำไม่ได้-เพิ่ม-2-กย-2026)
+  (**ฉบับร่าง ยังไม่ตัดสินใจสุดท้าย**)
+- **MIUI battery/autostart** อาจกระทบการทำงานเบื้องหลัง — พฤติกรรมที่สังเกตได้
+  อยู่ใน [`docs/test-checklists/android_background_runbook.md` หัวข้อ 0.1](docs/test-checklists/android_background_runbook.md)
+  · เหตุผลเชิงนโยบายของ Google Play ที่บล็อกการขอยกเว้นเองอยู่ที่
+  [ADR-14 หัวข้อ 2.3](ARCHITECTURE.md#23-การขอยกเว้น-battery-optimization--ทำได้-แต่-play-store-บล็อกเคสของเรา)
+- **เพดาน 20 region บน iOS** — [ADR-8](ARCHITECTURE.md#adr-8-two-tier-region-registration--ตาข่ายกว้าง-1-อัน--เจาะจงสาขาไม่เกิน-19-อัน-เพิ่ม-29-สค-2026)
+  enforce จริงที่ [`IBeaconRangingManager.swift:182`](packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift#L182)
+- **iOS region event `major`/`minor` = `null` เมื่อ wildcard** (ไม่ใช่ `0`) —
+  [`IBeaconRangingManager.swift:826-831`](packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift#L826-L831)
+- **ปิด-เปิด Bluetooth ระหว่างเฝ้าบน Android** — ยังไม่มี ADR ยืนยันพฤติกรรมนี้บน
+  Android เอกสารที่ใกล้เคียงที่สุดคือฝั่ง iOS ใน
+  [`docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 7](docs/test-checklists/ios_broadcast_scanning.md)
+  ซึ่งเป็นคนละแพลตฟอร์ม — ต้องวิจัยเพิ่มก่อนเขียนอ้างในเอกสารสำหรับ Android
+- **iOS background sample ห่าง/`unknown` สูงกว่าตอน foreground** — แนวคิดทั่วไป
+  อ้างที่ [`docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 4](docs/test-checklists/ios_broadcast_scanning.md)
+- **ยังไม่มี GATT** (connect/auth/config/OTA) — ดูหัวข้อคืออะไรด้านบน
+
+---
+
+## Example app
 
 ```
-packages/
-  beacon_kit/                     # API ที่แอปเรียกใช้ (BeaconManager, BeaconAdapter)
-    example/                      # แอปตัวอย่าง หน้าจอเดียว แสดง beacon แบบ realtime
-  beacon_kit_platform_interface/  # entity + parser + usecase (pure Dart ทดสอบได้ไม่ต้องมีอุปกรณ์)
-  beacon_kit_ios/                 # implementation ฝั่ง iOS (Swift)
-  beacon_kit_android/             # implementation ฝั่ง Android (Kotlin) — `BluetoothLeScanner`
-                                  # ตอนแอปเปิดอยู่ + `PendingIntent`/นาฬิกาปลุกตอนเบื้องหลัง
-docs/
-  sources/                        # ผลการค้นคว้าโปรโตคอลรายยี่ห้อ + BigC provisioning
-  fixtures/                       # ข้อมูลทดสอบ parser/usecase
-  test-checklists/                # เช็คลิสต์ที่ต้องทำกับอุปกรณ์จริง
-  test-data/                      # log ดิบจากอุปกรณ์จริง + GROUND_TRUTH ที่ใช้เป็นเกณฑ์รับ
-ARCHITECTURE.md                   # การตัดสินใจเชิงสถาปัตยกรรมทั้งหมด (ADR-1 ถึง ADR-15)
-                                  # Android เบื้องหลัง = ADR-14 (+ ADR-15 ร่าง เรื่อง exitTimeoutSeconds)
-SPRINT.md                         # ขอบเขตสปรินต์ปัจจุบัน + กติกาการรายงานสถานะ
-CONTRIBUTING.md                   # กติกาที่ต้องผ่านก่อนเปิด PR
-PIPELINE.md                       # ขั้นตอนการทำงานของทีมและ agent ในรีโปนี้
-prototype/
-  visit_filter/                   # ต้นแบบชั้นกรอง visit (Dart ล้วน) — ยังไม่ต่อเข้า SDK
-spec/
-  visit_filter/                   # สัญญากลางของชั้นกรอง (vectors.json) ที่ทุกภาษาต้องให้ผลตรงกัน
-tool/
-  analyze_region_log.dart         # วิเคราะห์ log จาก docs/test-data/ ซ้ำได้ด้วยวิธีเดียวกันทุกรอบ
+cd packages/beacon_kit/example && flutter run
 ```
+
+ปุ่มหลักในหน้าจอเดียว: **Start scan**/**Stop scan** (สแกนดิบตอน foreground) ·
+**Start region monitoring** (iOS iBeacon region monitoring) ·
+**เช็คสิทธิ์ใหม่** · **เริ่มเฝ้าเบื้องหลัง**/**หยุดเฝ้า**/**รีเฟรชสถานะ** (Android
+background region monitoring) · **ขอสิทธิ์อีกครั้ง**/**เปิดหน้าตั้งค่า** ·
+**ทดสอบแจ้งเตือน** และ **อ่าน error ล่าสุด** (เครื่องมือวัด evidence log) ·
+**ดู log** เปิดหน้า log เต็ม
+
+Evidence log 6 คอลัมน์ — รูปแบบเต็มดูที่
+[`evidence_log_line.dart`](packages/beacon_kit/example/lib/diagnostics/evidence_log_line.dart)
+ไม่อธิบายซ้ำที่นี่ Convention ของคอลัมน์ raw signals: `beacon=<major>/<minor>`
+ตรงกันทั้งสอง platform (ตัวระบุเชิงตรรกะจับคู่ข้าม platform ได้) ·
+`mac=<2 ไบต์ท้าย>` เฉพาะ Android (ตัวแยกเชิงกายภาพ) · `build=<sha>` ·
+`store=ok|<error>` — ดูทะเบียนบีคอนที่ใช้ทดสอบที่
+[`docs/beacon-inventory.md`](docs/beacon-inventory.md)
+
+---
+
+## Versioning
+
+Semver ต่อ package — CHANGELOG อยู่ที่ `packages/*/CHANGELOG.md` ของแต่ละ
+package (ยังเป็น placeholder เริ่มต้น) · ทุก package เป็น `0.x` = API ยังไม่
+stable ตาม semver · ยังไม่มี breaking change ที่บันทึกเป็น ADR ในตอนนี้
+
+---
 
 ## เอกสารที่ควรอ่านต่อ
 
-- **`ARCHITECTURE.md`** — ทำไมถึงออกแบบแบบนี้ โดยเฉพาะหัวข้อ "ข้อจำกัดของ iOS"
-  ที่อธิบายว่าทำไม iBeacon กับ Eddystone ต้องเดินคนละทางบน iOS
-- **`docs/test-checklists/ios_broadcast_scanning.md`** — **สถานะจริงของทุกเคส**
-  (ผ่าน/ไม่ผ่าน/ยังไม่ทดสอบ + ตัวเลขที่วัดได้) — ที่เดียวที่บันทึกสถานะ
-- **`docs/test-checklists/ios_device_test_runbook.md`** — **ขั้นตอนลงมือทดสอบ**
-  บนอุปกรณ์จริง เขียนสำหรับคนที่ถือเครื่องอยู่หน้างาน (ไม่มีสถานะอยู่ในไฟล์นั้น)
-- **`CONTRIBUTING.md`** — กติกาก่อนส่ง PR
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — ทุกการตัดสินใจเชิงสถาปัตยกรรม (ADR index)
+- [`docs/integration-guide.md`](docs/integration-guide.md) — สิ่งที่ host app ต้องทำเอง
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`PIPELINE.md`](PIPELINE.md) · [`SPRINT.md`](SPRINT.md)
+- [`SECURITY.md`](SECURITY.md) — ความเสี่ยงที่ยอมรับไว้ + ช่องทางรายงานช่องโหว่
 
 ## License
 
