@@ -36,6 +36,13 @@ const String _k9pDefaultUuid = '7777772E-6B6B-6D63-6E2E-636F6D000001';
 /// จากไฟล์นี้
 const String _bigcTestUuid = '89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF';
 
+/// UUID ที่ scan ได้จากบีคอน Minew ตัวที่ได้รับจาก Tagarine — **ไม่ใช่ค่าโรงงาน
+/// ที่ยืนยันแล้วของ Minew** (ที่มาจริงต้องถามผู้ให้) บันทึกไว้ที่
+/// `docs/beacon-inventory.md` แถว #4 ใช้เป็น region ที่สามของ demo นี้เท่านั้น
+/// เพื่อพิสูจน์ว่า `GenericIBeaconEddystoneAdapter` รับ iBeacon ได้โดยไม่ต้องรู้จักค่าย
+/// (ดู ARCHITECTURE.md หัวข้อ "ข้อค้นพบสำคัญ: รองรับหลายยี่ห้อ ไม่ต้องแยก adapter")
+const String _minewTestUuid = 'E8C65602-6D9C-44EF-9734-B2D3EF1CD961';
+
 /// Service UUID ของ Eddystone (`0xFEAA`)
 const String _eddystoneServiceUuid = '0000feaa-0000-1000-8000-00805f9b34fb';
 
@@ -108,6 +115,7 @@ class _ScanPageState extends State<ScanPage> {
         iBeaconRegions: const [
           IBeaconRegionConfig(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
           IBeaconRegionConfig(identifier: 'bigc-test', uuid: _bigcTestUuid),
+          IBeaconRegionConfig(identifier: 'minew-test', uuid: _minewTestUuid),
         ],
       );
 
@@ -641,6 +649,7 @@ class _ScanPageState extends State<ScanPage> {
         regions: const [
           AndroidBeaconRegion(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
           AndroidBeaconRegion(identifier: 'bigc-test', uuid: _bigcTestUuid),
+          AndroidBeaconRegion(identifier: 'minew-test', uuid: _minewTestUuid),
         ],
         exitTimeoutSeconds: _androidExitTimeoutSeconds,
       );
