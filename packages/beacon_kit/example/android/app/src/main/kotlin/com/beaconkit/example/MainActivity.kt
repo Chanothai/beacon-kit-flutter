@@ -7,7 +7,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import com.bigc.beacon_kit_android.ProximityGateStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -150,23 +149,18 @@ class MainActivity : FlutterActivity() {
      * จึงแปลได้สองอย่างที่ต่างกันสิ้นเชิง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่
      * แรก · บรรทัดคู่นี้ปิดช่องนั้น และเป็นเส้นแบ่งรอบทดสอบที่อ่านย้อนหลังได้จริง
      *
-     * ## ทำไม `monitorStop` ต้องล้าง [ProximityGateStore] ด้วย
+     * ## `ProximityGateStore` ไม่ได้ถูกล้างจากที่นี่อีกต่อไป
      *
-     * `BackgroundRegionMonitor.stop()` ล้างเฉพาะสถานะของ**ชั้น 1**
-     * (`BackgroundRegionStore.clearAll()`) — **สถานะของชั้น 2 ไม่มีใครล้างเลย**
-     * `ProximityGateStore.clear()` ไม่มีผู้เรียกแม้แต่รายเดียวก่อนคอมมิตนี้ ผลคือ
-     * key ของบีคอนที่ไม่อยู่แล้วค้างบนดิสก์ข้ามรอบทดสอบ แล้วโผล่เป็น `stale` รัว ๆ
-     * ตอน sighting แรกของรอบถัดไป ซึ่งอ่านเหมือนบั๊กแต่เป็นซากของรอบก่อน
-     *
-     * ล้างที่นี่ (example app) **ไม่ใช่ใน `stop()` ของ SDK** โดยตั้งใจ เพราะรอบนี้
-     * ห้ามแตะเส้นทาง region monitoring แม้แต่บรรทัดเดียว — **นี่คือหนี้ที่ต้องย้าย
-     * เข้า SDK ในรอบถัดไป** ไม่ใช่ตำแหน่งที่ถูกต้องถาวร
+     * ก่อน PR A (`docs/briefs/2026-09-14_pr-a-exit-clear-design.md`) ฟังก์ชันนี้เคย
+     * ล้าง `ProximityGateStore` เองตอน `monitorStop` เพราะ `BackgroundRegionMonitor.stop()`
+     * ตอนนั้นล้างเฉพาะสถานะของชั้น 1 (`BackgroundRegionStore.clearAll()`) — เป็นหนี้ที่
+     * คอมเมนต์เดิมบันทึกไว้เองว่า "ไม่ใช่ตำแหน่งที่ถูกต้องถาวร" ตอนนี้ย้ายเข้า SDK แล้ว
+     * (`BackgroundRegionMonitor.stop()`/`start()`/`restoreAfterBoot()` ล้างชั้น 2 คู่กับ
+     * ชั้น 1 เอง และ `onExitAlarm()`/`reconcile()` ล้างเฉพาะ region ที่ exit จริงด้วย) —
+     * example app จึงไม่ต้องรู้จัก `ProximityGateStore` อีกต่อไปเลย
      */
     private fun logMonitorLifecycle(event: String, detail: String?) {
         val context = applicationContext
-        if (event == "monitorStop") {
-            runCatching { ProximityGateStore(context).clear() }
-        }
         BackgroundEvidenceLog.append(
             context,
             BackgroundEvidenceLog.line(
@@ -179,8 +173,7 @@ class MainActivity : FlutterActivity() {
                     context = context,
                     state = ExampleApplication.processState,
                     receiverEntry = false,
-                ) + " detail=${detail?.replace(' ', '_') ?: "n/a"}" +
-                    if (event == "monitorStop") " proximityStoreCleared=true" else "",
+                ) + " detail=${detail?.replace(' ', '_') ?: "n/a"}",
             ),
         )
     }
