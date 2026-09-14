@@ -6,6 +6,11 @@
   — ไม่มีรอบเดินอุปกรณ์จริงประกอบเอกสารฉบับนี้เลย)
 - ขอบเขต: **เอกสารเท่านั้น** ไม่มีการแก้โค้ด/commit ใด ๆ ระหว่างเขียนเอกสารนี้
 - วันที่เขียน: 14 ก.ย. 2026 (beacon-architect)
+- อัปเดต 14 ก.ย. 2026 (รอบสอง): เติมเนื้อหาตามที่รีวิวสั่งกลับมา — **§1.3** (จุดเรียกอื่นที่ต้องล้าง
+  `ProximityGateStore` คู่กัน: `start()`/`restoreAfterBoot()`/`restoreAfterPackageReplaced()`),
+  ย่อหน้าใหม่ท้าย §1.2 (ยืนยัน invariant load-fail-no-save), เทสบังคับข้อ 9 ใน §6.1, หมายเหตุ
+  ความยาว TAG เพิ่มใน §3.2 และ **§7** (สเปก checklist item ใหม่ + ตำแหน่ง banner) — **ยังเป็นสถานะ
+  "ออกแบบแล้ว ยังไม่ implement" เหมือนเดิม ไม่มีอะไรถูก implement จริงในรอบนี้**
 
 ทุกจุดที่เขียนว่า `path:บรรทัด` คือพิกัดที่เปิดไฟล์จริงยืนยันแล้ว ณ `36e0256` ในรอบเขียน
 เอกสารนี้เท่านั้น (ไม่ได้คัดต่อจาก ADR-20 §7.1 โดยไม่เปิดไฟล์ซ้ำ) — ถ้า flutter-dev พบว่า
@@ -164,6 +169,163 @@ object (`BackgroundRegionMonitor.kt:602`) ซึ่งครอบเฉพา�
 เมธอด) การล้าง state ของ region ที่ออกจึงเป็นการล้างที่ระดับ**ดิสก์ (`ProximityGateStore`)
 เท่านั้น** ไม่มี object ของ gate ที่ยังมีชีวิตอยู่ให้ต้องเคลียร์ในหน่วยความจำแยกต่างหาก
 
+**ยืนยันคุณสมบัติ "load() ล้มเหลว → ไม่ save() → ไม่ล้างข้อมูล" ด้วยการไล่โค้ดจริงอีกรอบ (ไม่เชื่อ
+สรุปที่ส่งต่อมาเฉย ๆ):**
+
+`load()` (`ProximityGateStore.kt:116-121`) ห่อ `prefs.getString(KEY_STATES, null)` ด้วย
+`runCatching` — ถ้า throw จะเข้า branch `getOrElse { error -> lastError = ...;
+lastMigrationDroppedCount = migrationDropped; return emptyMap() }` คืน `emptyMap()` ทันที
+ไม่ throw ต่อ (ยืนยันบรรทัดจริงแล้ว) ไล่ต่อเข้า `clearRegion()` ตามที่ร่างไว้ข้างบน:
+`states = load() = emptyMap()` → `remaining = emptyMap().filterKeys { ... } = emptyMap()`
+(filter ของ map ว่างยังว่างเหมือนเดิมเสมอไม่ว่า predicate จะเป็นอะไร) →
+`removedCount = states.size - remaining.size = 0 - 0 = 0` → เงื่อนไข `if (removedCount > 0)`
+เป็นเท็จ → **`save()` ไม่ถูกเรียกเลย** — ยืนยันซ้ำตรงกับที่สรุปมาให้ทุกจุด
+
+**นี่คือ invariant ที่เกิดจากการรวมกันของการตัดสินใจสองอย่างที่ต่างจุดประสงค์กันเดิม ไม่ใช่สิ่งที่
+ถูกออกแบบเป็น "คุณสมบัติป้องกัน load-fail" ตั้งแต่แรก** — (ก) สัญญาเดิมของ `load()` เองว่า "คืน
+`emptyMap()` เมื่ออ่านไม่สำเร็จ ไม่ throw" (มีมาก่อน `clearRegion()` จะถูกเขียน ดู kdoc ของคลาสที่
+`ProximityGateStore.kt:31-32`) และ (ข) เงื่อนไข `if (removedCount > 0) { save(remaining) }` ใน
+`clearRegion()` เองซึ่งเดิมมีไว้เพื่อเหตุผลด้านประสิทธิภาพล้วน ๆ (กัน `commit()` เปล่าเมื่อไม่มี
+อะไรให้ลบจริง ไม่ใช่เขียนขึ้นมาเพื่อป้องกัน load-fail) — การรวมกันของสองสิ่งนี้บังเอิญให้ผลลัพธ์ที่
+ถูกต้องพอดี: เมื่อ `load()` ล้มเหลว `removedCount` จะเป็น `0` เสมอ (เพราะทั้ง `states` และ
+`remaining` เป็น `emptyMap()` เดียวกัน) จึงไม่มีทาง `save()` ถูกเรียกในเคสนี้
+
+**ทำไมพฤติกรรมนี้ถูกต้องกว่าการพยายาม `save()` สถานะที่ไม่สมบูรณ์:** ถ้า `clearRegion()` ถูกเขียน
+อีกแบบที่เรียก `save(remaining)` แบบไม่มีเงื่อนไข (ไม่ gate ด้วย `removedCount > 0`) — เวอร์ชันนั้น
+จะพัง: ตอน `load()` ล้มเหลวแบบ**ชั่วคราว** (เช่น disk I/O สะดุดครั้งเดียว ไม่ใช่ข้อมูลเสียถาวร)
+`states`/`remaining` จะเป็น `emptyMap()` ทั้งคู่ แล้ว `save(emptyMap())` จะถูกเรียกไปเขียนทับไฟล์
+prefs ทั้งไฟล์ให้กลายเป็นว่างเปล่า **ถาวร** ทั้งที่ข้อมูลจริงบนดิสก์ยังอยู่ครบและอ่านสำเร็จได้ในรอบ
+ถัดไปถ้าไม่ไปเขียนทับมันซะก่อน — เปลี่ยนความล้มเหลวของการ**อ่าน**หนึ่งครั้ง ให้กลายเป็นการทำลาย
+ข้อมูลถาวรที่ไม่จำเป็นต้องเกิดเลย โค้ดที่ร่างไว้ใน §1.2 ไม่ตกหลุมนี้เพราะเงื่อนไข `removedCount > 0`
+(ที่มีอยู่เพื่อเหตุผลอื่น) บังเอิญปิดทางนี้ไว้พอดี
+
+**ผลคือข้อมูลเดิมบนดิสก์ (ถ้ามี) ไม่ถูกแตะเลยเมื่อ `load()` ล้มเหลว** — ไม่มีการเรียก
+`prefs.edit()` เกิดขึ้นแม้แต่ครั้งเดียวในเส้นทางนี้ (`save()` เป็นจุดเดียวใน `ProximityGateStore`
+ที่เรียก `prefs.edit()` — `ProximityGateStore.kt:169` — และ `clear()` อีกจุดหนึ่งที่ `:180` ซึ่ง
+`clearRegion()` ไม่ได้เรียกเลย)
+
+**บันทึกไว้ตรงนี้เป็น invariant ที่ต้องรักษาไว้ตอน implement จริง ไม่ใช่แค่ผลบังเอิญที่ปล่อยผ่าน** —
+ถ้าใครในอนาคต "ทำให้โค้ดอ่านง่ายขึ้น" โดยเอาเงื่อนไข `if (removedCount > 0)` ออก (ดูเหมือนไม่
+จำเป็นเพราะ `save()` เขียนทับด้วยค่าเดิมก็ไม่มีผลต่าง) จะรื้อ invariant นี้ทิ้งไปโดยไม่รู้ตัว เพราะ
+เหตุผลด้านประสิทธิภาพเดิมกับเหตุผลด้านความปลอดภัยของข้อมูล (ที่เพิ่งพบนี้) บังเอิญพึ่งเงื่อนไขเดียวกัน
+— ดูเทสบังคับข้อ 9 ที่ §6.1 สำหรับการล็อกพฤติกรรมนี้ไว้ไม่ให้ regression เงียบ ๆ
+
+---
+
+## 1.3 จุดเรียกอื่นที่ต้องล้าง `ProximityGateStore` คู่กัน
+
+ยืนยันด้วย `grep -n "clearRegionStates\|clearAll\b" BackgroundRegionMonitor.kt` (เปิดไฟล์จริง
+อีกรอบ ไม่ใช่เชื่อผลที่ส่งต่อมา) พบ 3 จุดที่เรียกฟังก์ชันล้างของ `BackgroundRegionStore` (ชั้น 1)
+ตรงกับที่สรุปไว้:
+- `start()` (`BackgroundRegionMonitor.kt:111-130`) — `store.clearRegionStates()` ที่บรรทัด 126
+- `stop()` (`BackgroundRegionMonitor.kt:132-142`) — `store.clearAll()` ที่บรรทัด 141 (จัดการแล้ว
+  ที่ §1.1/§3.3 — ไม่แตะซ้ำที่นี่)
+- `restoreAfterBoot()` (`BackgroundRegionMonitor.kt:151-160`) — `store.clearRegionStates()` ที่
+  บรรทัด 157
+
+และ `restoreAfterPackageReplaced()` (`BackgroundRegionMonitor.kt:185-193`) **ไม่เรียกทั้งสอง
+ฟังก์ชันนี้เลย** — ยืนยันจาก kdoc ของมันเอง (`:162-184`) ที่อธิบายตรง ๆ ว่าตั้งใจไม่ล้างสถานะเข้า/
+ออกของชั้น 1 เพราะ `SystemClock.elapsedRealtime()` ไม่รีเซ็ตตอนแอปอัปเดต (ต่างจากรีบูตจริง) —
+ตัวมันเรียกแค่ `reconcile(appContext)` (บรรทัด 191) ก่อน `registerScans()`
+
+**Invariant ที่ใช้ตัดสินทั้ง 3+1 จุด: "ชั้น 2 (proximity) ต้องไม่มีสถานะที่ชั้น 1 (region enter/exit)
+ไม่รู้จัก"**
+
+### 1.3.1 `start()` — ล้างทั้งหมด (ไม่ใช่ล้างเฉพาะ region เดิม)
+
+`store.regions = regions` (`BackgroundRegionMonitor.kt:123`) เขียนทับ `BackgroundRegionStore.
+regions` เดิม**ก่อน** `store.clearRegionStates()` (บรรทัด 126) เสมอ (ยืนยันลำดับจากการเปิดไฟล์
+จริง) — ถ้าจะล้างเฉพาะ key ของ region เดิมที่เพิ่งถูกแทนที่ ต้องจับค่า `store.regions` เก่าไว้ก่อน
+บรรทัด 123 ก่อนมันถูกเขียนทับ เพิ่มความซับซ้อนโดยไม่จำเป็น
+
+**ตัดสิน: ใช้ `ProximityGateStore(appContext).clear()` (ล้างทั้งหมด เหมือน `stop()`) แทนการวน
+`clearRegion()` ทีละ region เดิม** เหตุผล:
+- `start()` คือจุดเริ่มรอบเฝ้าใหม่ทั้งชุด ไม่ต่างจาก `stop()` แล้วตามด้วย `start()` ติดกัน —
+  `store.regions`/`store.exitTimeoutSeconds`/`store.isActive` ก็ถูกเขียนทับทั้งชุดที่บรรทัด
+  123-125 อยู่แล้ว ไม่ใช่แค่ proximity อย่างเดียวที่ต้องรีเซ็ต
+- การล้างทั้งหมดหลีกเลี่ยงปัญหาเรื่องลำดับการเขียนทับ `store.regions` ข้างต้นได้เลยโดยไม่ต้องแก้
+  โครงเดิม (ไม่ต้องจับ old regions ไว้ก่อน)
+- ทุก region ที่ส่งเข้ามาใน `regions` param เป็น "การเริ่มเฝ้าใหม่" อยู่แล้วไม่ว่าจะเป็น region เดิม
+  หรือ region ใหม่ก็ตาม — ไม่มีเหตุผลที่ dwell/window ของ region เดิมควรรอดข้าม `start()` ครั้งใหม่
+  มาได้ ในเมื่อ `BackgroundRegionStore` เองก็ไม่รักษาอะไรข้าม `start()` เช่นกัน (`clearRegionStates()`
+  ล้างของชั้น 1 ทิ้งหมดไม่เลือก region)
+
+**ผลเสียที่ต้องยอมรับ (เขียนไว้ตรง ๆ ตามที่โจทย์นี้บังคับ):** ถ้า host เรียก `start()` ซ้ำด้วย
+region set เดิม**ขณะผู้ใช้ยืนใกล้บีคอนอยู่พอดี** (เช่น Dart ฝั่งแอปสั่ง restart การเฝ้าเพราะ
+permission เปลี่ยนหรือเหตุผลอื่นที่ไม่เกี่ยวกับ proximity เลย) ค่า dwell/window ที่กำลังนับอยู่ของ
+ทุก region จะหายไปแล้วเริ่มนับใหม่ทั้งหมด — **เป็นการแลกที่ยอมรับได้** เพราะ (ก) `start()` ไม่ใช่
+event ที่เกิดถี่ในเส้นทางปกติ (ผู้เรียกคือ Dart สั่ง "เริ่มเฝ้าใหม่" ซึ่งเป็นการกระทำของผู้ใช้/แอป
+ระดับสูง ไม่ใช่ loop ภายใน) (ข) เป็นพฤติกรรมเดียวกันกับที่ `stop()` ทำอยู่แล้วสำหรับชั้น 1 ทั้งชั้น —
+ไม่ใช่การลดความสมมาตรของ store ทั้งสองตัวเมื่อเทียบกับ `stop()`
+
+**Log/source:** ครอบด้วย `runCatching` ที่ call site ของ `start()` เองโดยตรง (เหตุผลเดียวกับ §3.2
+— การสร้าง `ProximityGateStore(context)` ไม่ได้ถูกห่อในตัวคลาสเอง) เรียก `store.load()` ก่อน
+`store.clear()` เพื่อนับจำนวน key ไปล็อกแบบเดียวกับที่ §1.1 ออกแบบให้ `stop()`:
+```kotlin
+Log.i(TAG, "proximityGateStore.clear removed=$removedCount source=start")
+```
+ล้มเหลว:
+```kotlin
+Log.w(TAG, "proximityGateStore.clear ล้มเหลว source=start", throwable)
+```
+
+### 1.3.2 `restoreAfterBoot()` — ล้างทั้งหมดเช่นกัน แต่เหตุผลต้องเป็นของ proximity เอง ไม่ใช่ยืมของชั้น 1
+
+**ยืนยัน time base ของ `lastSampleAt` ก่อนตัดสินใจ (ตามที่โจทย์นี้เตือนไว้ตรง ๆ ว่าห้ามยืมเหตุผล
+ของชั้น 1 มาใช้เฉย ๆ):** `lastSampleAt` (`ProximityGate.kt:115`, kdoc บรรทัด 111 ระบุตรง ๆ ว่า
+"epoch millis") มาจาก `clock()` ที่ผู้เรียกจริงฉีดเข้ามาเป็น `System::currentTimeMillis` — ยืนยัน
+สองทางอิสระกัน: (1) kdoc ของพารามิเตอร์ `clock` เองที่ `ProximityGate.kt:171` ("ผู้เรียกจริงส่ง
+`System::currentTimeMillis` เข้ามา") และ (2) จุดสร้าง instance จริงที่ `BeaconScanReceiver.kt:116`:
+`val gate = ProximityGate(clock = System::currentTimeMillis)` — **ยืนยันแล้วว่าเป็น epoch millis
+(`System.currentTimeMillis()`) จริง ไม่ใช่ `SystemClock.elapsedRealtime()`** ที่ `restoreAfterBoot()`
+kdoc (`BackgroundRegionMonitor.kt:147-149`) ใช้อ้างเหตุผลของชั้น 1
+
+**สรุปผล: เหตุผลเรื่อง "เวลาแบบ elapsed รีเซ็ตตอนรีบูต" ที่ชั้น 1 ใช้ ใช้กับ proximity ไม่ได้โดยตรง**
+— เวลาแบบ epoch เดินต่อเนื่องข้ามรีบูตตามปกติ (ยกเว้นนาฬิกาของเครื่องถูกตั้งใหม่ ซึ่งเป็นกรณีที่ไม่
+ได้ถูกจัดการเป็นพิเศษอยู่แล้วในทั้งสองชั้น) **ต้องหาเหตุผลอื่นมาสนับสนุน ไม่ใช่ยืมของชั้น 1 มาใช้เฉย ๆ**
+
+**เหตุผลที่ยังต้องล้าง (สองข้อ อิสระจากเรื่อง elapsed clock):**
+1. **Invariant หลักของเอกสารนี้** — `restoreAfterBoot()` ทำให้ชั้น 1 ลืมสถานะ inside/outside ของ
+   ทุก region ไปแล้วอย่างไม่มีเงื่อนไข (`store.clearRegionStates()` ที่บรรทัด 157 ไม่เช็คว่า region
+   ไหน "ควร" ลืมหรือไม่) ถ้าปล่อยให้ `ProximityGateStore` ยังมี entry ของ region เดิมค้างอยู่ (ที่
+   `confirmedBucket=near/immediate` ที่ยังไม่ stale ตาม epoch clock จริง) นั่นคือสถานะของชั้น 2 ที่
+   ชั้น 1 **ไม่รู้จักอีกต่อไปแล้ว** — ขัด invariant ตรง ๆ ไม่ว่า epoch clock จะยังเดินต่อเนื่องถูกต้อง
+   แค่ไหนก็ตาม เพราะปัญหาไม่ได้อยู่ที่ "ข้อมูลเก่าไปหรือยัง" แต่อยู่ที่ "ข้อมูลนี้ยังมีเจ้าของ (region
+   ที่ชั้น 1 ยืนยันว่ากำลังเฝ้า/อยู่ข้างใน) หรือไม่"
+2. **เหตุผลเชิง product ที่ kdoc เดิมของ `restoreAfterBoot()` เขียนไว้แล้วสำหรับชั้น 1 (`:148-149`):
+   "เครื่องอาจถูกยกไปที่อื่นระหว่างปิด"** — เหตุผลนี้ใช้กับ proximity ได้เหมือนกัน แม้จะผ่านเหตุผล
+   คนละเส้นทาง: ถ้าเครื่องถูกยกไปที่อื่นจริงระหว่างปิดเครื่อง ต่อให้ epoch clock เดินถูกต้องสมบูรณ์
+   (ไม่มีอาการ "เวลาข้ามไม่ได้" แบบ elapsed) ค่า RSSI/window/dwell ที่บันทึกไว้ก่อนปิดเครื่องก็ยัง
+   เป็นค่าที่วัด ณ ตำแหน่งเดิมซึ่งใช้ไม่ได้แล้วกับตำแหน่งใหม่ — สถานะ "ใกล้บีคอนตัวนี้" ที่ค้างอยู่จึง
+   ผิดได้เท่ากับสถานะ "อยู่ในโซนนี้" ที่ชั้น 1 ล้างทิ้งไปด้วยเหตุผลเดียวกัน เพียงแต่ผ่านมุมมอง "ตำแหน่ง
+   ทางกายภาพเปลี่ยน" ไม่ใช่มุมมอง "เวลาฐานเปลี่ยน"
+
+**ตัดสิน: ล้างเหมือน `start()`** (`ProximityGateStore(appContext).clear()`, silent + log,
+`source=restoreAfterBoot`) วางไว้คู่กับ `store.clearRegionStates()` ที่บรรทัด 157 ของ
+`restoreAfterBoot()`:
+```kotlin
+Log.i(TAG, "proximityGateStore.clear removed=$removedCount source=restoreAfterBoot")
+```
+
+### 1.3.3 `restoreAfterPackageReplaced()` — ไม่ต้องเพิ่ม call site ใหม่
+
+ชั้น 1 ตั้งใจไม่ล้าง (`:167-173` อธิบายไว้ตรง ๆ ว่าคง `inside=true` เดิมไว้เพราะ elapsed time ยัง
+เทียบกับ `now` ได้ตรง ๆ ข้ามการอัปเดตแอป) — ตาม invariant แล้ว proximity ก็**ไม่ต้องถูกบังคับล้าง
+ทั้งหมด**ที่จุดนี้เช่นกัน เพราะไม่มีเหตุการณ์ "ชั้น 1 ลืม" เกิดขึ้นให้ต้องตามล้าง
+
+ส่วนที่ต้องการล้างจริง (region ที่ stale เกินจริงระหว่างที่แอปกำลังอัปเดต) ถูกจัดการผ่าน
+`reconcile(appContext)` ที่ `restoreAfterPackageReplaced()` เรียกอยู่แล้วที่บรรทัด 191 **ก่อน**
+`registerScans()` — `reconcile()` ไหลผ่านจุดคอขวดเดียวกัน (`emitExitAndMarkOutside()`) ที่ §1.2/
+§3.2 ออกแบบให้เรียก `ProximityGateStore.clearRegion(regionIdentifier, source="reconcile")` ต่อท้าย
+อยู่แล้วสำหรับทุก region ที่ `reconcile()` ตัดสินว่า exit จริง (ไม่ว่าจะจาก `staleReconcile` หรือ
+`staleBootMismatch`) — region ที่ `reconcile()` ตัดสินว่า**ยังไม่ exit** (ยัง inside จริง) ก็ไม่ควร
+ถูกล้าง proximity เช่นกัน ด้วยเหตุผลเดียวกับที่ชั้น 1 คง `inside=true` ไว้
+
+**ยืนยันว่าพอแล้ว ไม่ต้องเพิ่ม call site ใหม่ที่ `restoreAfterPackageReplaced()` เอง** เพราะทุก
+region ที่ควรถูกล้างจริง (คือ region ที่ `reconcile()` ประกาศ exit) ถูกล้างผ่านเส้นทางที่มีอยู่แล้ว
+ครบ ส่วน region ที่ไม่ควรถูกล้าง (ยัง inside) ก็ไม่ถูกแตะ ตรงกับผลลัพธ์ที่ต้องการพอดีโดยไม่ต้องเขียน
+โค้ดเพิ่ม
+
 ---
 
 ## 2. การจับคู่ prefix ที่ต้องรวมตัวคั่น — ทำไมห้าม `key.startsWith(regionIdentifier)` ดิบ ๆ
@@ -284,6 +446,19 @@ crash** ซึ่งหมายความว่าสาขาที่ยั
 ไฟล์อื่นในโมดูลเดียวกันเขียนไว้เอง** — ต้อง implement ด้วยชื่อย่อ (เช่น
 `"BgRegionMonitor"` หรือคล้ายกัน) ให้สั้นกว่า 23 จริง ไม่ใช่ใช้ชื่อคลาสเต็มตรง ๆ — จุดนี้
 เป็นรายละเอียดเชิงเทคนิคที่ต้องยืนยันตอน implement จริง ไม่ใช่เดางวดนี้
+
+**หมายเหตุเพิ่มจากรีวิว (14 ก.ย. 2026) — กฎจริงของ Android คือ `<=` ไม่ใช่ `<`:** กฎจริงของ
+แพลตฟอร์มคือ `TAG.length <= 23` บน API < 26 (23 ตัวพอดี "ผ่าน" ไม่ใช่ต้อง "น้อยกว่า" 23) —
+คอมเมนต์ที่มีอยู่จริงใน `BeaconScanReceiver.kt:258` ("... สั้นกว่า 23 ตัวอักษรตามข้อจำกัดของ
+`Log`") เข้มกว่ากฎจริงของแพลตฟอร์ม **นี่ไม่ใช่บั๊ก เป็นความเข้มงวดเกินความจำเป็นที่มีอยู่แล้วใน
+โค้ดเดิมก่อนเอกสารนี้** ไม่ใช่ขอบเขตของ PR A ที่จะไปแก้คอมเมนต์นั้น
+
+ชื่อย่อที่เอกสารนี้เสนอ (`"BgRegionMonitor"`) นับความยาวแล้วได้ **15 ตัวอักษร**
+(`echo -n "BgRegionMonitor" | wc -c` → `15`) **ผ่านทั้งสองกฎ**: ทั้ง `<=23` ของ Android จริง
+และ `<23` ของคอมเมนต์ในโค้ดของเราเอง (เทียบกับชื่อคลาสเต็ม `"BackgroundRegionMonitor"` ซึ่งยาว
+23 ตัวเป๊ะ — ผ่านกฎจริงของ Android แต่ **ไม่ผ่าน** กฎที่เข้มกว่าของคอมเมนต์เราเอง จึงยังต้องใช้
+ชื่อย่อไม่ใช่ชื่อเต็มอยู่ดี) — บันทึกไว้กันสับสนว่า dev ไม่จำเป็นต้องหาชื่อที่สั้นกว่า `"BgRegionMonitor"`
+อีก 15 ตัวถือว่าเพียงพอแล้วตามทั้งสองกฎ
 
 **ตำแหน่งวางภายใน `emitExitAndMarkOutside()`:** `emitExitAndMarkOutside()`
 (`BackgroundRegionMonitor.kt:750-765`) คือ**จุดคอขวดเดียว**ที่ทั้ง `onExitAlarm()`
@@ -468,6 +643,36 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 4. **[เสริม] ไม่มี commit() เปล่าเมื่อไม่มีอะไรให้ลบ** — เรียก `clearRegion("ไม่มีจริง")`
    กับ store ที่มี key ของ region อื่นอยู่ แล้วยืนยันว่าเนื้อหาที่ `load()` อ่านกลับมาหลัง
    เรียกยังเหมือนเดิมทุกประการ (พิสูจน์ทางอ้อมว่าไม่มีการเขียนทับที่ไม่จำเป็น)
+9. **[บังคับ] `load()` ล้มเหลว (จำลอง `getString` throw) → ไม่ `save()` → ข้อมูลเดิมไม่ถูกแตะ**
+   — ยืนยันคุณสมบัติที่อธิบายไว้ท้าย §1.2 ด้วยเทสต์จริง (ข้อนี้เป็น**ข้อ 9 ของทั้งเอกสาร** แม้จะอยู่
+   ในหัวข้อ §6.1 ก็ตาม เพราะข้อ 1-4 ข้างบนคือข้อ 1-4 ของทั้งเอกสาร และ §6.2 ด้านล่างต่อด้วยข้อ
+   5-8) — `FakeSharedPreferences` **ไม่รองรับการจำลอง `getString` throw** (`commitOverride`
+   ที่มีอยู่แล้วจำลองได้เฉพาะฝั่งเขียน/`commit()` เท่านั้น — เปิด `FakeSharedPreferences.kt` ยืนยัน
+   แล้วไม่มี hook อื่นสำหรับฝั่งอ่าน) จึงต้องใช้ `Mockito.spy()` แยกสองมุมมองของ
+   `SharedPreferences` ตัวเดียวกัน:
+
+   1. สร้าง `fakePrefs = FakeSharedPreferences()` แล้ว pre-populate ด้วยการเรียก
+      `ProximityGateStore(mockContext(fakePrefs)).save(mapOf(key to state))` ตามปกติหนึ่งครั้ง
+      (ข้อมูล "เดิมบนดิสก์" ที่ต้องยืนยันว่าไม่ถูกแตะ)
+   2. สร้าง `spyPrefs = Mockito.spy(fakePrefs)` แล้ว stub เฉพาะ
+      `Mockito.doThrow(RuntimeException("simulated read failure"))
+      .`when`(spyPrefs).getString(anyString(), any())` — `Mockito.spy()` copy field state ของ
+      `fakePrefs` ไปยัง instance ใหม่ตอนสร้าง (ไม่ใช่ wrap object เดิม) **ดังนั้น `fakePrefs`
+      ตัวต้นฉบับยังไม่ถูกแตะเลยหลังจากนี้** แยกอิสระจาก `spyPrefs` โดยสมบูรณ์ — นี่คือวิธีแยก
+      "มุมมองที่พัง" (`spyPrefs`) ออกจาก "มุมมองที่ใช้ตรวจผล" (`fakePrefs` เดิม) โดยไม่ต้องเขียน
+      fake ใหม่
+   3. เรียก `ProximityGateStore(mockContext(spyPrefs)).clearRegion(regionIdentifier)` แล้ว
+      ยืนยัน:
+      - `removedCount == 0`
+      - `Mockito.verify(spyPrefs, Mockito.never()).edit()` — พิสูจน์ว่า `save()`/`commit()`
+        ไม่เคยถูกเรียกเลยในเส้นทางนี้ (จุดเดียวใน `ProximityGateStore` ที่เรียก `prefs.edit()`
+        คือ `save()` ที่ `ProximityGateStore.kt:169` และ `clear()` ที่ `:180` — `clearRegion()`
+        ที่ path นี้ไม่เดินไปถึงทั้งคู่)
+   4. ยืนยันข้อมูลเดิมยังอยู่ครบ **ผ่าน `fakePrefs` ต้นฉบับ (ไม่ใช่ `spyPrefs` ที่กำลังพัง)** —
+      สร้าง `ProximityGateStore(mockContext(fakePrefs))` ตัวใหม่ (`load()` ปกติ ไม่ผ่านการ
+      throw ใด ๆ) แล้วเรียก `.load()` ยืนยันว่าได้ state เดิมที่ pre-populate ไว้ในข้อ 1 กลับมา
+      ครบทุกฟิลด์ — ไม่ใช่การยืนยันผ่าน `load()` ที่กำลังพัง (ซึ่งจะคืน `emptyMap()` เสมอไม่มี
+      ความหมายอะไรให้ตรวจ) แต่เป็น `load()` คนละ instance ที่ผูกกับ `fakePrefs` ที่ไม่เคยถูกแตะ
 
 ### 6.2 ไฟล์ใหม่ `BackgroundRegionMonitorProximityExitClearTest.kt`
 
@@ -525,15 +730,106 @@ pattern เดียวกับ `BackgroundRegionMonitorOnExitAlarmTest.kt:89-9
 
 ---
 
+## 7. สเปกสำหรับ flutter-dev — checklist item ใหม่ + ตำแหน่ง banner (ยังไม่แก้ไฟล์จริงทั้งสองรอบนี้)
+
+### 7.0 ส่วนต่างที่พบระหว่างตรวจ — เลขบรรทัดที่ได้รับมาไม่ตรง
+
+ได้รับมาว่า `proximityStoreCleared=true` อยู่ที่ `docs/test-checklists/android_background_scanning.md:348`
+— **เปิดไฟล์จริงแล้วไม่ตรง** ข้อความนี้อยู่จริงที่**บรรทัด 320**
+(`docs/test-checklists/android_background_scanning.md:320`, ใต้หัวข้อ `#### D. event=monitorStart /
+event=monitorStop`): `` `monitorStop` ล้าง `ProximityGateStore` ให้ด้วย (`proximityStoreCleared=true`) ``
+— บรรทัด 348 ของไฟล์จริงคือแถวตาราง `| ใช้ทำอะไร | รอบข้ามคืน ADR-14/ADR-17 | **พิสูจน์ notification
+บน API 33** |` ของหัวข้อ "เครื่องที่ 2" ซึ่งเป็นคนละเรื่องกันโดยสิ้นเชิง — บันทึกส่วนต่างไว้ตรงนี้ตาม
+กติกาห้ามแก้เงียบ ให้ flutter-dev อ้างอิงเลข **320** ไม่ใช่ 348
+
+### 7.1 การแก้ `docs/test-checklists/android_background_scanning.md` (สเปกสำหรับรอบ implement)
+
+**(ก) แก้บรรทัด 320:** annotation `proximityStoreCleared=true` เดิมอ้างถึงพฤติกรรมที่กำลังจะถูก
+**ลบทิ้ง** จาก `MainActivity.kt` ตาม §1.1/§4.3 ของเอกสารนี้ (ย้ายเข้า SDK แทน) — บรรทัดนี้ต้องถูก
+แก้ไม่ให้อ้าง annotation ที่จะไม่มีอยู่แล้ว **พร้อมกัน**กับตอนลบ annotation ออกจากโค้ดจริง ไม่ใช่
+ปล่อยให้ checklist อ้างสิ่งที่ไม่มีอยู่แล้ว
+
+**(ข) เพิ่มหัวข้อย่อยใหม่:** วางไว้เป็น `####` ใหม่ **ก่อน** เส้นคั่น `---` ที่บรรทัด 338 (ท้ายบล็อก
+ของ ADR-20 สำหรับเครื่องที่ 1 ก่อนขึ้นหัวข้อ "### เครื่องที่ 2" ที่บรรทัด 340) — **ไม่ยัดเข้าตาราง**
+`| ข้อ | ผล | หลักฐาน |` ที่บรรทัด 112-119 เพราะตารางนั้นเป็นผล `observed`/`ผ่าน` ล้วน (ตามที่โจทย์นี้
+ห้ามไว้ตรง ๆ)
+
+หัวข้อที่เสนอ (ข้อความต้องตรงตัวอักษรเป๊ะกับที่ banner ใน ARCHITECTURE.md จะอ้างถึง — ดู §7.2):
+
+```markdown
+#### PR A — exit-clear proximity ตอน region exit (code-complete, unverified — รอรอบเดินจริง)
+
+**สถานะ: code-complete, unverified** — ยังไม่มีรอบเดินอุปกรณ์จริงรองรับเลย (เอกสารออกแบบ:
+`docs/briefs/2026-09-14_pr-a-exit-clear-design.md`) ห้ามอ่านหัวข้อนี้ว่าเป็นหลักฐานที่นับเป็น
+`observed` — ตารางผลของ ADR-20 ที่บรรทัด 112-119 ด้านบนไม่รวมพฤติกรรมนี้ด้วยเหตุผลเดียวกัน
+
+**สิ่งที่ PR A เพิ่ม:** ล้าง `ProximityGateStore` เฉพาะ region ที่ประกาศ exit จริงใน
+`onExitAlarm()`/`reconcile()` (ผ่าน `clearRegion(regionIdentifier)`) และล้างทั้งหมดใน
+`start()`/`stop()`/`restoreAfterBoot()` (ผ่าน `clear()`) — รายละเอียดเต็มดูเอกสารออกแบบ §1-§4
+
+**วิธียืนยันบนเครื่องจริง:**
+- เส้นทาง exit เฉพาะ region: `adb logcat | grep proximityGateStore.clearRegion` — ต้องเห็นบรรทัด
+  รูปแบบ `proximityGateStore.clearRegion region=<id> removed=<n> source=<onExitAlarm|reconcile>`
+  ทุกครั้งที่มีการประกาศ exit จริง (ไม่ใช่แค่ตอนมี key ให้ลบ — `removed=0` ก็ต้องเห็นบรรทัดนี้)
+- เส้นทางล้างทั้งหมด: `adb logcat | grep proximityGateStore.clear` (prefix กว้างกว่า จับทั้ง
+  `.clear` และ `.clearRegion`) — ต้องเห็น `source=start` / `source=stop` / `source=restoreAfterBoot`
+  ตามจังหวะที่เรียกจริง
+
+**ยังไม่มีข้อมูล** — ตารางผลจะเพิ่มที่นี่หลังรอบเดินจริงรอบแรก (รูปแบบเดียวกับตาราง ADR-20 ที่
+บรรทัด 112-119: `| ข้อ | ผล | หลักฐาน |`)
+```
+
+### 7.2 แบนเนอร์ ADR-20 §7.1 ใน `ARCHITECTURE.md` — สเปกของตัวชี้ใหม่
+
+`tool/check_adr_banners.sh` (เปิดทั้งไฟล์ยืนยันแล้ว) จับบล็อกแบนเนอร์จากบรรทัดที่ขึ้นต้นด้วย `> `
+ที่ตามหลัง `^## ADR-N` — แต่**ไม่ได้จำกัดว่าต้องมีบล็อกเดียวต่อ ADR** (ดู `flush()`/loop ใน `python3`
+heredoc ของสคริปต์: ทุกก้อน `>` ที่พบก่อนเจอ `## ADR-` heading ถัดไปถูกตรวจแยกเป็นก้อน ๆ ทั้งหมด
+ไม่ใช่แค่ก้อนแรกหลัง heading) — เพราะ `### 7.1` เป็น subsection ภายใน `## ADR-20`
+(`ARCHITECTURE.md:3766`, ยืนยันแล้ว — ไม่ใช่ ADR ใหม่) บล็อก `>` ใหม่ที่วางไว้ใต้หัวข้อ `### 7.1`
+(หลังบรรทัด 4126, ยืนยันตำแหน่งหัวข้อจริงแล้ว) จะยังถูกนับเป็นของ `ADR-20` เหมือนกับแบนเนอร์หลักที่
+บรรทัด 3768-3769
+
+**เสนอเพิ่ม blockquote ใหม่ทันทีหลังบรรทัด 4126 (หัวข้อ `### 7.1 ⛔ ...`):**
+```markdown
+> **PR A (ข้อ 1 ด้านล่าง) — code-complete, unverified: ดูสถานะผลทดสอบที่
+> `docs/test-checklists/android_background_scanning.md` หัวข้อ "PR A — exit-clear
+> proximity ตอน region exit (code-complete, unverified — รอรอบเดินจริง)"**
+```
+
+**ต้อง**ให้ข้อความในเครื่องหมายคำพูดหลัง `หัวข้อ` ตรงตัวอักษรเป๊ะกับหัวข้อ `####` ที่เพิ่มใน checklist
+(§7.1(ข) ด้านบน) — `heading_exists()` ของสคริปต์เทียบด้วย `grep -qF` แบบ substring ตรง ๆ ไม่ใช่
+fuzzy match ถ้าตัวอักษรต่างแม้แต่ตัวเดียว (รวมช่องว่าง/เครื่องหมายวงเล็บ) สคริปต์จะ fail พร้อม
+ข้อความ `ไม่พบหัวข้อ "..."` — **ต้อง copy ข้อความหัวข้อมาวางในแบนเนอร์ ไม่ใช่พิมพ์ใหม่**
+
+**ทำไมไม่ใช้รูปแบบ `ข้อ N` แทน `หัวข้อ "..."`:** `row_exists()` ของสคริปต์ (ที่ใช้ตรวจ `ข้อ N`)
+ต้องการแถวตาราง `| N |`/`| N.`/`| N (` — แต่หัวข้อใหม่ที่ §7.1(ข) ออกแบบไว้เป็น heading (`####`)
+ไม่ใช่แถวตาราง (เพราะห้ามยัดเข้าตาราง `observed` เดิมตามที่โจทย์นี้สั่ง) จึงต้องใช้กลไก `หัวข้อ "..."`
+ของสคริปต์แทน ไม่ใช่ `ข้อ N`
+
+### 7.3 ผลต่อ "สรุปไฟล์ที่จะถูกแก้" ท้ายเอกสาร
+
+ต้องเพิ่มบรรทัดใหม่ในรายการท้ายเอกสารด้านล่างนี้: `docs/test-checklists/android_background_scanning.md`
+— แก้บรรทัด 320 (ลบการอ้าง annotation เดิม) + เพิ่มหัวข้อย่อยใหม่ตาม §7.1(ข) ก่อนบรรทัด 338 (ดู
+รายการที่อัปเดตแล้วด้านล่าง)
+
+---
+
 ## สรุปไฟล์ที่จะถูกแก้ (สำหรับ flutter-dev รอบ implement จริง — ยังไม่แก้รอบนี้)
 
 - `packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/ProximityGateStore.kt`
   — เพิ่ม `clearRegion(regionIdentifier: String): Int`
 - `packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BackgroundRegionMonitor.kt`
   — เพิ่ม `TAG` + `Log` import, แก้ `stop()`, เพิ่มพารามิเตอร์ `source` ให้
-  `emitExitAndMarkOutside()`, แก้ 3 จุดเรียก (onExitAlarm ×2, reconcile ×1)
+  `emitExitAndMarkOutside()`, แก้ 3 จุดเรียก (onExitAlarm ×2, reconcile ×1) — **เพิ่มจาก §1.3:**
+  แก้ `start()` (ล้างทั้งหมด `source=start`) และ `restoreAfterBoot()` (ล้างทั้งหมด
+  `source=restoreAfterBoot`) ด้วย — `restoreAfterPackageReplaced()` **ไม่ต้องแก้** (§1.3.3)
 - `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/MainActivity.kt`
   — ลบการเรียก `ProximityGateStore(context).clear()` + คอมเมนต์เก่า + annotation
   `proximityStoreCleared=true`
-- ไฟล์เทส: `ProximityGateStoreTest.kt` (เพิ่มเคส) + `BackgroundRegionMonitorProximityExitClearTest.kt`
-  (ไฟล์ใหม่)
+- ไฟล์เทส: `ProximityGateStoreTest.kt` (เพิ่มเคส รวมเทสบังคับข้อ 9 ของ §6.1) +
+  `BackgroundRegionMonitorProximityExitClearTest.kt` (ไฟล์ใหม่)
+- `docs/test-checklists/android_background_scanning.md` — แก้บรรทัด 320 (ลบการอ้าง
+  `proximityStoreCleared=true` เดิม) + เพิ่มหัวข้อ `#### PR A — exit-clear proximity ...` ใหม่
+  ก่อนบรรทัด 338 ตามสเปก §7.1
+- `ARCHITECTURE.md` — เพิ่ม blockquote ใหม่หลังบรรทัด 4126 (หัวข้อ `### 7.1`) ชี้ไปหัวข้อใหม่ใน
+  checklist ข้างต้น ตามสเปก §7.2 (ต้องรันผ่าน `tool/check_adr_banners.sh` หลังแก้)
