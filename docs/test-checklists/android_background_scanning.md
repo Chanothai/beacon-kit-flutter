@@ -344,8 +344,10 @@ commit `d217f21` เป็นต้นไป → บิลด์นี้รว�
 #### D. `event=monitorStart` / `event=monitorStop`
 
 เพิ่มแล้วในไฟล์หลักฐาน (`detail=registered=N failed=M` และ `detail=byUser`) ปิดช่องที่
-ทำให้ "ความเงียบ" แปลได้สองอย่าง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่แรก ·
-`monitorStop` ล้าง `ProximityGateStore` ให้ด้วย (`proximityStoreCleared=true`)
+ทำให้ "ความเงียบ" แปลได้สองอย่าง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่แรก · annotation
+`proximityStoreCleared=true` เดิมถูกลบไปแล้ว (PR A ย้ายการล้าง `ProximityGateStore` เข้า SDK
+เอง — ไม่ใช่หน้าที่ของ example app อีกต่อไป ดูหัวข้อ "PR A — exit-clear proximity ตอน region
+exit" ด้านล่าง)
 
 #### E. สถานะของ ADR-20 หลังสอบสวน
 
@@ -362,6 +364,27 @@ commit `d217f21` เป็นต้นไป → บิลด์นี้รว�
 กับที่ข้อ B เดาไว้ว่าน่าจะใช่ที่สุด) แต่**ห้ามใช้ผลนี้เลื่อนสถานะรวมของ ADR-20 ทั้งฉบับเป็น `observed`**
 เพราะรอบเดียวกันนี้เปิดพบปัญหาใหม่ 2 เรื่อง (staleAfter ไม่พอ, migration ไม่ถูกรายงาน) ที่ยังต้องแก้และ
 ทดสอบซ้ำก่อน — ดูหัวข้อ "📅 รอบเดินจริง 2 วัน" ด้านบนสำหรับรายการที่เลื่อนได้/เลื่อนไม่ได้แยกทีละข้อ
+
+#### PR A — exit-clear proximity ตอน region exit (code-complete, unverified — รอรอบเดินจริง)
+
+**สถานะ: code-complete, unverified** — ยังไม่มีรอบเดินอุปกรณ์จริงรองรับเลย (เอกสารออกแบบ:
+`docs/briefs/2026-09-14_pr-a-exit-clear-design.md`) ห้ามอ่านหัวข้อนี้ว่าเป็นหลักฐานที่นับเป็น
+`observed` — ตารางผลของ ADR-20 ที่บรรทัด 112-119 ด้านบนไม่รวมพฤติกรรมนี้ด้วยเหตุผลเดียวกัน
+
+**สิ่งที่ PR A เพิ่ม:** ล้าง `ProximityGateStore` เฉพาะ region ที่ประกาศ exit จริงใน
+`onExitAlarm()`/`reconcile()` (ผ่าน `clearRegion(regionIdentifier)`) และล้างทั้งหมดใน
+`start()`/`stop()`/`restoreAfterBoot()` (ผ่าน `clear()`) — รายละเอียดเต็มดูเอกสารออกแบบ §1-§4
+
+**วิธียืนยันบนเครื่องจริง:**
+- เส้นทาง exit เฉพาะ region: `adb logcat | grep proximityGateStore.clearRegion` — ต้องเห็นบรรทัด
+  รูปแบบ `proximityGateStore.clearRegion region=<id> removed=<n> source=<onExitAlarm|reconcile>`
+  ทุกครั้งที่มีการประกาศ exit จริง (ไม่ใช่แค่ตอนมี key ให้ลบ — `removed=0` ก็ต้องเห็นบรรทัดนี้)
+- เส้นทางล้างทั้งหมด: `adb logcat | grep proximityGateStore.clear` (prefix กว้างกว่า จับทั้ง
+  `.clear` และ `.clearRegion`) — ต้องเห็น `source=start` / `source=stop` / `source=restoreAfterBoot`
+  ตามจังหวะที่เรียกจริง
+
+**ยังไม่มีข้อมูล** — ตารางผลจะเพิ่มที่นี่หลังรอบเดินจริงรอบแรก (รูปแบบเดียวกับตาราง ADR-20 ที่
+บรรทัด 112-119: `| ข้อ | ผล | หลักฐาน |`)
 
 ---
 
