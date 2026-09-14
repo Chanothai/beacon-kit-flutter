@@ -128,7 +128,7 @@ branch `docs/readme-rewrite`, HEAD `ea604e0` (main ที่รวม PR #30 แ
 - ตาราง platform support:
   | Platform | OS ขั้นต่ำ | สิทธิ์ที่ต้องขอ |
   |---|---|---|
-  | iOS | 15.0 — `packages/beacon_kit_ios/ios/beacon_kit_ios.podspec` (`s.platform = :ios, '15.0'`) | `NSLocationWhenInUseUsageDescription` / `NSLocationAlwaysAndWhenInUseUsageDescription` / `NSBluetoothAlwaysUsageDescription` — ยืนยันจาก `packages/beacon_kit/example/ios/Runner/Info.plist` |
+  | iOS | 15.0 — `packages/beacon_kit_ios/ios/beacon_kit_ios.podspec` (`s.platform = :ios, '15.0'`) | `NSLocationWhenInUseUsageDescription` / `NSLocationAlwaysAndWhenInUseUsageDescription` / `NSBluetoothAlwaysUsageDescription` / `UIBackgroundModes` = `[location, bluetooth-central]` — ยืนยันจาก `packages/beacon_kit/example/ios/Runner/Info.plist` **[แก้ 14 ก.ย. — E4]** |
   | Android | minSdk 24 — `packages/beacon_kit_android/android/build.gradle.kts:48` (compileSdk 36 ที่บรรทัด 31) | `BLUETOOTH_SCAN` + `ACCESS_FINE_LOCATION` — plugin ประกาศให้เองใน `packages/beacon_kit_android/android/src/main/AndroidManifest.xml` (มีคอมเมนต์อ้าง ADR-12 กำกับ) |
 - Badge CI: อ้างจาก `.github/workflows/ci.yml` — ชื่อ workflow คือ `CI` (`.github/workflows/ci.yml:1`)
   **flutter-dev ต้องตรวจ URL badge เองจาก remote จริงของ repo** (ไม่ยืนยันในรอบนี้
@@ -187,14 +187,15 @@ ARCHITECTURE.md:1110 "Region flapping — ข้อกำหนดเรื่�
    เขียนกำกับว่า "ฉบับร่าง ยังไม่ตัดสินใจสุดท้าย" ตรง ๆ ตามสถานะจริงของ ADR
 2. MIUI battery/autostart behavior → อ้างอิง ADR-14 หัวข้อ 2.3
    (ARCHITECTURE.md:1688 ขึ้นไป, ตรวจเลขหัวข้อย่อยจริงตอนเขียนจริงด้วย grep
-   `grep -n "หัวข้อ 2.3\|^### " ARCHITECTURE.md` ในช่วง ADR-14) **ไม่มี "runbook §0"
-   ตามที่บรีฟเขียน** — ไฟล์ที่ใกล้เคียงคือ `docs/test-checklists/android_background_runbook.md`
-   ซึ่งเป็นไฟล์ผลทดสอบ (มีตัวเลข/วันที่) **ห้ามลิงก์จากใน README** (ขัดกติกาข้อ 2)
-   ให้ลิงก์เฉพาะ ADR/AndroidManifest comment เท่านั้นสำหรับข้อจำกัดเชิงพฤติกรรม
+   `grep -n "หัวข้อ 2.3\|^### " ARCHITECTURE.md` ในช่วง ADR-14) **[แก้ 14 ก.ย. — คำตัดสิน
+   reviewer ข้อ 6] ลิงก์ `docs/test-checklists/android_background_runbook.md` หัวข้อ
+   0.1 ได้ ห้าม quote ตัวเลขเข้ามา** (เดิมโครงนี้ห้ามลิงก์ไฟล์นี้ไปเลย เพราะมีผลวัด/วันที่ปน
+   — reviewer ชี้ว่ากติกาข้อ 2 ห้ามผลวัด *ใน* README เท่านั้น ไม่ได้ห้ามลิงก์ออกไป)
 3. iOS 20 region limit → ADR-8 (ARCHITECTURE.md:778 "Two-tier region registration")
    + อ้างอิง Apple official (ARCHITECTURE.md:786, 495) "An app can register up to
-   20 regions at a time." — enforce จริงที่ `BeaconKitIosPlugin.swift` (ตามที่ ADR-5
-   อธิบายไว้ที่ ARCHITECTURE.md:466)
+   20 regions at a time." — enforce จริงที่ `BeaconKitIosPlugin.swift` (ตามที่ **ADR-4**
+   อธิบายไว้ที่ ARCHITECTURE.md:466 — **[แก้ 14 ก.ย. — E1]** บรรทัดนี้อยู่ในช่วง ADR-4
+   (ARCHITECTURE.md:413-484) ไม่ใช่ ADR-5 (เริ่มที่ ARCHITECTURE.md:485) — โครงเดิมเขียนผิดเลข ADR)
 4. iOS region event major/minor = null เมื่อ wildcard (ไม่ใช่ 0) — **ยืนยันแล้ว**
    ที่ `packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift:824-830`
    คอมเมนต์อ้าง Apple docs ตรง ๆ (`CLBeaconIdentityConstraint.major`/`.minor` เป็น
@@ -282,8 +283,8 @@ import ได้ตรงทั้งสองแพ็กเกจโดยไ�
   - `import 'package:beacon_kit/beacon_kit.dart';`
     → `GenericIBeaconEddystoneAdapter` (`packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart:18`)
     → `IBeaconRegionConfig` (`packages/beacon_kit/lib/src/ibeacon_region_config.dart:7`, field `identifier`/`uuid`)
-    → `adapter.startIBeaconMonitoring()` (`generic_ibeacon_eddystone_adapter.dart:195`)
-    → `adapter.regionStateEvents` (`generic_ibeacon_eddystone_adapter.dart:176`, ชนิด `Stream<IBeaconRegionStateEvent>`)
+    → `adapter.startIBeaconMonitoring()` (`packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart:195`)
+    → `adapter.regionStateEvents` (`packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart:176`, ชนิด `Stream<IBeaconRegionStateEvent>`)
   - `import 'package:beacon_kit_android/beacon_kit_android.dart' show BeaconKitAndroid, AndroidBeaconRegion, AndroidBackgroundRegionEvent;`
     → `BeaconKitAndroid` (`packages/beacon_kit_android/lib/beacon_kit_android.dart:34`)
     → `AndroidBeaconRegion` constructor `({required identifier, required uuid, major, minor})`
@@ -321,7 +322,7 @@ import ได้ตรงทั้งสองแพ็กเกจโดยไ�
   - `proximityGate.sweepStale()` คืน `List<ProximityTransition>`
     (`proximity_gate.dart:581`)
   - `adapter.scan()` คืน `Stream<BeaconAdvertisement>`
-    (`generic_ibeacon_eddystone_adapter.dart:45`)
+    (`packages/beacon_kit/lib/src/generic_ibeacon_eddystone_adapter.dart:45`)
 - **โครงสร้าง:** subscribe `adapter.scan()` → ทุก advertisement เรียก
   `proximityGate.push(advertisement)` → ถ้าไม่ null ให้ print/handle transition
   → แยก `Timer.periodic(...)` เรียก `proximityGate.sweepStale()` ซ้ำ (ตาม
