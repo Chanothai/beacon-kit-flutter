@@ -217,7 +217,10 @@ ADR-20 หัวข้อ 7 (การตัดสินใจ + วิธีค
 ตอนออกจาก region เลย (iOS มีแล้วที่ `IBeaconRangingManager.swift:735`) ถ้าขยับเป็น 5 นาทีก่อนปิด
 ช่องนี้ **คนที่เดินออกแล้วกลับเข้ามาภายใน 5 นาทีจะไม่ได้ notification รอบสอง** เพราะสถานะค้างเป็น
 `near` ไม่เกิด transition ใหม่ — ตรงกับสถานการณ์เดโมเดินเข้า-ออก-เข้าซ้ำ · ทุกวันนี้ค่า 60 วินาที
-บังปัญหานี้ไว้อยู่ · ลำดับที่บังคับคือ **PR A (exit-clear) → PR B (staleAfter)** ดู ADR-20 หัวข้อ 7.1
+บังปัญหานี้ไว้อยู่ · ลำดับที่บังคับคือ **PR A (exit-clear) → PR B (staleAfter)** ดู ADR-20 หัวข้อ 7.1 ซึ่งระบุขอบเขต
+PR A ไว้ครบแล้ว (ย้าย `clear()` เข้า `BackgroundRegionMonitor.stop()` + ล้างเฉพาะ region ที่ออก
+ทั้งใน `onExitAlarm` และ `reconcile()`) · **ตาราง ADR-19 หัวข้อ 8 ไม่ถูกแก้** PR B จะเพิ่มตาราง
+ค่าต่อแพลตฟอร์มไว้ใน ADR-20 แล้วเติมตัวชี้บรรทัดเดียวใต้ตารางเดิมแทน
 
 **2. migration ของ `ProximityGateStore` ยังไม่มีหลักฐานจากเครื่องจริงเลย — ทั้งตัวกลไกและตัวรายงาน:**
 `adb shell run-as com.beaconkit.example cat shared_prefs/beacon_kit_android.proximity.xml` → มี
