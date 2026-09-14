@@ -490,3 +490,45 @@ import ได้ตรงทั้งสองแพ็กเกจโดยไ�
 
 จบไฟล์โครง — ทุกจุดที่ทำเครื่องหมาย "ต้องวิจัยเพิ่ม / ยังไม่ยืนยัน / ยังไม่ได้เปิดไฟล์ตรวจ"
 คือสิ่งที่ flutter-dev **ต้องปิดก่อนเขียนเนื้อหาจริง** ไม่ใช่ข้ามไปเขียนแล้วเดาแทน
+
+---
+
+## คำตัดสิน reviewer (14 ก.ย. 2026)
+
+reviewer อนุมัติโครงนี้แล้ว พร้อมแก้ error 4 จุดข้างต้น (E1-E4) และตัดสินจุดที่ต้อง
+ตัดสินใจ (เดิมทำเครื่องหมาย ★1-★10 ในหน้า artifact ที่สรุปโครงนี้) ครบทั้ง 10 ข้อ —
+flutter-dev ต้องทำตามนี้ตอนเขียนเนื้อหาจริง ไม่ใช่กลับไปเดาตามข้อเสนอเดิมในเนื้อไฟล์ด้านบน
+(ข้อเสนอเดิมยังปล่อยไว้ในเนื้อไฟล์เพื่อดูเหตุผลประกอบ แต่คำตัดสินท้ายนี้เป็นตัวชี้ขาด)
+
+1. **vendor-agnostic** — ใช้ `ARCHITECTURE.md:8` + `ARCHITECTURE.md:68` (ไม่ใช่ ADR-2)
+2. **BT toggle เงียบจนกด start ใหม่** — เขียนเชิงข้อจำกัดที่สังเกตได้ ห้ามอ้าง ADR ที่ไม่มีจริง
+   ลิงก์ `docs/test-checklists/` แทน
+3. **minSdk 26 / ADR-23** — §7 เขียนว่า "ยังไม่มี breaking change ที่บันทึกเป็น ADR"
+   minSdk คงที่ที่ `24` ตามไฟล์จริง ห้ามอ้าง ADR-23
+4. **Playbook** — เป็นเอกสารภายนอก ไม่มีไฟล์ใน repo นี้ ไม่ใส่ลิงก์
+5. **ช่องทางรายงานช่องโหว่ (SECURITY.md)** — ใส่ `TODO: ทีม BigC ต้องกำหนดช่องทางรายงาน
+   ช่องโหว่` ตรง ๆ ห้ามแต่งอีเมล/ช่องทางขึ้นเอง
+6. **ลิงก์ runbook §0.1** — ลิงก์ `docs/test-checklists/android_background_runbook.md`
+   หัวข้อ 0.1 ได้ ห้าม quote ตัวเลขเข้ามา (แก้ไว้แล้วในเนื้อไฟล์ §5 ข้อ 2 ด้านบน — E3)
+7. **Swift snippet ของ AppDelegate** — ไม่ inline โค้ด Swift ใน README ชี้ path
+   `packages/beacon_kit/example/ios/Runner/AppDelegate.swift` แทน
+8. **CONTRIBUTING.md:258** — แก้แถว "เปลี่ยนสถานะฟีเจอร์ → ตารางใน README.md **และ**
+   docs/test-checklists/ios_broadcast_scanning.md" เหลือแค่ชี้ไป `docs/test-checklists/`
+   เท่านั้น (ตัดคำว่า README.md ออก) — เป็น **commit แยก** ใน PR นี้ ไม่รวมกับ commit เขียน README
+9. **ARCHITECTURE.md:466 ชี้ path ผิด (BeaconKitIosPlugin.swift แทนที่จะเป็น
+   IBeaconRangingManager.swift)** — README/integration-guide อ้าง path จากโค้ดจริงเท่านั้น
+   งานแก้ ARCHITECTURE.md บันทึกไว้ทำแยกอีกงาน ไม่ใช่ขอบเขต PR นี้
+10. **Badge CI** — ใช้ GitHub Actions ของ remote `origin`
+    (`https://github.com/Chanothai/beacon-kit-flutter`) ไม่ใช่ `gitlab`
+
+### ส่วนต่างจากบรีฟที่พบระหว่างแก้ (14 ก.ย. 2026)
+
+- บรีฟข้อ "เพิ่ม" ที่สั่งให้เขียนว่า `prototype/visit_filter/` "มีแค่เอกสาร 3 ไฟล์ ไม่มี
+  โค้ด" **ไม่ตรงกับไฟล์จริง** — ยืนยันด้วย `git ls-files prototype/visit_filter/`: มีโค้ด
+  Dart จริง 11 ไฟล์ใน `lib/` (รวม ~1,677 บรรทัด `lib/visit_filter.dart` + `lib/src/*.dart`)
+  บวกเทส 3 ไฟล์ใน `test/` และสคริปต์ generate ใน `bin/` — ไม่ใช่แค่เอกสาร ข้อความเดิมในตาราง
+  §3 แถว "Debounce / visit / session" ("ไม่มีโค้ดใน `beacon_kit`" + "ต้นแบบอยู่ที่
+  `prototype/visit_filter/` ยังไม่ต่อเข้า SDK") **ถูกต้องอยู่แล้ว** จึง**ไม่ได้แก้ตามที่สั่ง**
+  เพื่อไม่ให้ใส่ข้อมูลเท็จลงไป
+- typo "เบcon_kit → beacon_kit" ที่สั่งให้แก้ **ไม่มีอยู่ในไฟล์นี้เลย** (เกิดเฉพาะในหน้า
+  artifact สรุปโครงที่ทำแยกไว้ ไม่ใช่ในไฟล์ `.md` ที่ commit เข้า repo) — ไม่มีอะไรต้องแก้
