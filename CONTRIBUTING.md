@@ -254,7 +254,7 @@ notification อย่างเดียวไม่พอ
 | ตัดสินใจเชิงสถาปัตยกรรม | `ARCHITECTURE.md` (เพิ่ม ADR ใหม่ ไม่แก้ทับ ADR เดิม) |
 | เพิ่ม/แก้ contract ของ platform channel | ADR ที่เกี่ยวข้องใน `ARCHITECTURE.md` |
 | เพิ่มยี่ห้อใหม่ | `docs/sources/<vendor>.md` |
-| เปลี่ยนสถานะฟีเจอร์ | ตารางใน `README.md` **และ** `docs/test-checklists/ios_broadcast_scanning.md` ให้ตรงกัน |
+| เปลี่ยนสถานะฟีเจอร์ | `docs/test-checklists/ios_broadcast_scanning.md` และ/หรือ `docs/test-checklists/android_background_scanning.md` แล้วแต่แพลตฟอร์ม — `README.md` ไม่มีตารางสถานะแล้ว (ตั้งแต่ docs/readme-rewrite) |
 | เปลี่ยน**วิธี**ทดสอบบนอุปกรณ์ | `docs/test-checklists/ios_device_test_runbook.md` |
 | **implement ADR ที่เคยเขียนว่า "ยังไม่ implement"** | **แบนเนอร์สถานะของ ADR นั้นใน `ARCHITECTURE.md` ต้องถูกอัปเดตใน PR เดียวกัน** — reviewer ต้องตรวจข้อนี้ |
 
