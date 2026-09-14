@@ -37,8 +37,17 @@ dependencies:
   beacon_kit:
     git:
       url: <URL ของ private remote>
-      ref: v0.1.0            # <-- pin ที่ tag เสมอ
+      ref: <tag ล่าสุด>       # <-- pin ที่ tag เสมอ อย่า pin ที่ branch
       path: packages/beacon_kit
+  # จำเป็นเฉพาะแอปที่ต้องการ background region monitoring บน Android —
+  # BeaconKitAndroid ไม่ได้ยกขึ้นสัญญากลาง (platform interface) จึงต้อง
+  # depend ตรง ๆ แยกจาก beacon_kit (ดูตาราง "ใครควร depend ตรงนี้" ที่
+  # packages/beacon_kit_android/README.md)
+  beacon_kit_android:
+    git:
+      url: <URL ของ private remote>
+      ref: <tag ล่าสุด>       # <-- pin ที่ tag เดียวกับ beacon_kit เสมอ
+      path: packages/beacon_kit_android
 ```
 
 **iOS** — ใส่ 4 key นี้ใน `Info.plist` ของแอป (ตัวอย่างครบใน
@@ -117,10 +126,6 @@ mapping table major/minor → สาขา/โซน + cache · outbox/upload �
   enforce จริงที่ [`IBeaconRangingManager.swift:182`](packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift#L182)
 - **iOS region event `major`/`minor` = `null` เมื่อ wildcard** (ไม่ใช่ `0`) —
   [`IBeaconRangingManager.swift:826-831`](packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift#L826-L831)
-- **ปิด-เปิด Bluetooth ระหว่างเฝ้าบน Android** — ยังไม่มี ADR ยืนยันพฤติกรรมนี้บน
-  Android เอกสารที่ใกล้เคียงที่สุดคือฝั่ง iOS ใน
-  [`docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 7](docs/test-checklists/ios_broadcast_scanning.md)
-  ซึ่งเป็นคนละแพลตฟอร์ม — ต้องวิจัยเพิ่มก่อนเขียนอ้างในเอกสารสำหรับ Android
 - **iOS background sample ห่าง/`unknown` สูงกว่าตอน foreground** — แนวคิดทั่วไป
   อ้างที่ [`docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 4](docs/test-checklists/ios_broadcast_scanning.md)
 - **ยังไม่มี GATT** (connect/auth/config/OTA) — ดูหัวข้อคืออะไรด้านบน
