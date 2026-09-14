@@ -1,15 +1,13 @@
 # beacon_kit_ios
 
-A new Flutter plugin project.
+ส่วนหนึ่งของ federated plugin `beacon_kit` — implementation ฝั่ง iOS (Swift)
 
-## Getting Started
+## ใครควร depend ตรงนี้
 
-This project is a starting point for a Flutter
-[plug-in package](https://flutter.dev/to/develop-plugins),
-a specialized package that includes platform-specific implementation code for
-Android and/or iOS.
+ปกติแอปไม่ต้อง depend package นี้ตรง ๆ — ใช้ `beacon_kit` (ดู
+[README หลัก](../../README.md)) ซึ่งดึง `beacon_kit_ios` เข้ามาให้เอง
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## เอกสารหลัก
 
+- [README หลัก](../../README.md) — วิธีใช้งานทั่วไป
+- [`ARCHITECTURE.md`](../../ARCHITECTURE.md) — เหตุผลของ federated plugin pattern
