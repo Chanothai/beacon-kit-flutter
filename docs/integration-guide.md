@@ -116,7 +116,7 @@ compliance ของบริษัทก่อนเก็บหรือส่
 ค่าเหล่านี้คือ**ค่าตั้งต้นสำหรับ POC เท่านั้น** — คัดจาก
 [`packages/beacon_kit/example/lib/main.dart:42-62`](../packages/beacon_kit/example/lib/main.dart#L42-L62):
 
-| พารามิเตอร์ | ค่าตั้งต้น |
+| พารามิเตอร์ (ค่าอ้างอิงฝั่ง Dart — foreground) | ค่าตั้งต้น |
 |---|---|
 | `enterMeters` | 3.0 |
 | `exitMeters` | 5.0 |
@@ -125,6 +125,12 @@ compliance ของบริษัทก่อนเก็บหรือส่
 | `dwellSamples` | 3 |
 | `pathLossExponent` | 2.5 |
 | `staleAfter` | 10 วินาที |
+
+ชั้น background ใช้ค่าคนละชุดต่อแพลตฟอร์ม (ดูหัวข้อ 3 ด้านบน) — ตัวอย่างเช่น
+`staleAfterMillis` บน Android ตั้งเป็น `60_000L`
+([`ProximityGate.kt:199`](../packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/ProximityGate.kt#L199))
+ขณะที่ฝั่ง Swift ตั้งเป็น 24 ชั่วโมง = ปิด stale โดยพฤตินัย
+([`IBeaconRangingManager.swift:883`](../packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift#L883))
 
 **ยังไม่ผ่านการ calibrate กับสาขาจริง — ห้ามใช้เป็นค่า production โดยไม่ผ่านรอบ
 เก็บข้อมูลภาคสนามก่อน** (คำเตือนนี้มาจาก
