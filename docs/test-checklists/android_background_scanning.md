@@ -213,6 +213,12 @@ event ถัดไปเป็น `closer` จาก `from=none` (464/464) ซ�
 ADR-20 หัวข้อ 7 (การตัดสินใจ + วิธีคำนวณเต็ม) สำหรับค่าใหม่ที่เสนอ (`300_000L`, 5 นาที) **ยัง
 `code-complete, unverified` ต้องเดินอีกรอบก่อนเลื่อนสถานะ**
 
+⛔ **และค่าใหม่นี้ถูกระงับไว้ก่อน ห้ามขยับเดี่ยว ๆ** — ฝั่ง Android ไม่มีอะไรล้างสถานะ proximity
+ตอนออกจาก region เลย (iOS มีแล้วที่ `IBeaconRangingManager.swift:735`) ถ้าขยับเป็น 5 นาทีก่อนปิด
+ช่องนี้ **คนที่เดินออกแล้วกลับเข้ามาภายใน 5 นาทีจะไม่ได้ notification รอบสอง** เพราะสถานะค้างเป็น
+`near` ไม่เกิด transition ใหม่ — ตรงกับสถานการณ์เดโมเดินเข้า-ออก-เข้าซ้ำ · ทุกวันนี้ค่า 60 วินาที
+บังปัญหานี้ไว้อยู่ · ลำดับที่บังคับคือ **PR A (exit-clear) → PR B (staleAfter)** ดู ADR-20 หัวข้อ 7.1
+
 **2. migration ของ `ProximityGateStore` ยังไม่มีหลักฐานจากเครื่องจริงเลย — ทั้งตัวกลไกและตัวรายงาน:**
 `adb shell run-as com.beaconkit.example cat shared_prefs/beacon_kit_android.proximity.xml` → มี
 เฉพาะคีย์ `states_v2` **ไม่มีคีย์ `states` (legacy) หลงเหลือ** และ `grep -ci migrat` ทั้งไฟล์ 4517
