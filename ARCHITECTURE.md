@@ -86,7 +86,7 @@ class BeaconManager {
 
 **บทเรียนสำคัญ:** ความยากของโปรเจกต์นี้อยู่ที่ **per-platform (iOS/Android/Huawei) ไม่ใช่ per-vendor** — background execution บนแต่ละ OS คือส่วนที่กินเวลาและสร้างความแตกต่างจริง ส่วนการรองรับหลายยี่ห้อในระดับ broadcast ได้มาเกือบฟรีจากการทำตามมาตรฐาน
 
-**หลักฐานเชิงประจักษ์ของบีคอนยี่ห้อที่สอง (Minew):** ฝั่ง Android ที่ `docs/beacon-inventory.md` แถว #4 · ฝั่ง iOS ที่ `docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 20
+**หลักฐานเชิงประจักษ์ของบีคอนยี่ห้อที่สอง (Tangerine `TgReF` — region `minew-test` ในโค้ดเป็น alias ชื่อเดิม):** ฝั่ง Android ที่ `docs/beacon-inventory.md` แถว #4 · ฝั่ง iOS ที่ `docs/test-checklists/ios_broadcast_scanning.md` หัวข้อ 20
 
 ## ข้อจำกัดของ iOS ที่บังคับให้สถาปัตยกรรมต่างจาก Android (แก้ไข 27 ส.ค. 2026)
 
