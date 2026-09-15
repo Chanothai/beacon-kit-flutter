@@ -231,6 +231,9 @@ prefs ทั้งไฟล์ให้กลายเป็นว่างเ�
 **Invariant ที่ใช้ตัดสินทั้ง 3+1 จุด: "ชั้น 2 (proximity) ต้องไม่มีสถานะที่ชั้น 1 (region enter/exit)
 ไม่รู้จัก"**
 
+**สรุปผลของจุดที่ 4 (`restoreAfterPackageReplaced()`) ล่วงหน้า:** ไม่ล้างชั้น 2 เพราะไม่ได้รีเซ็ต
+ชั้น 1 (ผ่าน `reconcile()` ซึ่งล้างเฉพาะ region ที่ประกาศ exit อยู่แล้ว) — รายละเอียดเต็มที่ §1.3.3
+
 ### 1.3.1 `start()` — ล้างทั้งหมด (ไม่ใช่ล้างเฉพาะ region เดิม)
 
 `store.regions = regions` (`BackgroundRegionMonitor.kt:123`) เขียนทับ `BackgroundRegionStore.
