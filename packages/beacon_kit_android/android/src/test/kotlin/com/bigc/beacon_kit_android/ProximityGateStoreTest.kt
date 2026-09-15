@@ -599,4 +599,177 @@ class ProximityGateStoreTest {
             "states_v2 อ่านไม่ออกจริงต้องมี error — เป็นคนละเรื่องกับ migration ของคีย์เก่า",
         )
     }
+
+    // ==== clearRegion() — PR A: exit-clear (docs/briefs/2026-09-14_pr-a-exit-clear-design.md §6.1) ====
+
+    /**
+     * [ข้อ 1] ต้องเป็น exact match ของ regionIdentifier ไม่ใช่ prefix — `"bigc"` กับ
+     * `"bigc-test"` เป็นคนละ region แม้ชื่อหนึ่งจะขึ้นต้นด้วยอีกชื่อหนึ่งพอดี (§2 ของ
+     * เอกสารออกแบบ) ถ้า `clearRegion()` เทียบด้วย `key.startsWith(regionIdentifier)`
+     * ดิบ ๆ คีย์ของ `"bigc-test"` จะถูกลบไปด้วยตอนล้าง `"bigc"` ทั้งที่ไม่ควร
+     */
+    @Test
+    fun `clearRegion - exact match เท่านั้น - ล้าง bigc ไม่กระทบ bigc-test`() {
+        val prefs = FakeSharedPreferences()
+        val store = ProximityGateStore(mockContext(prefs))
+        val bigcKey = proximityKeyFor(
+            regionIdentifier = "bigc",
+            uuid = "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+            major = 9902,
+            minor = 1,
+        )
+        val bigcTestKey = proximityKeyFor(
+            regionIdentifier = "bigc-test",
+            uuid = "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+            major = 9902,
+            minor = 2,
+        )
+        store.save(
+            mapOf(
+                bigcKey to ProximityKeyState(confirmedBucket = ProximityBucket.NEAR),
+                bigcTestKey to ProximityKeyState(confirmedBucket = ProximityBucket.NEAR),
+            ),
+        )
+
+        val removedCount = store.clearRegion("bigc")
+
+        assertEquals(1, removedCount, "ต้องลบแค่ key ของ bigc ตัวเดียว")
+        val remaining = store.load()
+        assertEquals(setOf(bigcTestKey), remaining.keys, "key ของ bigc-test ต้องยังอยู่ครบ ไม่ถูกลบ")
+    }
+
+    /**
+     * [ข้อ 2] `regionIdentifier` ที่มี `|` ปนอยู่ข้างใน (`"a|b"`) ต้องล้างได้ถูกต้องครบ
+     * โดยไม่กระทบ region `"a"` ที่เป็นคนละ region แม้ชื่อจะเป็นส่วนขึ้นต้นของ `"a|b"`
+     * — พิสูจน์ว่า `clearRegion()` พึ่ง [proximityKeyPartsOrNull] จริง ไม่ใช่ตัดขอบเขต
+     * string เอง (§2 ของเอกสารออกแบบ)
+     */
+    @Test
+    fun `clearRegion - regionIdentifier ที่มี pipe ปนอยู่ ล้างได้ถูกต้อง ไม่กระทบ region a`() {
+        val prefs = FakeSharedPreferences()
+        val store = ProximityGateStore(mockContext(prefs))
+        val keyWithPipe = proximityKeyFor(
+            regionIdentifier = "a|b",
+            uuid = "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+            major = 9902,
+            minor = 1,
+        )
+        val siblingKey = proximityKeyFor(
+            regionIdentifier = "a",
+            uuid = "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+            major = 9902,
+            minor = 2,
+        )
+        store.save(
+            mapOf(
+                keyWithPipe to ProximityKeyState(confirmedBucket = ProximityBucket.NEAR),
+                siblingKey to ProximityKeyState(confirmedBucket = ProximityBucket.NEAR),
+            ),
+        )
+
+        val removedCount = store.clearRegion("a|b")
+
+        assertEquals(1, removedCount)
+        val remaining = store.load()
+        assertEquals(setOf(siblingKey), remaining.keys, "key ของ region \"a\" ต้องไม่ถูกลบไปด้วย")
+    }
+
+    /**
+     * [ข้อ 3ก] store ว่างเปล่าไม่เคยมี key ใดเลย — ต้องได้ `removedCount == 0` และไม่มี
+     * exception หลุดออกมา ไม่ทิ้ง [ProximityGateStore.lastError] ไว้
+     */
+    @Test
+    fun `clearRegion - store ว่างเปล่า - removedCount เป็น 0 ไม่ throw`() {
+        val prefs = FakeSharedPreferences()
+        val store = ProximityGateStore(mockContext(prefs))
+
+        val removedCount = store.clearRegion("ไม่มีจริง")
+
+        assertEquals(0, removedCount)
+        assertNull(store.lastError)
+    }
+
+    /**
+     * [ข้อ 3ข] key รูปร่างพังถูก [load] กรองทิ้งไปแล้วตั้งแต่ก่อนถึง `clearRegion()`
+     * (ผ่าน `statesFromJson()`/`isValidKeyShape()`) — `clearRegion()` จึงไม่มีทางเห็น
+     * key พังเลย เป็นผลพลอยได้จากการสร้างบน [load]/[save] เดิม ไม่ throw · ปนคีย์
+     * ที่รูปร่างถูกต้องไว้ด้วยหนึ่งตัว (fixture รูปแบบเดียวกับเทสต์ migration ที่มีอยู่
+     * แล้วในไฟล์นี้ "entry รูปแบบเก่าที่ปนอยู่ใต้คีย์ใหม่ states_v2") เพื่อไม่ให้
+     * `states` ว่างเปล่าทั้งหมดจนชน branch `unparsable` ของ [load] ที่ตั้งใจรายงาน
+     * เคสคนละแบบ (ดิสก์เสียหายจริง ไม่ใช่แค่มี key รูปร่างเก่าปนมา)
+     */
+    @Test
+    fun `clearRegion - key รูปร่างพังในดิสก์ - ไม่ throw เพราะถูก load กรองทิ้งไปก่อนแล้ว`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(
+            "states_v2",
+            """{"shape-invalid-key":{"confirmedBucket":"near"},"$key":{"confirmedBucket":"near"}}""",
+        ).commit()
+        val store = ProximityGateStore(mockContext(prefs))
+
+        val removedCount = store.clearRegion("shape-invalid-key")
+
+        assertEquals(0, removedCount, "key รูปร่างพังถูก load() กรองทิ้งไปแล้ว ไม่มีอะไรให้ clearRegion ลบ")
+        assertNull(store.lastError)
+        assertEquals(setOf(key), store.load().keys, "key ที่รูปร่างถูกต้องต้องไม่ถูกแตะ")
+    }
+
+    /**
+     * [ข้อ 4] ไม่มี `commit()` เปล่าเมื่อไม่มีอะไรให้ลบ — พิสูจน์ทางอ้อมว่า `save()`
+     * ไม่ถูกเรียกโดยไม่จำเป็นด้วยการยืนยันว่าเนื้อหาที่ [load] อ่านกลับมาหลังเรียก
+     * ยังเหมือนเดิมทุกประการ (คนละ region จาก region ที่ขอล้าง)
+     */
+    @Test
+    fun `clearRegion - ไม่มีอะไรให้ลบ - เนื้อหาเดิมไม่ถูกแตะ`() {
+        val prefs = FakeSharedPreferences()
+        val store = ProximityGateStore(mockContext(prefs))
+        val otherKey = proximityKeyFor(
+            regionIdentifier = "other-region",
+            uuid = "e2c56db5-dffb-48d2-b060-d0f5a71096e0",
+            major = 9902,
+            minor = 1,
+        )
+        val before = mapOf(otherKey to ProximityKeyState(confirmedBucket = ProximityBucket.FAR))
+        store.save(before)
+
+        val removedCount = store.clearRegion("ไม่มีจริง")
+
+        assertEquals(0, removedCount)
+        val after = store.load()
+        assertEquals(before.keys, after.keys)
+        assertEquals(
+            before.getValue(otherKey).confirmedBucket,
+            after.getValue(otherKey).confirmedBucket,
+            "เนื้อหาที่ไม่เกี่ยวข้องกับ region ที่ขอล้างต้องไม่ถูกแตะเลย",
+        )
+    }
+
+    /**
+     * [ข้อ 9 ของทั้งเอกสาร] `load()` ล้มเหลว (จำลอง `getString` throw) → ไม่ `save()`
+     * → ข้อมูลเดิมบนดิสก์ไม่ถูกแตะเลย — ยืนยัน invariant ที่ท้าย §1.2 ของเอกสารออกแบบ
+     *
+     * ใช้ `Mockito.spy()` แยกสองมุมมองของ `SharedPreferences` ตัวเดียวกัน:
+     * `spyPrefs` (มุมมองที่พัง เอาไว้ยิง `clearRegion()`) กับ `fakePrefs` ต้นฉบับ
+     * (มุมมองที่ใช้ตรวจผลจริง — `Mockito.spy()` copy field state ไปยัง instance ใหม่
+     * ตอนสร้าง ไม่ใช่ wrap object เดิม จึง `fakePrefs` ไม่ถูกแตะเลยหลังจากนี้)
+     */
+    @Test
+    fun `clearRegion - load ล้มเหลว - ไม่ save และข้อมูลเดิมบนดิสก์ไม่ถูกแตะ`() {
+        val fakePrefs = FakeSharedPreferences()
+        ProximityGateStore(mockContext(fakePrefs)).save(mapOf(key to ProximityKeyState(confirmedBucket = ProximityBucket.NEAR)))
+
+        val spyPrefs = Mockito.spy(fakePrefs)
+        Mockito.doThrow(RuntimeException("simulated read failure"))
+            .`when`(spyPrefs).getString(anyString(), Mockito.any())
+
+        val storeOnSpy = ProximityGateStore(mockContext(spyPrefs))
+        val removedCount = storeOnSpy.clearRegion(proximityKeyPartsOrNull(key)!!.regionIdentifier)
+
+        assertEquals(0, removedCount)
+        Mockito.verify(spyPrefs, Mockito.never()).edit()
+
+        val restored = ProximityGateStore(mockContext(fakePrefs)).load()
+        val state = assertNotNull(restored[key], "ข้อมูลเดิมบนดิสก์ต้องยังอยู่ครบหลัง load() ล้มเหลว")
+        assertEquals(ProximityBucket.NEAR, state.confirmedBucket)
+    }
 }

@@ -4125,6 +4125,10 @@ tail ของข้อมูลชุดเดียว (2 วัน, เคร
 
 ### 7.1 ⛔ เงื่อนไขบังคับก่อนขยับ `staleAfterMillis` เป็น `300_000L` — ห้ามขยับค่าเดี่ยว ๆ (เพิ่ม 14 ก.ย. 2026)
 
+> **PR A (ข้อ 1 ด้านล่าง) — code-complete, unverified: ดูสถานะผลทดสอบที่
+> `docs/test-checklists/android_background_scanning.md` หัวข้อ "PR A — exit-clear
+> proximity ตอน region exit (code-complete, unverified — รอรอบเดินจริง)"**
+
 **ค่าใหม่นี้ถูกระงับไว้ก่อน** จนกว่าจะปิดช่องว่าง parity ข้างล่างเสร็จ **หรือ** แก้ไปพร้อมกันใน PR ที่
 เรียงลำดับตามนี้ — เหตุผลไม่ใช่เรื่องตัวเลข แต่เป็นเพราะ **ฝั่ง Android ไม่มีอะไรล้างสถานะ proximity
 ตอนออกจาก region เลย**

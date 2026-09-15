@@ -83,7 +83,7 @@ grep -c "exitReason=" docs/test-data/2026-09-03_android_overnight_stale_inside.l
 ทั้งสองไฟล์ไม่มีคีย์ `exitReason=` แม้แต่บรรทัดเดียว — ยืนยันว่าเป็นบิลด์ก่อน ADR-17 จริง
 ตามที่คาดไว้ ดูแถว **ข้อ 10 (§11)** ในตารางผลด้านล่าง — สถานะยังคง **ยังไม่ทดสอบ**
 
-### ADR-20 (proximity gate เบื้องหลัง) — `observed` เพิ่มขึ้นหลังรอบ 12-14 ก.ย. · `staleAfter` ค่าใหม่ (5 นาที) ยัง `code-complete, unverified`
+### ADR-20 (proximity gate เบื้องหลัง) — `observed` เพิ่มขึ้นหลังรอบ 12-14 ก.ย. · `staleAfter` 5 นาที — ระงับ ตาม ADR-20 §7.1 ยังไม่มีในโค้ด (รอ PR A ผ่านรอบเดินจริง + ผลทดลอง SLOT1)
 
 **อัปเดต 14 ก.ย. 2026 — ดูหัวข้อ "รอบเดินจริง 2 วัน (12-14 ก.ย. 2026)" ท้ายบล็อกนี้ก่อนอ่านรายละเอียด
 เดิมด้านล่าง** ตัวเลขของรอบ 9 ก.ย. ยังใช้ได้ปกติสำหรับสิ่งที่มันพิสูจน์ (`staleAfter=10s` vs `60s`,
@@ -238,8 +238,8 @@ unit test`** — โมดูล `app` ยังไม่มีทางทด�
 event ถัดไปเป็น `closer` จาก `from=none` (464/464) ซึ่งตรงกับ notification count ของ `9903/3`
 (465 ใบ = 464 จากวงจร stale→closer + 1 จากการเห็นครั้งแรกหลัง migration) **แปลว่าปริมาณ notification
 ส่วนใหญ่ที่ได้ไม่ได้มาจากมีคนเดินเข้าใกล้จริง แต่มาจาก gate ล้าง state ทิ้งแล้วนับใหม่** — ดู ARCHITECTURE.md
-ADR-20 หัวข้อ 7 (การตัดสินใจ + วิธีคำนวณเต็ม) สำหรับค่าใหม่ที่เสนอ (`300_000L`, 5 นาที) **ยัง
-`code-complete, unverified` ต้องเดินอีกรอบก่อนเลื่อนสถานะ**
+ADR-20 หัวข้อ 7 (การตัดสินใจ + วิธีคำนวณเต็ม) สำหรับค่าใหม่ที่เสนอ (`300_000L`, 5 นาที) — **ค่านี้
+ถูกระงับไว้ตาม ADR-20 §7.1 ยังไม่มีในโค้ดเลย** (รอ PR A ผ่านรอบเดินจริง + ผลทดลอง SLOT1 ก่อน)
 
 ⛔ **และค่าใหม่นี้ถูกระงับไว้ก่อน ห้ามขยับเดี่ยว ๆ** — ฝั่ง Android ไม่มีอะไรล้างสถานะ proximity
 ตอนออกจาก region เลย (iOS มีแล้วที่ `IBeaconRangingManager.swift:735`) ถ้าขยับเป็น 5 นาทีก่อนปิด
@@ -344,8 +344,10 @@ commit `d217f21` เป็นต้นไป → บิลด์นี้รว�
 #### D. `event=monitorStart` / `event=monitorStop`
 
 เพิ่มแล้วในไฟล์หลักฐาน (`detail=registered=N failed=M` และ `detail=byUser`) ปิดช่องที่
-ทำให้ "ความเงียบ" แปลได้สองอย่าง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่แรก ·
-`monitorStop` ล้าง `ProximityGateStore` ให้ด้วย (`proximityStoreCleared=true`)
+ทำให้ "ความเงียบ" แปลได้สองอย่าง: ระบบไม่ปลุกแอป หรือไม่มีใครสั่งเฝ้าตั้งแต่แรก · annotation
+`proximityStoreCleared=true` เดิมถูกลบไปแล้ว (PR A ย้ายการล้าง `ProximityGateStore` เข้า SDK
+เอง — ไม่ใช่หน้าที่ของ example app อีกต่อไป ดูหัวข้อ "PR A — exit-clear proximity ตอน region
+exit" ด้านล่าง)
 
 #### E. สถานะของ ADR-20 หลังสอบสวน
 
@@ -362,6 +364,27 @@ commit `d217f21` เป็นต้นไป → บิลด์นี้รว�
 กับที่ข้อ B เดาไว้ว่าน่าจะใช่ที่สุด) แต่**ห้ามใช้ผลนี้เลื่อนสถานะรวมของ ADR-20 ทั้งฉบับเป็น `observed`**
 เพราะรอบเดียวกันนี้เปิดพบปัญหาใหม่ 2 เรื่อง (staleAfter ไม่พอ, migration ไม่ถูกรายงาน) ที่ยังต้องแก้และ
 ทดสอบซ้ำก่อน — ดูหัวข้อ "📅 รอบเดินจริง 2 วัน" ด้านบนสำหรับรายการที่เลื่อนได้/เลื่อนไม่ได้แยกทีละข้อ
+
+#### PR A — exit-clear proximity ตอน region exit (code-complete, unverified — รอรอบเดินจริง)
+
+**สถานะ: code-complete, unverified** — ยังไม่มีรอบเดินอุปกรณ์จริงรองรับเลย (เอกสารออกแบบ:
+`docs/briefs/2026-09-14_pr-a-exit-clear-design.md`) ห้ามอ่านหัวข้อนี้ว่าเป็นหลักฐานที่นับเป็น
+`observed` — ตารางผลของ ADR-20 ที่บรรทัด 112-119 ด้านบนไม่รวมพฤติกรรมนี้ด้วยเหตุผลเดียวกัน
+
+**สิ่งที่ PR A เพิ่ม:** ล้าง `ProximityGateStore` เฉพาะ region ที่ประกาศ exit จริงใน
+`onExitAlarm()`/`reconcile()` (ผ่าน `clearRegion(regionIdentifier)`) และล้างทั้งหมดใน
+`start()`/`stop()`/`restoreAfterBoot()` (ผ่าน `clear()`) — รายละเอียดเต็มดูเอกสารออกแบบ §1-§4
+
+**วิธียืนยันบนเครื่องจริง:**
+- เส้นทาง exit เฉพาะ region: `adb logcat | grep proximityGateStore.clearRegion` — ต้องเห็นบรรทัด
+  รูปแบบ `proximityGateStore.clearRegion region=<id> removed=<n> source=<onExitAlarm|reconcile>`
+  ทุกครั้งที่มีการประกาศ exit จริง (ไม่ใช่แค่ตอนมี key ให้ลบ — `removed=0` ก็ต้องเห็นบรรทัดนี้)
+- เส้นทางล้างทั้งหมด: `adb logcat | grep proximityGateStore.clear` (prefix กว้างกว่า จับทั้ง
+  `.clear` และ `.clearRegion`) — ต้องเห็น `source=start` / `source=stop` / `source=restoreAfterBoot`
+  ตามจังหวะที่เรียกจริง
+
+**ยังไม่มีข้อมูล** — ตารางผลจะเพิ่มที่นี่หลังรอบเดินจริงรอบแรก (รูปแบบเดียวกับตาราง ADR-20 ที่
+บรรทัด 112-119: `| ข้อ | ผล | หลักฐาน |`)
 
 ---
 

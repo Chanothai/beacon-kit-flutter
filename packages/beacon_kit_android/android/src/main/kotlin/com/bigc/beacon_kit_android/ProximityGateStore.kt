@@ -180,6 +180,31 @@ class ProximityGateStore(context: Context) {
         runCatching { prefs.edit().clear().commit() }
     }
 
+    /**
+     * ล้างเฉพาะ key ของ region ที่ระบุ — ใช้ตอนประกาศ exit ของ region เดียว (ต่างจาก [clear]
+     * ที่ล้างทั้งหมดตอนหยุดเฝ้าทุก region)
+     *
+     * เทียบ regionIdentifier ที่ถอดได้จาก [proximityKeyPartsOrNull] แบบ **exact เท่านั้น**
+     * (`parts.regionIdentifier == regionIdentifier`) ไม่ใช่ prefix match ของสตริงดิบ — ดู
+     * เหตุผลเต็มในหัวข้อ 2 ของเอกสารออกแบบ PR A (`docs/briefs/2026-09-14_pr-a-exit-clear-design.md`)
+     *
+     * อ่าน-กรอง-เขียนกลับ**รอบเดียว**: [load] ครั้งเดียว, [save] ไม่เกินหนึ่งครั้ง (เขียนกลับ
+     * เฉพาะเมื่อมีอะไรถูกกรองออกจริง — ถ้าไม่มี key ของ region นี้เลย ไม่ commit() เปล่า)
+     *
+     * คืนจำนวน key ที่ถูกลบ — ผู้เรียกเอาไปต่อท้าย log (ดู `BackgroundRegionMonitor`)
+     */
+    fun clearRegion(regionIdentifier: String): Int {
+        val states = load()
+        val remaining = states.filterKeys { key ->
+            proximityKeyPartsOrNull(key)?.regionIdentifier != regionIdentifier
+        }
+        val removedCount = states.size - remaining.size
+        if (removedCount > 0) {
+            save(remaining)
+        }
+        return removedCount
+    }
+
     companion object {
         private const val PREFS_NAME = "beacon_kit_android.proximity"
 
