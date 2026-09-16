@@ -297,7 +297,13 @@ import beacon_kit_ios
   /// คนละไฟล์โดยตั้งใจ — ตอบปัญหาของ §12.6.1 (ADR-25 §2): state ที่ถูกล้างทำให้
   /// transition แรกดูเหมือนเดินข้ามขอบใหม่ **ค่า 30 นาที: เลือกจากการอ่าน §12.6
   /// เท่านั้น ยังไม่ calibrate กับข้อมูลจริง** (ADR-25 §2)
-  private static let proximityLongNotificationCooldownSeconds: TimeInterval = 30 * 60
+  ///
+  /// **`internal` ไม่ใช่ `private`** (แก้ตามรอบรีวิว QA) — เพื่อให้ `RunnerTests`
+  /// อ้างอิงค่าจริงนี้ตรง ๆ ผ่าน `@testable import Runner` ได้ ไม่ต้อง hardcode
+  /// `30 * 60` ซ้ำในไฟล์เทส (ถ้าวันหนึ่งมีคนแก้ค่านี้ เทสที่ hardcode ไว้จะยังเขียว
+  /// ทั้งที่ทดสอบคนละค่า) — เท่ากับที่ฝั่ง Android เปิด `LONG_COOLDOWN_MILLIS` เป็น
+  /// `internal const val` ไว้แล้ว
+  static let proximityLongNotificationCooldownSeconds: TimeInterval = 30 * 60
 
   /// suite ใหม่ของคูลดาวน์ 30 นาที — ชื่อนี้เลือกให้สมมาตรกับชื่อไฟล์ Android
   /// (`notification_cooldown_v1`) ไม่ใช่ข้อบังคับจากที่ไหน (ADR-25 §4)
@@ -383,7 +389,7 @@ import beacon_kit_ios
     // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§4/§4.1) — เช็ค**ก่อน**คูลดาวน์เดิม
     //    60 วินาทีเพราะนี่คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ ใช้ [proximityCooldownKey]
     //    เดิมซ้ำ (key ของคูลดาวน์เดิมตรงกับ key ของ `ProximityGate` อยู่แล้ว)
-    let longKey = proximityCooldownKey(for: event)
+    let longKey = Self.proximityCooldownKey(for: event)
     let nowUptime = ProcessInfo.processInfo.systemUptime
     if let sinceLastPostedMs = longCooldownBlockedSinceMs(key: longKey, nowUptime: nowUptime) {
       recordNotificationSuppressed(event, sinceLastPostedMs: sinceLastPostedMs)
@@ -396,7 +402,7 @@ import beacon_kit_ios
     //    ฝั่ง Android เป๊ะ และ**รอดข้าม process** — จำเป็นบนเส้นทาง ADR-22 เพราะ
     //    โปรเซสที่ถูกปลุกเกิด/ตายได้หลายรอบในนาทีเดียว cooldown ที่อยู่ใน memory
     //    อย่างเดียวจะไม่กันอะไรเลย
-    guard consumeProximityCooldown(key: proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
+    guard consumeProximityCooldown(key: Self.proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
     else { return }
 
     // 5) **เขียนบรรทัด `notification` ก่อนยิงเสมอ** (ADR-20 หัวข้อ 7 / บทเรียนจาก
@@ -589,10 +595,37 @@ import beacon_kit_ios
   /// ผู้ใช้เห็นมี `beacon=<major>/<minor>` อยู่ด้วย — บีคอนคนละตัวจึงให้ข้อความคนละ
   /// ใบที่อ่านแล้วแยกออก ต่างจากฝั่ง Android ที่จงใจ**ไม่**ใส่ตัวแยกบีคอนลง key
   /// เพราะที่นั่นไม่มี major/minor รายเฟรมให้ใส่ในข้อความตั้งแต่แรก
-  private func proximityCooldownKey(for event: BeaconKitProximityChangedEvent) -> String {
+  ///
+  /// **`static` ไม่ใช่ instance method** (แก้ตามรอบรีวิว QA) — ฟังก์ชันนี้ไม่ใช้
+  /// `self` เลย (อ่านแค่ฟิลด์ของ `event` ที่รับเข้ามา) และ Swift `private` จำกัดแค่
+  /// ไฟล์เดียวกัน `@testable import` ไม่ทะลุ ทำให้ `RunnerTests` เรียกไม่ได้เลย —
+  /// เปลี่ยนเป็น `static` แบบ default access (internal) เหมือน
+  /// [longCooldownSinceLastPostedMillisOrNull] เพื่อให้เทสยืนยันรูปร่าง key และ
+  /// เคส "คนละ key ไม่กระทบกัน" ได้ตรง ๆ
+  ///
+  /// ⚠️ **`uuid.lowercased()` — แก้ตามรอบรีวิว QA 16 ก.ย. 2026** ฉบับก่อนหน้าใช้
+  /// `event.uuid ?? "-"` ตรง ๆ ไม่ผ่าน `.lowercased()` ซึ่ง**ไม่ตรงกับ key ของ
+  /// `ProximityGate` จริง** (`ProximityKeyCodec.key()` ใน
+  /// `packages/beacon_kit_ios/.../ProximityGate.swift` คืน
+  /// `"\(regionIdentifier)|\(uuid.lowercased())|\(major)|\(minor)"` — มี
+  /// `.lowercased()`) และไม่ตรงกับฝั่ง Android (`longCooldownKeyFor()`:
+  /// `event.uuid?.lowercase() ?: "-"`) — ข้อความ ADR-25 §4 ที่ว่าฟังก์ชันนี้ "ใช้
+  /// key เดิมซ้ำเพราะตรงกับ `ProximityGate` อยู่แล้ว" จึง**ไม่ตรงกับโค้ดจริงในจุด
+  /// นี้** (แจ้งให้แก้เอกสารแยกแล้ว) ถ้าตัวพิมพ์ของ `uuid` ต่างกันระหว่าง sighting
+  /// บีคอนตัวเดียวจะได้สอง key และคูลดาวน์จะเงียบล้มเหลวโดยไม่มีอะไรฟ้อง
+  ///
+  /// ⚠️ **ผลกระทบต่อคูลดาวน์เดิม 60 วินาทีที่ใช้ key ตัวนี้ร่วมกันอยู่แล้ว
+  /// (`consumeProximityCooldown`, suite `beacon_kit_example.proximity_cooldown`):
+  /// การแก้นี้เปลี่ยน key ของคูลดาวน์เดิมไปด้วย** ค่าที่เก็บไว้ใน suite เดิมของ
+  /// เครื่องที่อัปเกรดจะกลายเป็น key ที่ไม่มีใครอ่านอีก (`uuid` ตัวพิมพ์ผสมเดิมค้างอยู่
+  /// แต่การอ่านครั้งถัดไปหา key ตัวพิมพ์เล็กแทน) — ผลจริงที่ยอมรับ: **อาจได้
+  /// notification เกินมาหนึ่งใบต่อบีคอนตอนอัปเกรดครั้งเดียว** เพราะคูลดาวน์เดิม
+  /// "มองไม่เห็น" ค่าที่เคยจดไว้ก่อนแก้ ไม่ใช่บั๊กที่ต้องแก้เพิ่ม เป็นความเสี่ยงระดับ
+  /// POC ที่ยอมรับได้เหมือนความเสี่ยงเรื่อง reboot/เครื่องหลับที่ยอมรับไว้แล้วในไฟล์นี้
+  static func proximityCooldownKey(for event: BeaconKitProximityChangedEvent) -> String {
     return [
       event.regionIdentifier,
-      event.uuid ?? "-",
+      event.uuid?.lowercased() ?? "-",
       event.major.map(String.init) ?? "-",
       event.minor.map(String.init) ?? "-",
     ].joined(separator: "|")
