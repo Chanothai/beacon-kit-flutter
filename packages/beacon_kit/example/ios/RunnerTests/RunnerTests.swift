@@ -593,4 +593,186 @@ class RunnerTests: XCTestCase {
       "ปีไม่ใช่เกรกอเรียน ได้ \(stamp)"
     )
   }
+
+  // MARK: - ADR-25 §4/§4.1 — คูลดาวน์ที่สอง 30 นาที (เพิ่มโดย beacon-qa, 16 ก.ย. 2026)
+  //
+  // `AppDelegate.longCooldownSinceLastPostedMillisOrNull(lastPostedUptimeOrZero:nowUptime:)`
+  // เป็น `static func` ไม่มีการระบุ access modifier จึงเป็น `internal` ตามค่า
+  // default ของ Swift — เข้าถึงได้จริงผ่าน `@testable import Runner` โดยไม่ต้อง
+  // มี `AppDelegate` instance เพราะเป็น pure function ล้วน (8d31df0)
+  //
+  // ⚠️ **เคส 4 (รูปร่างของ key) ทดสอบที่นี่ไม่ได้ — เป็นบั๊กเชิง access control ที่
+  // ต้องรายงาน ไม่ใช่แก้เอง:** `proximityCooldownKey(for:)` เป็น `private func`
+  // (ไม่ใช่ `static`) — `private` ใน Swift จำกัดการเข้าถึงไว้แค่ **ไฟล์เดียวกัน**
+  // เท่านั้น `@testable import` ยกระดับให้เข้าถึงสมาชิกที่เป็น `internal`/`public`
+  // ได้เหมือนอยู่ในโมดูลเดียวกัน แต่**ไม่ทะลุ `private` เด็ดขาด** ต่างจาก
+  // `longCooldownSinceLastPostedMillisOrNull` ข้างล่างที่ถูกออกแบบเป็น `static`
+  // + ไม่มี modifier (=`internal`) มาตั้งแต่ต้นเพื่อให้เทสต์เรียกได้ (ดู kdoc ของ
+  // มันเองที่อ้างแพทเทิร์นเดียวกับ `runContext`/`proximityRawSignalsSuffix`)
+  // `proximityCooldownKey(for:)` ไม่ได้ทำตามแพทเทิร์นเดียวกันทั้งที่ไม่ต้องใช้
+  // instance state เลย (อ่านแค่ฟิลด์ของ `event` ที่รับมา ไม่แตะ `self`) — ควรเป็น
+  // `internal static func` เหมือนกันได้ ไม่มีเหตุผลทางเทคนิคที่ต้องเป็น instance
+  // method ที่เห็นในโค้ดปัจจุบัน จึงไม่มีทางเรียกฟังก์ชันนี้จากเทสต์ได้เลยในรอบนี้
+  // (ไม่ได้แก้ access modifier เพราะโจทย์ห้ามแก้โค้ด production เพื่อให้เทสต์ผ่าน)
+
+  /// เคส 1: ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (`0` — sentinel ของ
+  /// `UserDefaults.double(forKey:)` ที่ไม่พบ key) → ต้องยิงได้ (`nil`)
+  func testLongCooldownAllowsFirstEverPostForKey() {
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: 0,
+      nowUptime: 1_000
+    )
+
+    XCTAssertNil(result, "ไม่เคยโพสต์คีย์นี้มาก่อนต้องยิงได้เสมอ")
+  }
+
+  /// เคส 2: โพสต์ครั้งที่สองภายใน 30 นาที → ต้องไม่ยิง (non-nil) **และค่า
+  /// `sinceLastPostedMs` ที่คืนต้องตรงกับส่วนต่างจริง** ไม่ใช่แค่ตรวจว่า non-nil
+  func testLongCooldownBlocksSecondPostWithinWindowAndReturnsExactElapsed() {
+    let lastPosted: TimeInterval = 1_000
+    let elapsedSeconds: TimeInterval = 5 * 60 // 5 นาที — ยังไม่ครบ 30 นาที
+    let now = lastPosted + elapsedSeconds
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertEqual(
+      result,
+      Int64(elapsedSeconds * 1000),
+      "ค่าที่คืนต้องเท่ากับ (now - lastPosted) เป็นมิลลิวินาทีเป๊ะ ไม่ใช่แค่ non-nil"
+    )
+  }
+
+  /// เคส 3ก: ขอบล่าง — เหลืออีกน้อยกว่า 1 วินาทีจะครบ 30 นาที → ยังติดคูลดาวน์
+  ///
+  /// **หมายเหตุเรื่องค่าคงที่ที่ hardcode ในเทสต์นี้:** ค่าคงที่จริงของฝั่ง iOS
+  /// (`proximityLongNotificationCooldownSeconds`) เป็น `private static let` —
+  /// ต่างจากฝั่ง Android ที่ `LONG_COOLDOWN_MILLIS` เป็น `internal` โดยตั้งใจให้
+  /// เทสต์เรียกได้ (ดู kdoc ของมันที่อ้างเหตุผลนี้ตรง ๆ) ฝั่ง iOS ไม่ได้ทำตาม
+  /// แพทเทิร์นเดียวกัน — เป็นความไม่สมมาตรอีกจุดที่ต้องรายงาน ไม่ใช่แก้เอง เทสต์
+  /// สามข้อข้างล่างนี้จึงต้องประกาศค่า 30 นาทีซ้ำเป็นค่าท้องถิ่น
+  /// (`thirtyMinutesInSeconds`) แทนการอ้างค่าคงที่จริงได้
+  private let thirtyMinutesInSecondsForBoundaryTests: TimeInterval = 30 * 60
+
+  func testLongCooldownStillBlocksOneSecondBeforeWindowElapses() {
+    // lastPosted ต้องไม่เป็น 0 — 0 คือ sentinel ของ "ไม่เคยโพสต์มาก่อน"
+    let lastPosted: TimeInterval = 1
+    let elapsed = thirtyMinutesInSecondsForBoundaryTests - 1
+    let now = lastPosted + elapsed
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertEqual(
+      result,
+      Int64(elapsed * 1000),
+      "ยังไม่ครบ 30 นาที (ขาดอยู่ 1 วินาที) ต้องยังติดคูลดาวน์"
+    )
+  }
+
+  /// เคส 3ข: ขอบพอดี — `now - lastPosted == 30 นาที` พอดี → ต้องยิงได้ เพราะ
+  /// เงื่อนไขในโค้ดจริงเป็น `sinceSeconds < proximityLongNotificationCooldownSeconds`
+  /// (ไม่ใช่ `<=`)
+  func testLongCooldownAllowsExactlyAtWindowBoundary() {
+    let lastPosted: TimeInterval = 1
+    let now = lastPosted + thirtyMinutesInSecondsForBoundaryTests
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertNil(result, "since == 30 นาทีพอดีต้องยิงได้ เพราะเงื่อนไขเป็น <")
+  }
+
+  /// เคส 3ค: เกินขอบไปแล้ว 1 วินาที → ต้องยิงได้เช่นกัน
+  func testLongCooldownAllowsOneSecondAfterWindowElapses() {
+    let lastPosted: TimeInterval = 1
+    let now = lastPosted + thirtyMinutesInSecondsForBoundaryTests + 1
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertNil(result, "เกิน 30 นาทีไปแล้วต้องยิงได้")
+  }
+
+  /// เคส 5: cooldown รอดข้ามการที่ process ถูกฆ่าและปลุกใหม่ — **ทดสอบได้แค่
+  /// บางส่วนเช่นเดียวกับฝั่ง Android** pure function นี้ไม่แตะ `UserDefaults`
+  /// เลย พิสูจน์ได้แค่ว่า "ถ้าค่าที่ persist ไว้ (สมมติว่าอ่านคืนมาได้ถูกต้อง)
+  /// ถูกส่งเข้ามาเป็นพารามิเตอร์ มันยังทำให้ติดคูลดาวน์เหมือนเดิม" — **ไม่ได้
+  /// พิสูจน์ว่า `UserDefaults` เขียน/อ่านคืนค่าได้ถูกต้องจริงข้าม process ที่ถูก
+  /// ระบบฆ่า** ส่วนนั้นเป็น I/O ที่ยืนยันได้เฉพาะบนอุปกรณ์จริงเท่านั้น
+  func testLongCooldownStillBlocksWhenPersistedValueIsPassedInAfterSimulatedRestart() {
+    let valueAsIfReadBackFromDefaultsAfterProcessRestart: TimeInterval = 100_000
+    let elapsed: TimeInterval = 60 // 1 นาทีถัดมา
+    let nowAfterRestart = valueAsIfReadBackFromDefaultsAfterProcessRestart + elapsed
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: valueAsIfReadBackFromDefaultsAfterProcessRestart,
+      nowUptime: nowAfterRestart
+    )
+
+    XCTAssertEqual(
+      result,
+      Int64(elapsed * 1000),
+      "ค่าที่ persist ไว้ (จำลองว่าอ่านคืนมาได้) ต้องยังทำให้ติดคูลดาวน์"
+    )
+  }
+
+  /// เคส 6: ค่าที่เก็บไว้มากกว่าเวลาปัจจุบัน (เครื่อง reboot ทำให้
+  /// `systemUptime` รีเซ็ตกลับไปนับจาก 0) → ต้องยิงได้ ตามที่โจทย์กำหนดตรง ๆ
+  func testLongCooldownAllowsWhenStoredValueIsAheadOfNowDueToReboot() {
+    let storedBeforeReboot: TimeInterval = 10_000
+    let nowAfterReboot: TimeInterval = 5 // เครื่อง reboot แล้ว systemUptime นับใหม่
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: storedBeforeReboot,
+      nowUptime: nowAfterReboot
+    )
+
+    XCTAssertNil(result, "ค่าที่เก็บไว้มากกว่าปัจจุบันแปลว่า reboot แล้ว ต้องยิงได้")
+  }
+
+  /// เคส 7 — เคสหลักของ ADR-20 §12.6: "stale แล้ว near ใหม่ภายในคูลดาวน์ →
+  /// ไม่ยิง" **สิ่งที่เทสต์นี้พิสูจน์ได้จริง:** ฟังก์ชันนี้ไม่รับ
+  /// `BeaconKitProximityChangedEvent`/reason ใด ๆ เป็นพารามิเตอร์เลย — ผลลัพธ์
+  /// ขึ้นกับ`เวลาที่ผ่านไป`เท่านั้น เรียกซ้ำด้วยพารามิเตอร์เวลาเดียวกันต้องได้ผล
+  /// เดียวกันเสมอไม่ว่าผู้เรียกจะอยู่ในเส้นทางไหน (ล้าง state จาก stale/reconcile/
+  /// นาฬิกาปลุก หรือเดินข้ามขอบจริง — ทุกเส้นทางเรียกฟังก์ชันเดียวกันด้วย
+  /// พารามิเตอร์เวลาล้วน ๆ)
+  ///
+  /// ⚠️ **ข้ออ้าง "stale ไม่ล้างคูลดาวน์นี้" ไม่ได้ถูกยืนยันโดยเทสต์นี้ (หรือ
+  /// เทสต์ใดในไฟล์นี้)** — เป็นข้อสรุปเชิงโครงสร้างจากการที่คูลดาวน์ 30 นาทีนี้
+  /// เก็บอยู่ใน `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v1")`
+  /// ซึ่งเป็น suite คนละอันจาก `ProximityGateStore.swift`/`ProximityGate.swift`
+  /// ที่เส้นทาง `stale` แก้ไข — ไม่มีโค้ดจุดใดใน `AppDelegate.swift` เรียก
+  /// `.removePersistentDomain`/ล้าง suite นี้เลย (อ่านจากซอร์สโดยตรง ไม่ได้พิสูจน์
+  /// ด้วยการรันเทสต์) ยืนยันเชิง behavior เต็มรูปแบบทำได้แค่บนอุปกรณ์จริงเท่านั้น
+  func testLongCooldownTimingIsIndependentOfTransitionReason() {
+    let lastPosted: TimeInterval = 1_000
+    let elapsed: TimeInterval = 10 * 60 // 10 นาที — ยังอยู่ในคูลดาวน์
+    let now = lastPosted + elapsed
+
+    let resultA = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+    let resultB = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertEqual(resultA, Int64(elapsed * 1000))
+    XCTAssertEqual(
+      resultA,
+      resultB,
+      "เวลาที่ผ่านไปเท่ากันต้องได้ผลเดียวกันเสมอ ไม่ขึ้นกับ transition ใด ๆ"
+    )
+  }
 }
