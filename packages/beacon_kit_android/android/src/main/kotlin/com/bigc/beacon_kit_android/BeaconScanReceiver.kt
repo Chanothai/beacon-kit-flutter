@@ -232,6 +232,7 @@ class BeaconScanReceiver : BroadcastReceiver() {
                     beaconTag = beaconTagOf(item.deviceAddress),
                     storeError = storeError,
                     droppedNoIdentityCount = droppedNoIdentityCount,
+                    sinceLastSeenMs = item.transition.sinceLastSeenMs,
                 ),
             )
         }

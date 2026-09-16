@@ -100,6 +100,15 @@ data class ProximityChangedEvent(
      * default นี้
      */
     val droppedNoIdentityCount: Int = 0,
+    /**
+     * ⚠️ log เท่านั้น ไม่ใช่สัญญา wire — ดู kdoc ของคลาส **ห้ามเพิ่มเข้า "ฟิลด์ 9
+     * ตัวแรก" ที่นิยามไว้ข้างบน** จำนวนมิลลิวินาทีตั้งแต่เห็นบีคอนตัวนี้ครั้งล่าสุด
+     * ก่อนถูกประกาศเงียบ (`now - lastSampleAt`) มีค่าเฉพาะ transition ที่มาจาก
+     * [ProximityGate.sweepStale] (`reason = STALE`) เท่านั้น — transition อื่นจาก
+     * `push()` (`closer`/`farther`/`entered`) เป็น `null` เสมอเพราะฟิลด์นี้มี
+     * ความหมายเฉพาะตอน "เงียบไปแล้วกี่มิลลิวินาที" (ADR-25 §5)
+     */
+    val sinceLastSeenMs: Long? = null,
 )
 
 /**
