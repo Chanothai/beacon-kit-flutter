@@ -5596,16 +5596,23 @@ app) **ไม่มีไฟล์ไหนใน `packages/beacon_kit_ios/` เ
 (บรรทัด 293) ด้วย **wall clock** (`event.timestampMillis`, ความเห็นบรรทัด 543-545
 ยอมรับความเสี่ยงเรื่องปรับนาฬิกาไว้ตรง ๆ อยู่แล้ว) — **key ของคูลดาวน์เดิมฝั่ง iOS
 ตรงกับ key ของ `ProximityGate` อยู่แล้ว** (`proximityCooldownKey(for:)`, บรรทัด
-526-533: `[regionIdentifier, uuid, major, minor].joined(separator: "|")`) **ต่างจาก
+526-533: `[regionIdentifier, uuid, major, minor].joined(separator: "|")`)
+**⚠️ ข้อความในวงเล็บนี้ไม่เป็นความจริง ณ ตอนที่เขียน — ถอนแล้ว ดู §4.2 ด้านล่าง
+(สรุปสั้น: ตอนเขียนหัวข้อนี้ `proximityCooldownKey(for:)` ใช้ `event.uuid ?? "-"`
+โดยไม่มี `.lowercased()` ขณะที่ `ProximityKeyCodec.key()` ของ `ProximityGate` มี
+`.lowercased()` เสมอ — สอง key จึง**ไม่ตรงกัน**เมื่อตัวพิมพ์ของ uuid ต่างกัน ระหว่าง
+สองจุดนี้ ไม่ใช่ "ตรงกันอยู่แล้ว" ตามที่เขียนไว้)** **ต่างจาก
 ฝั่ง Android ที่คูลดาวน์เดิมไม่มี uuid** — ดังนั้นฝั่ง iOS **ไม่ต้องเขียนฟังก์ชันสร้าง
 key ใหม่** อย่างที่ฝั่ง Android ต้องทำ ใช้ `proximityCooldownKey(for:)` เดิมซ้ำได้เลย
+**(ข้อสรุปนี้ — "ไม่ต้องเขียนฟังก์ชันใหม่" — ยังใช้ได้อยู่ แต่ต้องแก้
+`proximityCooldownKey(for:)` เดิมให้มี `.lowercased()` ก่อนจึงจะจริงตามที่อ้าง — ดู §4.2)**
 
 **การออกแบบคูลดาวน์ที่สอง (30 นาที) ฝั่ง iOS — เท่าที่ทำได้โดยไม่แก้ SDK:**
 
 | | คูลดาวน์เดิม (ADR-21/22, บรรทัด 290-293) | **คูลดาวน์ใหม่ของ ADR นี้** |
 |---|---|---|
 | อายุ | 60 วินาที | **30 นาที** (ค่าเดียวกับฝั่ง Android — ยังไม่ calibrate เหมือนกัน) |
-| key | `proximityCooldownKey(for:)` (บรรทัด 526-533) | **ใช้ฟังก์ชันเดิมซ้ำ** — รูปร่างตรงกันอยู่แล้ว |
+| key | `proximityCooldownKey(for:)` (บรรทัด 526-533) | **ใช้ฟังก์ชันเดิมซ้ำ** — รูปร่างตรงกันอยู่แล้ว ⚠️ *(ตอนเขียนแถวนี้ "ตรงกันอยู่แล้ว" ยังไม่จริง — ขาด `.lowercased()` ฝั่ง iOS ดู §4.2)* |
 | store | `UserDefaults(suiteName: "beacon_kit_example.proximity_cooldown")` | `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v1")` — **ชื่อนี้เป็นการเลือกของสถาปนิกรอบนี้เพื่อให้สมมาตรกับชื่อไฟล์ Android ไม่ใช่ข้อบังคับจากที่ไหน** |
 | นาฬิกา | wall clock (`event.timestampMillis`) | **`ProcessInfo.processInfo.systemUptime`** — ตัวเดียวที่ใกล้เคียง `elapsedRealtime` ที่สุดบน iOS (นับจาก boot ไม่กระโดดตาม NTP) |
 
@@ -5708,7 +5715,7 @@ private func longCooldownBlockedSinceMs(key: String, nowUptime: TimeInterval) ->
 **ลำดับที่แก้ใน `recordProximityEvent()`** (แทนที่ตำแหน่งเดิมก่อนบรรทัด 378):
 
 ```swift
-let longKey = proximityCooldownKey(for: event)   // ใช้ฟังก์ชันเดิมซ้ำตามที่หัวข้อ 4 บอกไว้
+let longKey = proximityCooldownKey(for: event)   // ใช้ฟังก์ชันเดิมซ้ำตามที่หัวข้อ 4 บอกไว้ (ต้องมี .lowercased() ก่อน — แก้แล้วนอกรอบ ADR นี้ใน commit 6e3470d, ดู §4.2)
 let nowUptime = ProcessInfo.processInfo.systemUptime
 if let sinceLastPostedMs = longCooldownBlockedSinceMs(key: longKey, nowUptime: nowUptime) {
   recordNotificationSuppressed(event, sinceLastPostedMs: sinceLastPostedMs)
@@ -5743,6 +5750,45 @@ error callback, บรรทัด 657-659) มี `reason=<String(describing: e
 อิสระจาก OS ไม่ใช่ enum ปิด** ต่างจาก Android ที่เป็นเซตค่าปิดสี่ค่า **`reason=cooldown`
 จึงเข้ากับรูปแบบของบรรทัดล้มเหลว (`posted=false` + `reason=` ข้อความอิสระ) ได้พอดีโดย
 ไม่ต้องแก้ schema ของบรรทัดสำเร็จเลย**
+
+### 4.2 ⚠️ ถอนข้อความจากรอบ implement (commit `6e3470d`, 16 ก.ย. 2026) — "key ตรงกัน
+อยู่แล้ว" ในหัวข้อ 4 **ไม่เป็นความจริง ณ ตอนที่เขียน**
+
+หัวข้อ 4 (ทั้งย่อหน้าและแถวตารางที่มีคำว่า "ใช้ฟังก์ชันเดิมซ้ำได้เลย" กับ "รูปร่าง
+ตรงกันอยู่แล้ว") อ้างว่า `proximityCooldownKey(for:)` ฝั่ง iOS มี key ตรงกับ
+`ProximityGate` อยู่แล้วโดยไม่ได้คัดโค้ดสองฝั่งมาวางเทียบกันจริง — ตอนที่เขียนหัวข้อนี้
+`proximityCooldownKey(for:)` ยังใช้ `event.uuid ?? "-"` (**ไม่มี** `.lowercased()`)
+ขณะที่ `ProximityKeyCodec.key()` ของ `ProximityGate` (`packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/ProximityGate.swift`)
+คืน `"\(regionIdentifier)|\(uuid.lowercased())|\(major)|\(minor)"` — **มี**
+`.lowercased()` เสมอ สองฟังก์ชันนี้จึง**ไม่ตรงกัน**เมื่อ uuid ที่มาจาก event มีตัวพิมพ์
+ต่างจากที่ gate ใช้ (ฝั่ง Android ยืนยันแนวเดียวกันอยู่แล้ว: `proximityKeyFor()` ใน
+`BeaconScanReceiver.kt` เรียก `uuid.lowercase()` พร้อมคอมเมนต์อธิบายเหตุผลว่าทำเพื่อให้
+ตรงกับ `uuid.lowercased()` ฝั่ง Swift เป๊ะ — ซึ่งพิสูจน์ว่าฝั่ง Android คาดหวังให้ iOS
+lowercase เสมอ ไม่ใช่ optional)
+
+**แก้แล้วในโค้ด — นอกรอบ ADR นี้:** commit `6e3470d` เติม `.lowercased()` ให้
+`proximityCooldownKey(for:)` เรียบร้อยแล้ว (`event.uuid?.lowercased() ?? "-"`) ตอนนี้
+key ทั้งสองฝั่งตรงกันจริงตามที่หัวข้อ 4 *ตั้งใจ* จะอ้าง — **ข้อสรุปเชิงออกแบบของหัวข้อ 4
+("ไม่ต้องเขียนฟังก์ชันสร้าง key ใหม่ ใช้ `proximityCooldownKey(for:)` เดิมซ้ำได้เลย")
+ยังคงถูกต้องอยู่** เพราะฟังก์ชันเดิมถูกแก้ให้ถูกแล้ว ไม่ต้องเปลี่ยนแนวทาง
+
+**ผลข้างเคียงที่ต้องรู้ก่อน implement จริง:** `proximityCooldownKey(for:)` เป็นฟังก์ชัน
+เดียวกันที่**คูลดาวน์ 60 วินาทีเดิม** (ADR-22) ใช้อยู่แล้วด้วย (ไม่ใช่แค่คูลดาวน์ 30
+นาทีใหม่ของ ADR นี้) — การเติม `.lowercased()` จึงเปลี่ยน key ของคูลดาวน์เดิมไปด้วย
+เครื่องที่อัปเกรดจาก build ก่อน `6e3470d` จะมีค่าเก่าค้างอยู่ใน
+`UserDefaults(suiteName: "beacon_kit_example.proximity_cooldown")` ผูกกับ key แบบ
+uuid-ไม่ lowercase ที่ไม่มีโค้ดจุดไหนอ่านอีกต่อไป (เพราะ key ที่คำนวณใหม่จะ lowercase
+เสมอ) ผลจริงคือ**อาจได้ notification เกินมาหนึ่งใบต่อบีคอนครั้งเดียวตอนอัปเกรด** (คูลดาวน์
+เดิมเข้าใจผิดว่ายังไม่เคยเห็น key นี้) — ยอมรับได้ในระดับ POC เหมือนความเสี่ยงอื่นที่ ADR
+นี้ยอมรับไว้แล้ว (reboot รีเซ็ตคูลดาวน์ 30 นาที, `systemUptime` ไม่นับเวลาเครื่องหลับ)
+
+**บทเรียนสำหรับ ADR รอบถัดไป (บันทึกไว้เป็นกฎ ไม่ใช่แค่เคสนี้เคสเดียว):** ข้อความรูปแบบ
+"X ตรงกับ Y อยู่แล้ว" ที่จะเขียนลง ADR **ต้องคัดโค้ดทั้งสองฝั่งมาวางเทียบกันตรง ๆ ในตัว
+ข้อความก่อนสรุป ห้ามเขียนจากความจำหรือจากการอนุมานว่า "สองที่ที่ทำเรื่องเดียวกันน่าจะ
+เหมือนกัน"** — รอบนี้หลุดเพราะอนุมานว่า `proximityCooldownKey(for:)` (คูลดาวน์ของ
+example app) กับ `ProximityKeyCodec.key()` (ของ SDK) ทำหน้าที่ประกอบ key แบบเดียวกัน
+จึงน่าจะเหมือนกัน โดยไม่ได้เปิดทั้งสองไฟล์มาวาง `.lowercased()` เทียบกันจริงก่อนเขียน
+ดูหัวข้อ 6 ข้อ 6 ด้านล่างด้วย
 
 ### 5. ⚠️ คำตอบข้อบังคับ: `ProximityGate.kt` (Android) **ยังไม่มี** `sinceLastSeenMs`
 บน transition — ต้องเพิ่มฝั่ง Kotlin เท่านั้น
@@ -5806,6 +5852,14 @@ calibrate ค่าคูลดาวน์ 30 นาที **ขอบเขต
    ทั้งหมดไว้ล่วงหน้าแบบไม่มี error กลับมา" ยังมีโอกาสจดเวลาคูลดาวน์ผิดอยู่ (แคบลงจาก
    ฉบับแรกมากแล้ว แต่ยังไม่ปิดสนิท) — ยังไม่มีข้อมูลจริงว่าเกิดบ่อยแค่ไหนในทางปฏิบัติ
    บนเครื่องทดสอบจริง
+6. **บทเรียนจาก §4.2 — ข้อความ "X ตรงกับ Y อยู่แล้ว" ใน ADR นี้ยังไม่ผ่านการคัดโค้ดสอง
+   ฝั่งมาวางเทียบทุกจุด** — หัวข้อ 4 เคยเขียนว่า key ของคูลดาวน์เดิมฝั่ง iOS
+   (`proximityCooldownKey(for:)`) ตรงกับ `ProximityGate` อยู่แล้ว จากการอนุมานว่าสอง
+   ฟังก์ชันที่ทำหน้าที่เดียวกันน่าจะเหมือนกัน ทั้งที่จริงขาด `.lowercased()` (แก้แล้วนอก
+   รอบ ADR นี้ด้วย commit `6e3470d` — ดู §4.2) **ยังไม่มีการตรวจซ้ำว่าข้อความอ้างอิงรูป
+   ร่าง key อื่น ๆ ในหัวข้อ 3 (Android) ผ่านการวางเทียบโค้ดจริงครบทุกจุดหรือไม่นอกเหนือ
+   จากที่หัวข้อ 3 คัดโค้ดมาแสดงไว้ตรง ๆ แล้ว** — ควรตรวจอีกรอบก่อนอนุมัติ `proposed`
+   ให้เป็น `implemented`
 
 ### 7. ไฟล์ที่ต้องแก้ — สรุปตามแพลตฟอร์ม (สำหรับส่งต่อ `flutter-dev` **หลังตัดสินใจ
 เสร็จ** เท่านั้น)
