@@ -78,6 +78,34 @@ object ExampleNotifications {
     const val LAYER_PROXIMITY = "2"
 
     /**
+     * เขียนเฉพาะบรรทัดหลักฐาน — **ไม่เรียก [deliveryReason]/`notify()` เด็ดขาด**
+     * (ดู ADR-25 §3) เพราะ `cooldown` เป็นคนละแกนคำถามกับสี่เหตุผลที่ [deliveryReason]
+     * ตอบ: ที่นี่คือ "แอปตัดสินใจไม่ลองยิงเองเพราะนโยบายคูลดาวน์" ไม่ใช่ "ระบบบล็อก"
+     */
+    fun recordSuppressed(
+        context: Context,
+        regionIdentifier: String,
+        beacon: String = BEACON_NOT_APPLICABLE,
+        mac: String = BEACON_NOT_APPLICABLE,
+        layer: String = BEACON_NOT_APPLICABLE,
+        reason: String,
+        extra: String,
+    ) {
+        BackgroundEvidenceLog.append(
+            context,
+            BackgroundEvidenceLog.line(
+                timestampMillis = System.currentTimeMillis(),
+                event = "notification",
+                regionIdentifier = regionIdentifier,
+                conclusion = ExampleApplication.processState.conclusion,
+                rawSignals = BackgroundEvidenceLog.rawSignals(
+                    context = context, state = ExampleApplication.processState, receiverEntry = false,
+                ) + " beacon=$beacon mac=$mac layer=$layer posted=false reason=$reason $extra",
+            ),
+        )
+    }
+
+    /**
      * ยิง notification พร้อมเขียนบรรทัดหลักฐานที่ **แยกที่มาได้จากบรรทัดเดียว**
      *
      * ## ทำไมต้องมี `beacon=` และ `layer=` (เพิ่ม 11 ก.ย. 2026)
@@ -117,8 +145,8 @@ object ExampleNotifications {
         beacon: String = BEACON_NOT_APPLICABLE,
         mac: String = BEACON_NOT_APPLICABLE,
         layer: String = BEACON_NOT_APPLICABLE,
-    ) {
-        runCatching {
+    ): Boolean {
+        return runCatching {
             ensureChannel(context)
             val id = synchronized(this) { nextId++ }
             val reason = deliveryReason(context)
@@ -157,7 +185,12 @@ object ExampleNotifications {
                 .build()
 
             NotificationManagerCompat.from(context).notify(id, notification)
-        }
+
+            // ค่าสุดท้ายของบล็อก — ไม่กระทบพฤติกรรมเดิมข้างบนแม้แต่บรรทัดเดียว
+            // (ADR-25 §3.1): ผู้เรียกเดิมสองจุด (`MainActivity.kt`,
+            // `ExampleApplication.kt`) เรียกแบบ statement เดี่ยว ไม่ใช้ค่าที่คืนกลับ
+            reason == REASON_GRANTED
+        }.getOrDefault(false)
     }
 
     /**

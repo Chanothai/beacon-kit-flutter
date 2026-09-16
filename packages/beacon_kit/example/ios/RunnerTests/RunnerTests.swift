@@ -593,4 +593,275 @@ class RunnerTests: XCTestCase {
       "ปีไม่ใช่เกรกอเรียน ได้ \(stamp)"
     )
   }
+
+  // MARK: - ADR-25 §4/§4.1 — คูลดาวน์ที่สอง 30 นาที (เพิ่มโดย beacon-qa, 16 ก.ย. 2026)
+  //
+  // `AppDelegate.longCooldownSinceLastPostedMillisOrNull(lastPostedUptimeOrZero:nowUptime:)`
+  // เป็น `static func` ไม่มีการระบุ access modifier จึงเป็น `internal` ตามค่า
+  // default ของ Swift — เข้าถึงได้จริงผ่าน `@testable import Runner` โดยไม่ต้อง
+  // มี `AppDelegate` instance เพราะเป็น pure function ล้วน (8d31df0)
+  //
+  // ✅ **เคส 4 (รูปร่างของ key) เคยทดสอบที่นี่ไม่ได้ — แก้แล้วใน `6e3470d`:**
+  // `proximityCooldownKey(for:)` เดิมเป็น `private func` (instance method) ซึ่ง
+  // Swift `private` จำกัดการเข้าถึงไว้แค่ไฟล์เดียวกันเท่านั้น — `@testable import`
+  // ไม่ทะลุ `private` เด็ดขาด ทำให้เรียกจากที่นี่ไม่ได้เลย ตอนนี้ถูกเปลี่ยนเป็น
+  // `static func` แบบ default access (internal) เหมือน
+  // `longCooldownSinceLastPostedMillisOrNull` แล้ว — เรียกได้ตรง ๆ ผ่าน
+  // `AppDelegate.proximityCooldownKey(for:)` ด้านล่าง **ระหว่างแก้พบบั๊กจริงเพิ่ม
+  // อีกข้อ (เจอโดยผู้ตรวจ commit `6e3470d`, ไม่ใช่โดยเทสต์ในไฟล์นี้ตอนนั้นเพราะ
+  // ยังเรียกฟังก์ชันไม่ได้): เดิมไม่มี `.lowercased()` บน `uuid` ทำให้ key ไม่ตรงกับ
+  // `ProximityKeyCodec.key()` ของ gate ฝั่ง iOS เอง (ซึ่งมี `.lowercased()`) และไม่
+  // ตรงกับ `longCooldownKeyFor()` ฝั่ง Android — แก้แล้วเช่นกัน เทสต์ด้านล่างที่ส่ง
+  // uuid ตัวพิมพ์ใหญ่เข้าไปยืนยันตัวพิมพ์เล็กของผลลัพธ์คือตัวที่กันบั๊กนี้ไม่ให้
+  // กลับมาอีก
+  //
+  // ✅ **ค่าคงที่ `proximityLongNotificationCooldownSeconds` เคยเป็น `private` —
+  // แก้แล้วใน `6e3470d` เช่นกัน:** ตอนนี้เป็น `static let` (internal) เทสต์ด้านล่าง
+  // จึงอ้างค่าจริงตรง ๆ ผ่าน `AppDelegate.proximityLongNotificationCooldownSeconds`
+  // ไม่ต้อง hardcode `30 * 60` ซ้ำอีกต่อไป — เท่ากับที่ฝั่ง Android อ้าง
+  // `LONG_COOLDOWN_MILLIS` ตรง ๆ อยู่แล้ว
+
+  /// เคส 1: ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (`0` — sentinel ของ
+  /// `UserDefaults.double(forKey:)` ที่ไม่พบ key) → ต้องยิงได้ (`nil`)
+  func testLongCooldownAllowsFirstEverPostForKey() {
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: 0,
+      nowUptime: 1_000
+    )
+
+    XCTAssertNil(result, "ไม่เคยโพสต์คีย์นี้มาก่อนต้องยิงได้เสมอ")
+  }
+
+  /// เคส 2: โพสต์ครั้งที่สองภายใน 30 นาที → ต้องไม่ยิง (non-nil) **และค่า
+  /// `sinceLastPostedMs` ที่คืนต้องตรงกับส่วนต่างจริง** ไม่ใช่แค่ตรวจว่า non-nil
+  func testLongCooldownBlocksSecondPostWithinWindowAndReturnsExactElapsed() {
+    let lastPosted: TimeInterval = 1_000
+    let elapsedSeconds: TimeInterval = 5 * 60 // 5 นาที — ยังไม่ครบ 30 นาที
+    let now = lastPosted + elapsedSeconds
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertEqual(
+      result,
+      Int64(elapsedSeconds * 1000),
+      "ค่าที่คืนต้องเท่ากับ (now - lastPosted) เป็นมิลลิวินาทีเป๊ะ ไม่ใช่แค่ non-nil"
+    )
+  }
+
+  /// เคส 3ก: ขอบล่าง — เหลืออีกน้อยกว่า 1 วินาทีจะครบ 30 นาที → ยังติดคูลดาวน์
+  ///
+  /// **อ้างค่าคงที่จริง ไม่ hardcode `30 * 60`** — `proximityLongNotificationCooldownSeconds`
+  /// ถูกเปลี่ยนจาก `private` เป็น `internal` แล้ว (`6e3470d`) เทียบเท่าที่ฝั่ง
+  /// Android อ้าง `LONG_COOLDOWN_MILLIS` ตรง ๆ อยู่แล้ว — ถ้าใครแก้ค่าจริงในอนาคต
+  /// เทสต์นี้จะยังตรวจถูกจุดเสมอ ไม่มีค่าคู่ขนานให้ drift
+  func testLongCooldownStillBlocksOneSecondBeforeWindowElapses() {
+    // lastPosted ต้องไม่เป็น 0 — 0 คือ sentinel ของ "ไม่เคยโพสต์มาก่อน"
+    let lastPosted: TimeInterval = 1
+    let elapsed = AppDelegate.proximityLongNotificationCooldownSeconds - 1
+    let now = lastPosted + elapsed
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertEqual(
+      result,
+      Int64(elapsed * 1000),
+      "ยังไม่ครบ 30 นาที (ขาดอยู่ 1 วินาที) ต้องยังติดคูลดาวน์"
+    )
+  }
+
+  /// เคส 3ข: ขอบพอดี — `now - lastPosted == 30 นาที` พอดี → ต้องยิงได้ เพราะ
+  /// เงื่อนไขในโค้ดจริงเป็น `sinceSeconds < proximityLongNotificationCooldownSeconds`
+  /// (ไม่ใช่ `<=`)
+  func testLongCooldownAllowsExactlyAtWindowBoundary() {
+    let lastPosted: TimeInterval = 1
+    let now = lastPosted + AppDelegate.proximityLongNotificationCooldownSeconds
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertNil(result, "since == 30 นาทีพอดีต้องยิงได้ เพราะเงื่อนไขเป็น <")
+  }
+
+  /// เคส 3ค: เกินขอบไปแล้ว 1 วินาที → ต้องยิงได้เช่นกัน
+  func testLongCooldownAllowsOneSecondAfterWindowElapses() {
+    let lastPosted: TimeInterval = 1
+    let now = lastPosted + AppDelegate.proximityLongNotificationCooldownSeconds + 1
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertNil(result, "เกิน 30 นาทีไปแล้วต้องยิงได้")
+  }
+
+  // MARK: - ADR-25 §4 เคส 4 — รูปร่างของ key (เปิดให้เทสได้แล้วใน `6e3470d`)
+  //
+  // ตัวช่วยสร้าง event สำหรับเทสกลุ่มนี้เท่านั้น — ค่า default ไม่มีความหมายพิเศษ
+  // นอกจากทำให้ initializer ของ `BeaconKitProximityChangedEvent` (9 พารามิเตอร์แรก
+  // + 4 ฟิลด์ log-only) เรียกสั้นลง
+  private func proximityEvent(
+    regionIdentifier: String = "bigc-test",
+    uuid: String? = "7777772e-6b6b-6d63-6e2e-636f6d000001",
+    major: UInt16? = 9902,
+    minor: UInt16? = 2
+  ) -> BeaconKitProximityChangedEvent {
+    BeaconKitProximityChangedEvent(
+      regionIdentifier: regionIdentifier,
+      uuid: uuid,
+      major: major,
+      minor: minor,
+      from: .far,
+      to: .near,
+      reason: .closer,
+      medianMeters: 1.2,
+      timestampMillis: 1_757_000_000_000,
+      storeError: nil,
+      rangeCallbackCount: 0,
+      inArrayCount: 0,
+      unknownCount: 0,
+      mode: .background
+    )
+  }
+
+  /// เคส 4ก: `proximityCooldownKey(for:)` ต้องได้คีย์ต่างกันเมื่อ event ต่างกัน
+  /// แม้แค่ฟิลด์เดียว (region / uuid / major / minor) — ทดสอบทีละฟิลด์
+  /// (เทียบเท่า `longCooldownKeyDiffersWhenAnySingleFieldDiffers` ฝั่ง Android)
+  func testProximityCooldownKeyDiffersWhenAnySingleFieldDiffers() {
+    let base = proximityEvent()
+    let diffRegion = proximityEvent(regionIdentifier: "bigc-other")
+    let diffUuid = proximityEvent(uuid: "aaaaaaaa-6b6b-6d63-6e2e-636f6d000001")
+    let diffMajor = proximityEvent(major: 9903)
+    let diffMinor = proximityEvent(minor: 3)
+
+    let baseKey = AppDelegate.proximityCooldownKey(for: base)
+
+    XCTAssertNotEqual(
+      baseKey, AppDelegate.proximityCooldownKey(for: diffRegion), "region ต่างกันต้องได้คีย์ต่างกัน"
+    )
+    XCTAssertNotEqual(
+      baseKey, AppDelegate.proximityCooldownKey(for: diffUuid), "uuid ต่างกันต้องได้คีย์ต่างกัน"
+    )
+    XCTAssertNotEqual(
+      baseKey, AppDelegate.proximityCooldownKey(for: diffMajor), "major ต่างกันต้องได้คีย์ต่างกัน"
+    )
+    XCTAssertNotEqual(
+      baseKey, AppDelegate.proximityCooldownKey(for: diffMinor), "minor ต่างกันต้องได้คีย์ต่างกัน"
+    )
+  }
+
+  /// เคส 4ข — **เทสต์ที่กันบั๊กจริงที่พบใน `6e3470d` ไม่ให้กลับมา:** รูปร่างของ
+  /// key ต้องเป็น `region|uuid|major|minor` และ `uuid` ต้อง**เป็นตัวพิมพ์เล็กเสมอ**
+  /// ไม่ว่า event จะส่ง uuid มาเป็นตัวพิมพ์ใหญ่แค่ไหนก็ตาม — ต้องตรงกับ
+  /// `ProximityKeyCodec.key()` ใน `packages/beacon_kit_ios/.../ProximityGate.swift`
+  /// (`"\(regionIdentifier)|\(uuid.lowercased())|\(major)|\(minor)"`) เป๊ะ
+  /// เพราะนี่คือหัวใจของ ADR-25 §4/§2: ถ้ารูปร่างไม่ตรงกับ key ของ gate จะกัน
+  /// สแปมจากการล้าง state ไม่ได้ตรงจุด (และเคยเป็นบั๊กจริงมาก่อนแก้)
+  func testProximityCooldownKeyShapeMatchesProximityKeyCodecAndLowercasesUuid() {
+    let upperUuid = proximityEvent(
+      uuid: "7777772E-6B6B-6D63-6E2E-636F6D000001", // ตัวพิมพ์ใหญ่โดยตั้งใจ
+      major: 9902,
+      minor: 2
+    )
+
+    let key = AppDelegate.proximityCooldownKey(for: upperUuid)
+
+    XCTAssertEqual(
+      key,
+      "bigc-test|7777772e-6b6b-6d63-6e2e-636f6d000001|9902|2",
+      "ต้องเป็น region|uuid(lowercase)|major|minor ตรงกับ ProximityKeyCodec.key() เป๊ะ"
+    )
+  }
+
+  /// เคส 4ค: ฟิลด์ที่เป็น `nil` (uuid/major/minor) ต้องแทนด้วย `-` ไม่ใช่ปล่อย
+  /// ว่างหรือ `"nil"`
+  func testProximityCooldownKeyUsesDashForNilFields() {
+    let allMissing = proximityEvent(uuid: nil, major: nil, minor: nil)
+
+    let key = AppDelegate.proximityCooldownKey(for: allMissing)
+
+    XCTAssertEqual(key, "bigc-test|-|-|-", "ฟิลด์ที่หายต้องเป็น - ไม่ใช่ nil หรือช่องว่าง")
+  }
+
+  /// เคส 5: cooldown รอดข้ามการที่ process ถูกฆ่าและปลุกใหม่ — **ทดสอบได้แค่
+  /// บางส่วนเช่นเดียวกับฝั่ง Android** pure function นี้ไม่แตะ `UserDefaults`
+  /// เลย พิสูจน์ได้แค่ว่า "ถ้าค่าที่ persist ไว้ (สมมติว่าอ่านคืนมาได้ถูกต้อง)
+  /// ถูกส่งเข้ามาเป็นพารามิเตอร์ มันยังทำให้ติดคูลดาวน์เหมือนเดิม" — **ไม่ได้
+  /// พิสูจน์ว่า `UserDefaults` เขียน/อ่านคืนค่าได้ถูกต้องจริงข้าม process ที่ถูก
+  /// ระบบฆ่า** ส่วนนั้นเป็น I/O ที่ยืนยันได้เฉพาะบนอุปกรณ์จริงเท่านั้น
+  func testLongCooldownStillBlocksWhenPersistedValueIsPassedInAfterSimulatedRestart() {
+    let valueAsIfReadBackFromDefaultsAfterProcessRestart: TimeInterval = 100_000
+    let elapsed: TimeInterval = 60 // 1 นาทีถัดมา
+    let nowAfterRestart = valueAsIfReadBackFromDefaultsAfterProcessRestart + elapsed
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: valueAsIfReadBackFromDefaultsAfterProcessRestart,
+      nowUptime: nowAfterRestart
+    )
+
+    XCTAssertEqual(
+      result,
+      Int64(elapsed * 1000),
+      "ค่าที่ persist ไว้ (จำลองว่าอ่านคืนมาได้) ต้องยังทำให้ติดคูลดาวน์"
+    )
+  }
+
+  /// เคส 6: ค่าที่เก็บไว้มากกว่าเวลาปัจจุบัน (เครื่อง reboot ทำให้
+  /// `systemUptime` รีเซ็ตกลับไปนับจาก 0) → ต้องยิงได้ ตามที่โจทย์กำหนดตรง ๆ
+  func testLongCooldownAllowsWhenStoredValueIsAheadOfNowDueToReboot() {
+    let storedBeforeReboot: TimeInterval = 10_000
+    let nowAfterReboot: TimeInterval = 5 // เครื่อง reboot แล้ว systemUptime นับใหม่
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: storedBeforeReboot,
+      nowUptime: nowAfterReboot
+    )
+
+    XCTAssertNil(result, "ค่าที่เก็บไว้มากกว่าปัจจุบันแปลว่า reboot แล้ว ต้องยิงได้")
+  }
+
+  /// เคส 7 — เคสหลักของ ADR-20 §12.6: "stale แล้ว near ใหม่ภายในคูลดาวน์ →
+  /// ไม่ยิง" **สิ่งที่เทสต์นี้พิสูจน์ได้จริง:** ฟังก์ชันนี้ไม่รับ
+  /// `BeaconKitProximityChangedEvent`/reason ใด ๆ เป็นพารามิเตอร์เลย — ผลลัพธ์
+  /// ขึ้นกับ`เวลาที่ผ่านไป`เท่านั้น เรียกซ้ำด้วยพารามิเตอร์เวลาเดียวกันต้องได้ผล
+  /// เดียวกันเสมอไม่ว่าผู้เรียกจะอยู่ในเส้นทางไหน (ล้าง state จาก stale/reconcile/
+  /// นาฬิกาปลุก หรือเดินข้ามขอบจริง — ทุกเส้นทางเรียกฟังก์ชันเดียวกันด้วย
+  /// พารามิเตอร์เวลาล้วน ๆ)
+  ///
+  /// ⚠️ **ข้ออ้าง "stale ไม่ล้างคูลดาวน์นี้" ไม่ได้ถูกยืนยันโดยเทสต์นี้ (หรือ
+  /// เทสต์ใดในไฟล์นี้)** — เป็นข้อสรุปเชิงโครงสร้างจากการที่คูลดาวน์ 30 นาทีนี้
+  /// เก็บอยู่ใน `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v1")`
+  /// ซึ่งเป็น suite คนละอันจาก `ProximityGateStore.swift`/`ProximityGate.swift`
+  /// ที่เส้นทาง `stale` แก้ไข — ไม่มีโค้ดจุดใดใน `AppDelegate.swift` เรียก
+  /// `.removePersistentDomain`/ล้าง suite นี้เลย (อ่านจากซอร์สโดยตรง ไม่ได้พิสูจน์
+  /// ด้วยการรันเทสต์) ยืนยันเชิง behavior เต็มรูปแบบทำได้แค่บนอุปกรณ์จริงเท่านั้น
+  func testLongCooldownTimingIsIndependentOfTransitionReason() {
+    let lastPosted: TimeInterval = 1_000
+    let elapsed: TimeInterval = 10 * 60 // 10 นาที — ยังอยู่ในคูลดาวน์
+    let now = lastPosted + elapsed
+
+    let resultA = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+    let resultB = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: lastPosted,
+      nowUptime: now
+    )
+
+    XCTAssertEqual(resultA, Int64(elapsed * 1000))
+    XCTAssertEqual(
+      resultA,
+      resultB,
+      "เวลาที่ผ่านไปเท่ากันต้องได้ผลเดียวกันเสมอ ไม่ขึ้นกับ transition ใด ๆ"
+    )
+  }
 }

@@ -292,6 +292,23 @@ import beacon_kit_ios
   /// suite แยกของ cooldown — **ต้องรอดข้าม process** (ดู [consumeProximityCooldown])
   private static let proximityCooldownSuiteName = "beacon_kit_example.proximity_cooldown"
 
+  /// คูลดาวน์ **ที่สอง** ต่อ key — 30 นาที ซ้อนอยู่**เหนือ**
+  /// [proximityNotificationCooldownMillis] เดิม (ไม่ได้แทนที่) เก็บลง suite
+  /// คนละไฟล์โดยตั้งใจ — ตอบปัญหาของ §12.6.1 (ADR-25 §2): state ที่ถูกล้างทำให้
+  /// transition แรกดูเหมือนเดินข้ามขอบใหม่ **ค่า 30 นาที: เลือกจากการอ่าน §12.6
+  /// เท่านั้น ยังไม่ calibrate กับข้อมูลจริง** (ADR-25 §2)
+  ///
+  /// **`internal` ไม่ใช่ `private`** (แก้ตามรอบรีวิว QA) — เพื่อให้ `RunnerTests`
+  /// อ้างอิงค่าจริงนี้ตรง ๆ ผ่าน `@testable import Runner` ได้ ไม่ต้อง hardcode
+  /// `30 * 60` ซ้ำในไฟล์เทส (ถ้าวันหนึ่งมีคนแก้ค่านี้ เทสที่ hardcode ไว้จะยังเขียว
+  /// ทั้งที่ทดสอบคนละค่า) — เท่ากับที่ฝั่ง Android เปิด `LONG_COOLDOWN_MILLIS` เป็น
+  /// `internal const val` ไว้แล้ว
+  static let proximityLongNotificationCooldownSeconds: TimeInterval = 30 * 60
+
+  /// suite ใหม่ของคูลดาวน์ 30 นาที — ชื่อนี้เลือกให้สมมาตรกับชื่อไฟล์ Android
+  /// (`notification_cooldown_v1`) ไม่ใช่ข้อบังคับจากที่ไหน (ADR-25 §4)
+  private static let proximityLongCooldownSuiteName = "beacon_kit_example.notification_cooldown_v1"
+
   /// เขียน log + ยิง notification ของ transition ชั้นที่ 2 จาก **โค้ด native ล้วน**
   ///
   /// เหตุผลเดียวกับ [recordRegionEvent] เป๊ะ: เส้นทางที่ ADR-21 มีอยู่เพื่อรองรับ
@@ -369,13 +386,23 @@ import beacon_kit_ios
     //    กี่ครั้ง" ที่ ADR-21 หัวข้อ 7 ข้อ 3 สั่งให้เก็บจึงไม่หายไปไหน
     guard event.from == nil || event.from == .far else { return }
 
+    // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§4/§4.1) — เช็ค**ก่อน**คูลดาวน์เดิม
+    //    60 วินาทีเพราะนี่คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ ใช้ [proximityCooldownKey]
+    //    เดิมซ้ำ (key ของคูลดาวน์เดิมตรงกับ key ของ `ProximityGate` อยู่แล้ว)
+    let longKey = Self.proximityCooldownKey(for: event)
+    let nowUptime = ProcessInfo.processInfo.systemUptime
+    if let sinceLastPostedMs = longCooldownBlockedSinceMs(key: longKey, nowUptime: nowUptime) {
+      recordNotificationSuppressed(event, sinceLastPostedMs: sinceLastPostedMs)
+      return
+    }
+
     // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown)
     //
     //    **cooldown เป็นระดับ key (บีคอนหนึ่งตัวในหนึ่ง region) 60 วินาที** เท่ากับ
     //    ฝั่ง Android เป๊ะ และ**รอดข้าม process** — จำเป็นบนเส้นทาง ADR-22 เพราะ
     //    โปรเซสที่ถูกปลุกเกิด/ตายได้หลายรอบในนาทีเดียว cooldown ที่อยู่ใน memory
     //    อย่างเดียวจะไม่กันอะไรเลย
-    guard consumeProximityCooldown(key: proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
+    guard consumeProximityCooldown(key: Self.proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
     else { return }
 
     // 5) **เขียนบรรทัด `notification` ก่อนยิงเสมอ** (ADR-20 หัวข้อ 7 / บทเรียนจาก
@@ -387,7 +414,36 @@ import beacon_kit_ios
     postNotification(
       title: "ใกล้ \(event.regionIdentifier) (\(event.to?.wireName ?? "n/a"))",
       body: "reason=\(event.reason.wireName) · beacon=\(event.beacon) · "
-        + "mode=\(event.mode.rawValue) · procUuid=\(BackgroundEvidenceLog.processId)"
+        + "mode=\(event.mode.rawValue) · procUuid=\(BackgroundEvidenceLog.processId)",
+      onDelivered: { [weak self] in
+        // จดเวลาคูลดาวน์ 30 นาทีเฉพาะตอนรู้ผลว่าไม่มี error เท่านั้น (ADR-25 §4.1)
+        self?.recordLongCooldownPosted(key: longKey, atUptime: nowUptime)
+      }
+    )
+  }
+
+  /// เขียนบรรทัดหลักฐานตอนติดคูลดาวน์ 30 นาที — **คอลัมน์ระบุบีคอนต้องตรงกับ
+  /// เส้นทางสำเร็จ** ([recordNotificationEvent]) ไม่ใช่แค่ `posted=false
+  /// reason=cooldown` ล้วน ๆ (แก้ตามรอบรีวิว 16 ก.ย. 2026) — ถ้าไม่มี `beacon=`
+  /// บรรทัด `reason=cooldown` หลายบรรทัดติดกันของคนละบีคอนจะอ่านเหมือนบั๊กยิงซ้ำ
+  /// เดียวกับที่ kdoc ของ [proximityRawSignalsSuffix] เตือนไว้ว่าเกิดจริงมาแล้ว
+  /// (ADR-21 หัวข้อ 7 ข้อ 1) — ใช้ [notificationColumns] ตัวเดียวกับ
+  /// [recordNotificationEvent] แทนการประกอบคอลัมน์ใหม่เอง ต่อท้ายด้วย
+  /// `posted=false reason=cooldown sinceLastPostedMs=<n>` เหมือนเดิม (ADR-25 §4)
+  private func recordNotificationSuppressed(
+    _ event: BeaconKitProximityChangedEvent,
+    sinceLastPostedMs: Int64
+  ) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "notification",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + Self.notificationColumns(event)
+          + " posted=false reason=cooldown sinceLastPostedMs=\(sinceLastPostedMs)"
+      )
     )
   }
 
@@ -411,13 +467,29 @@ import beacon_kit_ios
         regionIdentifier: event.regionIdentifier,
         conclusion: currentRunContext(),
         rawSignals: rawSignalSummary(receiverEntry: true)
-          + " bucket=\(event.to?.wireName ?? "n/a")"
-          + " from=\(event.from?.wireName ?? "none")"
-          + " beacon=\(event.beacon)"
-          + " mode=\(event.mode.rawValue)"
+          + Self.notificationColumns(event)
           + " posted=requested"
       )
     )
+  }
+
+  /// คอลัมน์ระบุบีคอนของบรรทัด `event=notification` — **แยกเป็น helper กลาง
+  /// เพื่อให้ [recordNotificationEvent] (เส้นทางสำเร็จ) กับ
+  /// [recordNotificationSuppressed] (เส้นทางติดคูลดาวน์) พิมพ์คอลัมน์เดียวกัน
+  /// เป๊ะเสมอ** — กันไม่ให้สองเส้นทางค่อย ๆ drift กันในอนาคต (แก้ตามรอบรีวิว
+  /// 16 ก.ย. 2026 ที่พบว่าบรรทัด `reason=cooldown` เดิมไม่มี `beacon=` เลย ทำให้
+  /// พิสูจน์เกณฑ์รับงานแบบรายบีคอนของ §12.6 จากไฟล์ตรง ๆ ไม่ได้)
+  ///
+  /// รูปร่างเดียวกับที่ [recordNotificationEvent] เขียนมาแต่แรก:
+  /// `bucket=<near|immediate|far|n/a> from=<bucket|none> beacon=<major>/<minor>
+  /// mode=<fg|bg>` — **ไม่ใช้ [proximityRawSignalsSuffix]** เพราะฟังก์ชันนั้นมี
+  /// `reason=`/`store=`/ตัวนับ range ที่เป็นคอลัมน์ของบรรทัด `event=proximity`
+  /// เท่านั้น ไม่ใช่ของบรรทัด `event=notification`
+  private static func notificationColumns(_ event: BeaconKitProximityChangedEvent) -> String {
+    return " bucket=\(event.to?.wireName ?? "n/a")"
+      + " from=\(event.from?.wireName ?? "none")"
+      + " beacon=\(event.beacon)"
+      + " mode=\(event.mode.rawValue)"
   }
 
   /// ส่วนต่อท้ายของคอลัมน์สัญญาณดิบสำหรับบรรทัด `event=proximity` — **pure function**
@@ -523,10 +595,37 @@ import beacon_kit_ios
   /// ผู้ใช้เห็นมี `beacon=<major>/<minor>` อยู่ด้วย — บีคอนคนละตัวจึงให้ข้อความคนละ
   /// ใบที่อ่านแล้วแยกออก ต่างจากฝั่ง Android ที่จงใจ**ไม่**ใส่ตัวแยกบีคอนลง key
   /// เพราะที่นั่นไม่มี major/minor รายเฟรมให้ใส่ในข้อความตั้งแต่แรก
-  private func proximityCooldownKey(for event: BeaconKitProximityChangedEvent) -> String {
+  ///
+  /// **`static` ไม่ใช่ instance method** (แก้ตามรอบรีวิว QA) — ฟังก์ชันนี้ไม่ใช้
+  /// `self` เลย (อ่านแค่ฟิลด์ของ `event` ที่รับเข้ามา) และ Swift `private` จำกัดแค่
+  /// ไฟล์เดียวกัน `@testable import` ไม่ทะลุ ทำให้ `RunnerTests` เรียกไม่ได้เลย —
+  /// เปลี่ยนเป็น `static` แบบ default access (internal) เหมือน
+  /// [longCooldownSinceLastPostedMillisOrNull] เพื่อให้เทสยืนยันรูปร่าง key และ
+  /// เคส "คนละ key ไม่กระทบกัน" ได้ตรง ๆ
+  ///
+  /// ⚠️ **`uuid.lowercased()` — แก้ตามรอบรีวิว QA 16 ก.ย. 2026** ฉบับก่อนหน้าใช้
+  /// `event.uuid ?? "-"` ตรง ๆ ไม่ผ่าน `.lowercased()` ซึ่ง**ไม่ตรงกับ key ของ
+  /// `ProximityGate` จริง** (`ProximityKeyCodec.key()` ใน
+  /// `packages/beacon_kit_ios/.../ProximityGate.swift` คืน
+  /// `"\(regionIdentifier)|\(uuid.lowercased())|\(major)|\(minor)"` — มี
+  /// `.lowercased()`) และไม่ตรงกับฝั่ง Android (`longCooldownKeyFor()`:
+  /// `event.uuid?.lowercase() ?: "-"`) — ข้อความ ADR-25 §4 ที่ว่าฟังก์ชันนี้ "ใช้
+  /// key เดิมซ้ำเพราะตรงกับ `ProximityGate` อยู่แล้ว" จึง**ไม่ตรงกับโค้ดจริงในจุด
+  /// นี้** (แจ้งให้แก้เอกสารแยกแล้ว) ถ้าตัวพิมพ์ของ `uuid` ต่างกันระหว่าง sighting
+  /// บีคอนตัวเดียวจะได้สอง key และคูลดาวน์จะเงียบล้มเหลวโดยไม่มีอะไรฟ้อง
+  ///
+  /// ⚠️ **ผลกระทบต่อคูลดาวน์เดิม 60 วินาทีที่ใช้ key ตัวนี้ร่วมกันอยู่แล้ว
+  /// (`consumeProximityCooldown`, suite `beacon_kit_example.proximity_cooldown`):
+  /// การแก้นี้เปลี่ยน key ของคูลดาวน์เดิมไปด้วย** ค่าที่เก็บไว้ใน suite เดิมของ
+  /// เครื่องที่อัปเกรดจะกลายเป็น key ที่ไม่มีใครอ่านอีก (`uuid` ตัวพิมพ์ผสมเดิมค้างอยู่
+  /// แต่การอ่านครั้งถัดไปหา key ตัวพิมพ์เล็กแทน) — ผลจริงที่ยอมรับ: **อาจได้
+  /// notification เกินมาหนึ่งใบต่อบีคอนตอนอัปเกรดครั้งเดียว** เพราะคูลดาวน์เดิม
+  /// "มองไม่เห็น" ค่าที่เคยจดไว้ก่อนแก้ ไม่ใช่บั๊กที่ต้องแก้เพิ่ม เป็นความเสี่ยงระดับ
+  /// POC ที่ยอมรับได้เหมือนความเสี่ยงเรื่อง reboot/เครื่องหลับที่ยอมรับไว้แล้วในไฟล์นี้
+  static func proximityCooldownKey(for event: BeaconKitProximityChangedEvent) -> String {
     return [
       event.regionIdentifier,
-      event.uuid ?? "-",
+      event.uuid?.lowercased() ?? "-",
       event.major.map(String.init) ?? "-",
       event.minor.map(String.init) ?? "-",
     ].joined(separator: "|")
@@ -555,6 +654,58 @@ import beacon_kit_ios
     }
     defaults.set(Double(nowMillis), forKey: key)
     return true
+  }
+
+  /// เรียก**หลังรู้ผลว่าไม่มี error จาก `UNUserNotificationCenter.add` แล้วเท่านั้น**
+  /// — ไม่ใช่ตอนผ่านประตู 30 นาที (ADR-25 §4.1)
+  private func recordLongCooldownPosted(key: String, atUptime: TimeInterval) {
+    guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return }
+    defaults.set(atUptime, forKey: key)
+  }
+
+  /// **pure function ล้วน ไม่แตะ `UserDefaults` เลย** — ตรรกะตัดสินใจของคูลดาวน์
+  /// 30 นาทีแยกออกจาก I/O เดียวกับที่ฝั่ง Android แยก
+  /// `longCooldownSinceLastPostedMillisOrNull` ออกจาก `SharedPreferences`
+  /// (ADR-25 §4.1, แก้ตามรอบรีวิว 16 ก.ย. 2026) — แพทเทิร์นเดียวกับ `runContext`/
+  /// `proximityRawSignalsSuffix` ในไฟล์นี้ที่แยกเป็น pure `static func` ให้
+  /// `RunnerTests` เรียกตรง ๆ ได้ผ่าน `@testable import Runner` โดยไม่ต้องมี
+  /// `UserDefaults` จริง
+  ///
+  /// `nil` เมื่อไม่ติดคูลดาวน์ 30 นาที (ยิงได้) · ค่าที่ไม่ใช่ `nil` คือจำนวน
+  /// มิลลิวินาทีตั้งแต่โพสต์สำเร็จครั้งล่าสุด
+  ///
+  /// ใช้ `ProcessInfo.processInfo.systemUptime` ไม่ใช่ wall clock (ADR-25 §4):
+  /// ตัวเดียวที่ใกล้เคียง `elapsedRealtime` ที่สุดบน iOS (นับจาก boot ไม่กระโดด
+  /// ตาม NTP) ⚠️ **ไม่นับเวลาที่เครื่องหลับ** ต่างจาก `SystemClock.elapsedRealtime()`
+  /// ของ Android — คูลดาวน์นี้อาจนับสั้นกว่าที่ตั้งใจจริงถ้าเครื่องหลับระหว่างนั้น
+  /// (ยอมรับเป็นความเสี่ยงระดับ POC เหมือนที่ Android ยอมรับเรื่อง reboot รีเซ็ตค่า)
+  ///
+  /// - Parameters:
+  ///   - lastPostedUptimeOrZero: `systemUptime` ตอนโพสต์คีย์นี้สำเร็จครั้งล่าสุด
+  ///     · `0` = ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (ค่าเดียวกับ default ของ
+  ///     `UserDefaults.double(forKey:)` ตรง ๆ จึงไม่ต้องมี sentinel แยกต่างหาก)
+  ///   - nowUptime: `ProcessInfo.processInfo.systemUptime` ปัจจุบัน
+  static func longCooldownSinceLastPostedMillisOrNull(
+    lastPostedUptimeOrZero: TimeInterval,
+    nowUptime: TimeInterval
+  ) -> Int64? {
+    if lastPostedUptimeOrZero == 0 { return nil }  // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+    if lastPostedUptimeOrZero > nowUptime { return nil }  // reboot แล้ว (systemUptime รีเซ็ต)
+    let sinceSeconds = nowUptime - lastPostedUptimeOrZero
+    return sinceSeconds < Self.proximityLongNotificationCooldownSeconds
+      ? Int64(sinceSeconds * 1000) : nil
+  }
+
+  /// ชั้น I/O ที่บางที่สุด — แค่ **"อ่านค่าของ key"** จาก `UserDefaults` แล้วส่งต่อให้
+  /// [longCooldownSinceLastPostedMillisOrNull] (pure) ตัดสินใจทั้งหมด (ADR-25
+  /// §4.1) ไม่มีตรรกะเทียบเวลาอยู่ในฟังก์ชันนี้เลยแม้แต่บรรทัดเดียว — **อ่านอย่างเดียว
+  /// ไม่จด** แยกจาก [recordLongCooldownPosted]
+  private func longCooldownBlockedSinceMs(key: String, nowUptime: TimeInterval) -> Int64? {
+    guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
+    return Self.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: defaults.double(forKey: key),
+      nowUptime: nowUptime
+    )
   }
 
   /// **ตรรกะการตัดสินล้วน (pure)** — แยกออกจาก `currentRunContext()` เพื่อให้
@@ -630,7 +781,16 @@ import beacon_kit_ios
       + "state=\(Self.stateString(UIApplication.shared.applicationState))"
   }
 
-  private func postNotification(title: String, body: String) {
+  /// - Parameter onDelivered: เรียกเฉพาะตอน**ไม่มี error** จาก
+  ///   `UNUserNotificationCenter.add` (ADR-25 §4.1) — สัญญาณที่ดีที่สุดที่มีคือ
+  ///   "ฝั่งเราส่ง request ให้ระบบแล้วไม่มี error กลับมาทันที" (ยังไม่ยืนยันว่า
+  ///   ผู้ใช้เห็น เหมือนกับที่ `posted=requested` เตือนไว้อยู่แล้ว) ค่า default
+  ///   `nil` ทำให้ผู้เรียกเดิมที่ไม่เกี่ยวกับคูลดาวน์นี้ไม่ต้องแก้เลยแม้แต่บรรทัดเดียว
+  private func postNotification(
+    title: String,
+    body: String,
+    onDelivered: (() -> Void)? = nil
+  ) {
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body
@@ -644,11 +804,14 @@ import beacon_kit_ios
         trigger: nil
       )
     ) { error in
+      guard let error = error else {
+        onDelivered?()  // เรียกเฉพาะตอนไม่มี error — ADR-25 §4.1
+        return
+      }
       // เขียนบรรทัดที่สอง **เฉพาะตอนล้มเหลว** — เส้นทางสำเร็จมีบรรทัด
       // `posted=requested` อยู่แล้ว การเขียนซ้ำตอนสำเร็จจะทำให้ไฟล์หลักฐานยาวขึ้น
       // เท่าตัวโดยไม่เพิ่มข้อมูล · callback นี้อาจ**ไม่มาถึงเลย**ถ้าระบบ suspend
       // โปรเซสก่อน ซึ่งเป็นเหตุผลที่บรรทัดแรกต้องถูกเขียนก่อนยิงเสมอ
-      guard let error = error else { return }
       BackgroundEvidenceLog.shared.append(
         line: BackgroundEvidenceLog.line(
           timestamp: Date(),

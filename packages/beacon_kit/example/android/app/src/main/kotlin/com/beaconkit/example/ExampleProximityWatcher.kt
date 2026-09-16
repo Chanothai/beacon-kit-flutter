@@ -1,6 +1,7 @@
 package com.beaconkit.example
 
 import android.content.Context
+import android.os.SystemClock
 import com.bigc.beacon_kit_android.BackgroundProximityMonitor
 import com.bigc.beacon_kit_android.ProximityBucket
 import com.bigc.beacon_kit_android.ProximityChangedEvent
@@ -36,6 +37,19 @@ object ExampleProximityWatcher {
     private const val NOTIFICATION_COOLDOWN_MILLIS = 60_000L
 
     private const val COOLDOWN_PREFS = "example.proximity_notification_cooldown"
+
+    /**
+     * คูลดาวน์ **ที่สอง** ต่อ key — 30 นาที ซ้อนอยู่**เหนือ** [NOTIFICATION_COOLDOWN_MILLIS]
+     * เดิม (ไม่ได้แทนที่) เก็บลง store คนละไฟล์กับทุก store ที่เส้นทางล้าง state
+     * (`ProximityGateStore`, `BackgroundRegionStore`) แก้ไขอยู่โดยตั้งใจ — ตอบปัญหา
+     * ของ §12.6.1: state ที่ถูกล้างทำให้ transition แรกดูเหมือนเดินข้ามขอบใหม่
+     * (ADR-25 §2) **ค่า 30 นาที: เลือกจากการอ่าน §12.6 เท่านั้น ยังไม่ calibrate
+     * กับข้อมูลจริง** (ADR-25 §2)
+     */
+    internal const val LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
+
+    /** ไฟล์ prefs ใหม่ แยกจากทุก store เดิม (ADR-25 §3) */
+    private const val LONG_COOLDOWN_PREFS = "notification_cooldown_v1"
 
     /**
      * ตั้งผู้สังเกตการณ์ — ต้องเรียกจาก `Application.onCreate()` เท่านั้น (จุดเดียว
@@ -103,12 +117,32 @@ object ExampleProximityWatcher {
         val from = event.from
         if (from != null && from != ProximityBucket.FAR) return
 
-        // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown)
+        // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§3/§3.1) — เช็ค**ก่อน**คูลดาวน์
+        // เดิม 60 วินาทีเพราะนี่คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ (คูลดาวน์เดิม
+        // มักหมดอายุไปแล้วก่อนรอบล้าง-นับใหม่ถัดไปเสมอ) — `nowElapsed` อ่านครั้ง
+        // เดียวตอนต้นแล้วใช้ซ้ำตอนจด เพราะทั้งฟังก์ชันเป็น synchronous call เดียว
+        val longKey = longCooldownKeyFor(event)
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val blockedSince = longCooldownSinceLastPostedOrNull(context, longKey, nowElapsed)
+        if (blockedSince != null) {
+            ExampleNotifications.recordSuppressed(
+                context = context,
+                regionIdentifier = event.regionIdentifier,
+                beacon = beaconField(event),
+                mac = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
+                layer = ExampleNotifications.LAYER_PROXIMITY,
+                reason = "cooldown",
+                extra = "sinceLastPostedMs=$blockedSince",
+            )
+            return
+        }
+
+        // 4) แล้วค่อย notification (ถ้าไม่ติด cooldown เดิม 60 วินาที)
         val key = cooldownKeyFor(event)
         if (!consumeCooldown(context, key, event.timestampMillis)) return
 
         val bucket = to.wireName
-        ExampleNotifications.post(
+        val posted = ExampleNotifications.post(
             context = context,
             title = "ใกล้ ${event.regionIdentifier} · จุด ${beaconField(event)} ($bucket)",
             body = "reason=${event.reason.wireName} " +
@@ -125,6 +159,13 @@ object ExampleProximityWatcher {
             mac = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
             layer = ExampleNotifications.LAYER_PROXIMITY,
         )
+        // จดเวลาคูลดาวน์ 30 นาทีก็ต่อเมื่อ `post()` ยืนยันว่าโพสต์สำเร็จจริง
+        // (`reason == granted`) เท่านั้น (ADR-25 §3.1) — ถ้า `false` (ติด
+        // permissionDenied/blockedByUser/channelBlocked) ไม่จด ครั้งถัดไปจะเช็ค
+        // ใหม่ทุกครั้ง ไม่ใช่ค้างเงียบ 30 นาทีจากการ "โพสต์" ที่ไม่มีใบไหนถึงผู้ใช้จริง
+        if (posted) {
+            recordLongCooldownPosted(context, longKey, nowElapsed)
+        }
     }
 
     /**
@@ -186,6 +227,9 @@ object ExampleProximityWatcher {
         // มากกว่า 0 เพื่อให้อ่านออกว่า "ถามแล้วไม่มีอะไรถูกทิ้ง" ต่างจาก "ไม่มี
         // คอลัมน์นี้เพราะเป็น log รุ่นเก่า"
         append(" droppedNoIdentity=${event.droppedNoIdentityCount}")
+        // มีค่าเฉพาะบรรทัด `reason=stale` (ADR-25 §5) — `n/a` เสมอสำหรับ transition
+        // อื่นตามธรรมเนียมเดิมของไฟล์นี้ที่พิมพ์ `n/a` แทนการปล่อยว่าง
+        append(" sinceLastSeenMs=${event.sinceLastSeenMs ?: "n/a"}")
     }
 
     /**
@@ -280,5 +324,84 @@ object ExampleProximityWatcher {
         }
         prefs.edit().putLong(key, nowMillis).commit()
         return true
+    }
+
+    /**
+     * key ของคูลดาวน์ 30 นาที — **ต้องตรงกับ key ที่ `ProximityGateStore`/
+     * `ProximityGate` ใช้จริง** (`region|uuid|major|minor`, ดู `proximityKeyFor()`
+     * ใน `BeaconScanReceiver.kt`) เพราะนี่คือหัวใจของ ADR-25 §2: ถ้าคูลดาวน์ตัวนี้
+     * ใช้ key คนละแบบกับ gate จะกันสแปมจากการล้าง state ไม่ได้ตรงจุด
+     *
+     * ประกอบแบบทนทานต่อ null ตามลาย [cooldownKeyFor] ข้างบน (ไม่เรียก
+     * `proximityKeyFor()` ตรง ๆ เพราะฟังก์ชันนั้นรับ non-null ล้วน) — `uuid`
+     * เป็น `lowercase()` ให้ตรงกับที่ gate ใช้เทียบ
+     */
+    internal fun longCooldownKeyFor(event: ProximityChangedEvent): String =
+        listOf(
+            event.regionIdentifier,
+            event.uuid?.lowercase() ?: "-",
+            event.major?.toString() ?: "-",
+            event.minor?.toString() ?: "-",
+        ).joinToString("|")
+
+    /**
+     * **pure function ล้วน ไม่รับ `Context` เลย** — ตรรกะตัดสินใจของคูลดาวน์
+     * 30 นาทีแยกออกจาก I/O ของ `SharedPreferences` ตามแพทเทิร์นเดียวกับที่
+     * `ProximityGate` แยกออกจาก `ProximityGateStore` (แก้ตามรอบรีวิว 16 ก.ย.
+     * 2026, ADR-25 §3.1): โมดูล `app` มี `testImplementation` แค่ `kotlin-test`
+     * ตัวเดียว ไม่มี mockito/Robolectric ให้ mock `Context`/`SharedPreferences`
+     * ได้เลย ถ้าตรรกะเทียบเวลายังปนอยู่กับการเรียก `getSharedPreferences()`
+     * ตรง ๆ จะเขียน unit test คลุมไม่ได้เลยโดยไม่เพิ่ม dependency ในไฟล์ build
+     * (ซึ่งงานนี้ห้ามแตะ) — แยกเป็นฟังก์ชันนี้แล้วเทสต์เรียกตรง ๆ ได้ทันที
+     *
+     * `null` เมื่อไม่ติดคูลดาวน์ 30 นาที (ยิงได้) · ค่าที่ไม่ใช่ `null` คือจำนวน
+     * มิลลิวินาทีตั้งแต่โพสต์สำเร็จครั้งล่าสุด (ใช้ต่อท้ายบรรทัดหลักฐาน
+     * `sinceLastPostedMs=`) — **อ่านอย่างเดียว ไม่จด** แยกจาก [recordLongCooldownPosted]
+     * ตามที่ ADR-25 §3.1 บังคับ (ตรวจกับจดต้องเป็นคนละฟังก์ชัน)
+     *
+     * ใช้ [SystemClock.elapsedRealtime] ไม่ใช่ wall clock (ADR-25 §3): ไม่กระโดด
+     * ตามการซิงก์เวลาเครือข่าย/ผู้ใช้ปรับนาฬิกาเอง **ข้อแลก:** รีเซ็ตทุกครั้งที่
+     * เครื่อง reboot — ถ้าค่าที่เก็บไว้มากกว่าค่าปัจจุบัน (reboot ระหว่างนั้น) ถือว่า
+     * ไม่อยู่ใน cooldown
+     *
+     * @param lastPostedElapsedMillisOrZero เวลา ([SystemClock.elapsedRealtime])
+     *   ที่โพสต์คีย์นี้สำเร็จครั้งล่าสุด · `0L` = ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+     *   (ค่าเดียวกับ default ของ `SharedPreferences.getLong(key, 0L)` ตรง ๆ
+     *   จึงไม่ต้องมี sentinel แยกต่างหาก)
+     * @param nowElapsedMillis เวลาปัจจุบัน ([SystemClock.elapsedRealtime])
+     */
+    internal fun longCooldownSinceLastPostedMillisOrNull(
+        lastPostedElapsedMillisOrZero: Long,
+        nowElapsedMillis: Long,
+    ): Long? {
+        if (lastPostedElapsedMillisOrZero == 0L) return null // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+        if (lastPostedElapsedMillisOrZero > nowElapsedMillis) return null // reboot แล้ว (elapsedRealtime รีเซ็ต)
+        val since = nowElapsedMillis - lastPostedElapsedMillisOrZero
+        return if (since < LONG_COOLDOWN_MILLIS) since else null
+    }
+
+    /**
+     * ชั้น I/O ที่บางที่สุด — แค่ **"อ่านค่าของ key"** จาก `SharedPreferences` แล้ว
+     * ส่งต่อให้ [longCooldownSinceLastPostedMillisOrNull] (pure) ตัดสินใจทั้งหมด
+     * (ADR-25 §3.1) ไม่มีตรรกะเทียบเวลาอยู่ในฟังก์ชันนี้เลยแม้แต่บรรทัดเดียว
+     */
+    private fun longCooldownSinceLastPostedOrNull(
+        context: Context,
+        key: String,
+        nowElapsed: Long,
+    ): Long? {
+        val prefs = context.getSharedPreferences(LONG_COOLDOWN_PREFS, Context.MODE_PRIVATE)
+        return longCooldownSinceLastPostedMillisOrNull(prefs.getLong(key, 0L), nowElapsed)
+    }
+
+    /**
+     * เรียก**หลังรู้ผลว่า `ExampleNotifications.post()` คืน `true` แล้วเท่านั้น**
+     * — ไม่ใช่ตอนผ่านประตู 30 นาที (ADR-25 §3.1) `commit()` ไม่ใช่ `apply()` ด้วย
+     * เหตุผลเดียวกับ [consumeCooldown]: ต้องรอด process ที่ถูกฆ่าทันทีหลัง
+     * `onReceive()` คืนค่า
+     */
+    private fun recordLongCooldownPosted(context: Context, key: String, nowElapsed: Long) {
+        val prefs = context.getSharedPreferences(LONG_COOLDOWN_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putLong(key, nowElapsed).commit()
     }
 }

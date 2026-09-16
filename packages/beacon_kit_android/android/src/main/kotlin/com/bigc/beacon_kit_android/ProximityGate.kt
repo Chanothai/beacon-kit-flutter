@@ -83,6 +83,14 @@ data class ProximityTransition(
      * reason เป็น [ProximityTransitionReason.STALE] (ไม่มีหน้าต่างให้คิดแล้ว)
      */
     val medianMeters: Double?,
+    /**
+     * จำนวนมิลลิวินาทีตั้งแต่เห็นบีคอนตัวนี้ครั้งล่าสุด (`now - lastSampleAt`) —
+     * มีค่าเฉพาะตอน [reason] เป็น [ProximityTransitionReason.STALE] เท่านั้น
+     * (คำนวณใน [ProximityGate.sweepStale]) transition อื่นจาก [ProximityGate.push]
+     * ปล่อยเป็น `null` ตาม default เพราะฟิลด์นี้มีความหมายเฉพาะตอน "เงียบไปแล้วกี่
+     * มิลลิวินาที" เท่านั้น (ADR-25 §5)
+     */
+    val sinceLastSeenMs: Long? = null,
 )
 
 /**
@@ -346,6 +354,9 @@ class ProximityGate(
                         to = null,
                         reason = ProximityTransitionReason.STALE,
                         medianMeters = null,
+                        // `state.lastSampleAt` การันตี non-null ที่นี่เพราะ
+                        // `isStale()` ข้างบนคืน `true` แล้ว (ดู kdoc ของ [isStale])
+                        sinceLastSeenMs = state.lastSampleAt?.let { now - it },
                     ),
                 )
             }
