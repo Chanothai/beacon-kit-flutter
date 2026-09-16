@@ -5344,3 +5344,490 @@ ADR-19 หัวข้อ 6(ข)/(ง) · หัวข้อ 8 — ADR-20 หั
 บรรทัด `notification`) — **ADR-21 หัวข้อ 1 · 2 · 4.1 · 7 ข้อ 4 · 8(ข)** —
 `docs/sources/apple_proximity_ranging.md` หัวข้อ 5-10 —
 **`docs/test-data/2026-09-10_ios_proximity_counters.log` (ที่มาของค่าทั้ง 4 ในหัวข้อ 2)**
+
+## ADR-25: การกันแจ้งเตือนซ้ำเป็นนโยบายของแอป — SDK ส่งเฉพาะ transition (เพิ่ม 16 ก.ย. 2026)
+
+> **สถานะ: proposed — ยังไม่ตัดสิน** — เอกสารนี้เสนอการออกแบบคูลดาวน์ระดับแอปพร้อม
+> รายละเอียดที่พอ implement ได้ แต่**ยังไม่ได้แก้โค้ดใด ๆ สักไฟล์** และยังไม่ผ่านการ
+> อนุมัติให้เริ่ม implement — ต้องมีการตัดสินใจแยกอีกรอบก่อน (ดูหัวข้อ 6 "สิ่งที่ยัง
+> ไม่ตัดสิน")
+>
+> **ขอบเขต:** notification **ชั้นที่ 2 เท่านั้น** (proximity — ADR-20/ADR-21/ADR-22)
+> ทั้งฝั่ง Android และ iOS · **ไม่แตะชั้นที่ 1** (`enter`/`exit`, ADR-14/ADR-16/ADR-17)
+> · เป็นนโยบายของ **example app** เท่านั้น ไม่ใช่ API ของ `beacon_kit` · **ห้ามแตะ
+> `staleAfterMillis` และห้ามแตะ `BackgroundRegionMonitor.kt`**
+
+### 1. ปัญหา — อ้างตัวเลขจาก §12.6/§12.6.1 เท่านั้น ไม่มีตัวเลขใหม่ในหัวข้อนี้
+
+16 ก.ย. 2026 เครื่องวางนิ่งบนโต๊ะ 68.3 นาที ได้ notification ชั้นที่ 2 **26 ใบใน
+64.9 นาที** (§12.6 หัวข้อ 1) — **24 จาก 26 ใบ** มาจาก state ของ `ProximityGate` ที่
+ถูกล้างแล้วนับ transition แรกใหม่เป็น `near from=none` (§12.6 หัวข้อ 2-3): **20 ใบจาก
+`reason=stale` + 2 ใบจาก `reconcile()` + 2 ใบจากนาฬิกาปลุก** เหลือ **2 ใบ** ที่เป็นการ
+เดินข้ามขอบ `far→near` จริง กลุ่มควบคุม `9902/2` (SLOT1 ไม่เคยเปิด) ได้ `stale` 11 ครั้ง
+และ notification 11 ใบ ซึ่งอยู่ในระดับเดียวกับ `9903/3` (12/15) — §12.6.1 จึงสรุปว่า
+**สาเหตุไม่ใช่การตั้งค่าบีคอนและไม่ใช่ SDK แต่เป็นรอบสแกนฝั่งโทรศัพท์ที่ทำให้ state
+ถูกล้างบ่อยกว่าที่ตัวกรอง notification เดิม (cooldown 60 วินาที/key ของ ADR-20 §6 /
+ADR-22) รับมือได้**
+
+**คูลดาวน์ 60 วินาที/key ที่มีอยู่แล้วพิสูจน์แล้วว่าไม่พอ** (§12.6.1 ข้อ 1: "26 ใบใน
+68 นาทีผ่านคูลดาวน์นั้นมาได้ทั้งหมด") เพราะรอบเฉลี่ยของการล้าง-นับใหม่ (~2.60 นาที
+ต่อใบ ตาม §12.6 หัวข้อ 1) ยาวกว่า 60 วินาทีอยู่แล้ว — คูลดาวน์เดิมจึงหมดอายุไปก่อน
+รอบล้างครั้งถัดไปเสมอ **การขยับ `staleAfterMillis` ไม่ใช่คำตอบ** (§12.6.1 ข้อ 2: แลก
+กับ §7.1 ที่ห้ามขยับค่านี้เดี่ยว ๆ และตอนนี้ยังเลือกค่าไม่ได้เพราะไม่มี `sinceLastSeenMs`
+บนบรรทัด `stale` เลย — ดูหัวข้อ 5 ของ ADR นี้)
+
+### 2. ทางแก้ — คูลดาวน์ที่สอง อายุยาวขึ้น อยู่คนละ store จากสิ่งที่ถูกล้าง
+
+**หลักการ:** เพิ่มคูลดาวน์ **ที่สอง** ต่อ key (30 นาที) ซ้อนอยู่**เหนือ**คูลดาวน์เดิม
+(60 วินาที/key ของ ADR-20 §6/ADR-22 — **ไม่ได้แทนที่**) — เก็บลง store คนละไฟล์กับทุก
+store ที่เส้นทางล้าง state (`ProximityGateStore`, `BackgroundRegionStore`) แก้ไขอยู่
+โดยตั้งใจ เพราะ**นี่คือหัวใจของ §12.6.1**: ปัญหาคือ state ที่ถูกล้างทำให้ transition
+แรกดูเหมือนเดินข้ามขอบใหม่ ถ้าคูลดาวน์ตัวที่กันเรื่องนี้ไปเก็บอยู่ใน store เดียวกับสิ่ง
+ที่ถูกล้าง มันจะถูกล้างไปด้วยและไม่มีทางแก้ปัญหานี้ได้เลย
+
+**ค่า 30 นาที: เลือกจากการอ่าน §12.6 เท่านั้น ยังไม่ได้ calibrate กับข้อมูลจริง** —
+ตรรกะเลือกคือ "นานกว่ารอบล้าง-นับใหม่ที่สังเกตได้ (~2.6 นาที/ใบ) มากพอที่จะกันสแปม
+จากกลไกนี้ได้ชัดเจน" ไม่ใช่ค่าที่คำนวณจากการกระจายของช่วงเงียบจริง (ซึ่งยังไม่มีข้อมูล
+— ดูหัวข้อ 5) **จะ calibrate ค่านี้ได้ก็ต่อเมื่อมีข้อมูล `sinceLastSeenMs` จากบรรทัด
+`reason=stale` ของรอบเดินจริงอย่างน้อยหนึ่งคืน** (เครื่องมือของหัวข้อ 5 ของ ADR นี้คือ
+สิ่งที่ต้องมีก่อน) — ก่อนหน้านั้นค่านี้เป็น POC placeholder เหมือนค่าคูลดาวน์ 60 วินาที
+เดิม (ADR-20 §6: "เป็นค่าสำหรับ demo ล้วน ๆ ไม่ใช่ค่าที่ calibrate อะไร")
+
+### 3. ออกแบบฝั่ง Android — `ExampleProximityWatcher.kt`
+
+ไฟล์จริง: `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/ExampleProximityWatcher.kt`
+(จุดโพสต์ชั้นที่ 2 เดี่ยวจุดเดียว — `onProximityChanged()` บรรทัด 51-128)
+
+**คูลดาวน์ที่มีอยู่แล้วในไฟล์นี้ (ไม่แตะ — อ้างเป็น baseline):**
+
+| | ค่าเดิม (ADR-20 §6/§8) | **ค่าใหม่ของ ADR นี้** |
+|---|---|---|
+| อายุ | 60 วินาที (`NOTIFICATION_COOLDOWN_MILLIS`, บรรทัด 36) | **30 นาที** |
+| key | `regionIdentifier\|major\|minor` — **ไม่มี uuid** (`cooldownKeyFor`, บรรทัด 253-258) | `regionIdentifier\|uuid\|major\|minor` — **มี uuid ตรงกับ key ของ `ProximityGate`** |
+| store | `SharedPreferences("example.proximity_notification_cooldown")` (บรรทัด 38) | `SharedPreferences("notification_cooldown_v1")` — **ไฟล์ใหม่ แยกจากทุก store เดิม** |
+| นาฬิกา | wall clock (`event.timestampMillis`, บรรทัด 275) | **`SystemClock.elapsedRealtime()`** |
+| commit | `commit()` (บรรทัด 281) | `commit()` เหมือนกัน (เหตุผลเดียวกับ §7 kdoc ของ `ProximityGateStore`: ต้องรอด process ที่ถูกฆ่าทันทีหลัง `onReceive()` คืนค่า) |
+
+**key ของคูลดาวน์ใหม่ต้องเป็น key เดียวกับที่ `ProximityGateStore`/`ProximityGate` ใช้จริง**
+— คัดจากโค้ดตรง ๆ ไม่เดา: `BeaconScanReceiver.kt:302-303`
+
+```kotlin
+internal fun proximityKeyFor(regionIdentifier: String, uuid: String, major: Int, minor: Int): String =
+    "$regionIdentifier|${uuid.lowercase()}|$major|$minor"
+```
+
+`ProximityChangedEvent.uuid/major/minor` เป็น `String?`/`Int?/Int?` (นัลได้ในทางทฤษฎี
+— ดู kdoc ของฟิลด์นั้นใน `BackgroundProximityMonitor.kt:17-34`) จึงประกอบ key ของ
+คูลดาวน์ใหม่แบบทนทานต่อ null ตามลาย `cooldownKeyFor` เดิมในไฟล์เดียวกัน (บรรทัด
+253-258) แทนการเรียก `proximityKeyFor()` ตรง ๆ ซึ่งรับ non-null ล้วน:
+
+```kotlin
+private fun longCooldownKeyFor(event: ProximityChangedEvent): String =
+    listOf(
+        event.regionIdentifier,
+        event.uuid?.lowercase() ?: "-",
+        event.major?.toString() ?: "-",
+        event.minor?.toString() ?: "-",
+    ).joinToString("|")
+```
+
+**ทำไม `SystemClock.elapsedRealtime()` ไม่ใช่ wall clock** — เหตุผลเดียวกับที่
+`BackgroundRegionStore`/`ProximityGateStore` ใช้นาฬิกานี้อยู่แล้วทุกที่ในโค้ดเบสนี้:
+ไม่กระโดดตามการซิงก์เวลาเครือข่าย/ผู้ใช้ปรับนาฬิกาเอง ซึ่งสำคัญกว่าคูลดาวน์ 60 วินาที
+เดิมมาก เพราะหน้าต่าง 30 นาทีมีโอกาสคาบเกี่ยวกับการซิงก์เวลาอัตโนมัติของเครื่องสูงกว่า
+หน้าต่าง 60 วินาทีมาก **ข้อแลก:** ค่าที่เก็บไว้รีเซ็ตทุกครั้งที่เครื่อง reboot (`elapsedRealtime`
+นับจาก boot ไม่ใช่จาก epoch) — **ถ้าค่าที่เก็บไว้มากกว่าค่าปัจจุบัน (เครื่อง reboot ระหว่างนั้น)
+ให้ถือว่าไม่อยู่ใน cooldown** (เขียนเงื่อนไขนี้ตรง ๆ ตามที่โจทย์กำหนด — ผลคือ reboot ทำให้
+คูลดาวน์นี้รีเซ็ตเงียบ ๆ เป็นความเสี่ยงที่ยอมรับได้ในระดับ POC เพราะ reboot ไม่ใช่เหตุการณ์
+ที่เกิดถี่เท่ากับ process kill ของ MIUI ที่ ADR-20 ทั้งหัวข้อมีไว้รองรับ)
+
+### 3.1 ⚠️ แก้ไขจากรอบรีวิว 16 ก.ย. 2026 — ต้องจดเวลาตอน**โพสต์สำเร็จจริง** ไม่ใช่
+ตอน**ผ่านประตู 30 นาที**
+
+ฉบับแรกของหัวข้อนี้ให้ `consumeLongCooldown()` เขียน `elapsedRealtime()` ลง prefs
+**ทันทีที่ผ่านประตู** แล้วคืน `Allowed` — แต่หลังจากนั้นโค้ดยังต้องผ่านคูลดาวน์เดิม 60
+วินาที (ซึ่ง `return` ทิ้งเงียบ ๆ ได้โดยไม่มีบรรทัดหลักฐาน) และยังต้องผ่าน
+`deliveryReason()` ภายใน `ExampleNotifications.post()` ที่ตอบ `permissionDenied`/
+`blockedByUser`/`channelBlocked` ได้อีก **ผลคือค่าที่เก็บไว้คือ "เวลาที่ผ่านประตู 30
+นาทีล่าสุด" ไม่ใช่ "เวลาที่โพสต์ล่าสุด" ตามที่หัวข้อ 2 ตั้งใจ** — เปิดเคสที่เครื่องเงียบ
+30 นาทีทั้งที่ไม่มี notification ใบไหนถึงผู้ใช้เลย (เช่นตอน `blockedByUser`/`channelBlocked`
+ซึ่งเป็นสภาพที่เครื่องทดสอบเคยเจอจริง — ดู `docs/test-checklists/android_background_scanning.md`
+หัวข้อ "notification ถูกระบบบล็อก") **ต้องแยก "ตรวจ" ออกจาก "จด" ให้เป็นคนละฟังก์ชัน**
+
+**สิ่งที่ใช้ตัดสิน "โพสต์สำเร็จ" ได้ — ตรวจจากโค้ดจริง:** `ExampleNotifications.post()`
+(`ExampleNotifications.kt:112-161`) **คืนค่า `Unit` ในปัจจุบัน ไม่มีอะไรให้ผู้เรียกใช้
+ตัดสินผลได้เลย** แต่ภายในฟังก์ชันคำนวณ `val reason = deliveryReason(context)` ไว้แล้ว
+ที่บรรทัด 124 (ค่าที่เป็นไปได้คือ `granted`/`permissionDenied`/`blockedByUser`/
+`channelBlocked` ตามหัวข้อด้านล่าง) ก่อนเขียน log และเรียก `notify()` เสมอไม่ว่า
+`reason` จะเป็นอะไร (ฟังก์ชันไม่เคยข้าม `notify()` เพราะเหตุนี้) — **ทางแก้ที่ไม่เปลี่ยน
+พฤติกรรมเดิมของ `post()` แม้แต่จุดเดียว:** เปลี่ยน signature จาก `fun post(...)` (คืน
+`Unit`) เป็น `fun post(...): Boolean` แล้วคืน `reason == REASON_GRANTED` เป็นค่าสุดท้าย
+ของ `runCatching { ... }` (exception ใดๆ ที่เกิดในบล็อกให้ถือว่าไม่สำเร็จผ่าน
+`.getOrDefault(false)`) — ลำดับ/เนื้อการทำงานภายในฟังก์ชันไม่เปลี่ยนแม้แต่บรรทัดเดียว
+มีแค่ค่าที่ส่งกลับออกไปเพิ่มขึ้นมา **ปลอดภัยกับผู้เรียกเดิมทั้งสองจุดที่ไม่รับค่ากลับอยู่
+แล้ว** (`MainActivity.kt:134`, `ExampleApplication.kt:81` — ทั้งคู่เรียกแบบ statement
+เดี่ยว ไม่ใช้ return value, Kotlin ไม่บังคับใช้ผลลัพธ์ที่ไม่ใช่ `Unit`)
+
+```kotlin
+private fun longCooldownSinceLastPostedOrNull(context: Context, key: String, nowElapsed: Long): Long? {
+    val prefs = context.getSharedPreferences(LONG_COOLDOWN_PREFS, Context.MODE_PRIVATE)
+    val lastElapsed = prefs.getLong(key, 0L)
+    if (lastElapsed == 0L) return null           // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+    if (lastElapsed > nowElapsed) return null     // เครื่อง reboot แล้ว (elapsedRealtime รีเซ็ต)
+    val since = nowElapsed - lastElapsed
+    return if (since < LONG_COOLDOWN_MILLIS) since else null
+}
+
+/** เรียก**หลังรู้ผลว่า `ExampleNotifications.post()` คืน `true` แล้วเท่านั้น** — ไม่ใช่ตอนผ่านประตู */
+private fun recordLongCooldownPosted(context: Context, key: String, nowElapsed: Long) {
+    val prefs = context.getSharedPreferences(LONG_COOLDOWN_PREFS, Context.MODE_PRIVATE)
+    prefs.edit().putLong(key, nowElapsed).commit()
+}
+
+/** 30 นาที — ADR-25 §2: เลือกจากการอ่าน §12.6 ยังไม่ calibrate กับข้อมูลจริง */
+private const val LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
+private const val LONG_COOLDOWN_PREFS = "notification_cooldown_v1"
+```
+
+**ลำดับการเรียกใน `onProximityChanged()`** — แทรกก่อนคูลดาวน์เดิม (ก่อนบรรทัด 107
+เดิม) เพราะคูลดาวน์ใหม่นี้คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ (คูลดาวน์เดิม 60 วินาที
+มักหมดอายุไปแล้วก่อนรอบล้าง-นับใหม่ถัดไปเสมอตามหัวข้อ 1 ข้างบน) **`nowElapsed` อ่าน
+ครั้งเดียวตอนต้นแล้วใช้ซ้ำตอนจด** — ทั้งฟังก์ชันเป็น synchronous call เดียวไม่มีจุดหน่วง
+เวลาระหว่างตรวจกับจด จึงไม่ต้องอ่านนาฬิกาซ้ำ:
+
+```kotlin
+val longKey = longCooldownKeyFor(event)
+val nowElapsed = SystemClock.elapsedRealtime()
+val blockedSince = longCooldownSinceLastPostedOrNull(context, longKey, nowElapsed)
+if (blockedSince != null) {
+    ExampleNotifications.recordSuppressed(
+        context = context,
+        regionIdentifier = event.regionIdentifier,
+        beacon = beaconField(event),
+        mac = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
+        layer = ExampleNotifications.LAYER_PROXIMITY,
+        reason = "cooldown",
+        extra = "sinceLastPostedMs=$blockedSince",
+    )
+    return
+}
+// จากนั้นค่อยเช็คคูลดาวน์ 60 วินาทีเดิม (คงไว้ไม่แตะ — `if (!consumeCooldown(...)) return`)
+
+val posted = ExampleNotifications.post(   // เปลี่ยน Unit -> Boolean ตามที่อธิบายไว้ข้างบน
+    context = context,
+    title = "...",
+    body = "...",
+    regionIdentifier = event.regionIdentifier,
+    beacon = beaconField(event),
+    mac = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
+    layer = ExampleNotifications.LAYER_PROXIMITY,
+)
+// **จดเวลาก็ต่อเมื่อ post() ยืนยันว่า reason == granted เท่านั้น** — ถ้า false (ติด
+// permissionDenied/blockedByUser/channelBlocked) ไม่จด ครั้งถัดไปจะเช็คใหม่ทุกครั้ง
+// ไม่ใช่ค้างเงียบ 30 นาทีจากการ "โพสต์" ที่ไม่มีใบไหนถึงผู้ใช้จริง
+if (posted) {
+    recordLongCooldownPosted(context, longKey, nowElapsed)
+}
+```
+
+**`reason=` ที่มีอยู่จริงในโค้ดตอนนี้ (Android, บรรทัดหลักฐาน `event=notification` จาก
+`ExampleNotifications.post()`, `deliveryReason()` บรรทัด 172-195):**
+`granted` (`REASON_GRANTED`, บรรทัด 197) · `permissionDenied` · `blockedByUser` ·
+`channelBlocked` — **ไม่มีค่าไหนชื่อ "denied" ตรง ๆ** (แก้สมมติฐานเดิมให้ตรงกับโค้ด)
+ทั้งสี่ค่ามาจาก `deliveryReason()` ซึ่งตอบคำถาม "ระบบจะให้ notification ขึ้นจริงไหม"
+— **`cooldown` เป็นคนละแกนคำถามโดยสิ้นเชิง** ("แอปตัดสินใจไม่ลองยิงเองเพราะนโยบาย
+ของแอป" ไม่ใช่ "ระบบบล็อก") จึงต้องเป็นฟังก์ชันใหม่ที่**ไม่เรียก** `deliveryReason()`/
+`notify()` เลย (`recordSuppressed`) ไม่ใช่การเพิ่ม case ใน `deliveryReason()`:
+
+```kotlin
+/** เขียนเฉพาะบรรทัดหลักฐาน — ไม่เรียก deliveryReason()/notify() เด็ดขาด (ดู ADR-25 §3) */
+fun recordSuppressed(
+    context: Context,
+    regionIdentifier: String,
+    beacon: String = BEACON_NOT_APPLICABLE,
+    mac: String = BEACON_NOT_APPLICABLE,
+    layer: String = BEACON_NOT_APPLICABLE,
+    reason: String,
+    extra: String,
+) {
+    BackgroundEvidenceLog.append(
+        context,
+        BackgroundEvidenceLog.line(
+            timestampMillis = System.currentTimeMillis(),
+            event = "notification",
+            regionIdentifier = regionIdentifier,
+            conclusion = ExampleApplication.processState.conclusion,
+            rawSignals = BackgroundEvidenceLog.rawSignals(
+                context = context, state = ExampleApplication.processState, receiverEntry = false,
+            ) + " beacon=$beacon mac=$mac layer=$layer posted=false reason=$reason $extra",
+        ),
+    )
+}
+```
+
+**`stale`/`regionExit`/`clearRegion` ต้องไม่ล้างคูลดาวน์นี้ — เป็นผลจากการแยก store
+โดยตั้งใจ ไม่ใช่กฎที่ต้องเขียนโค้ดเพิ่มเพื่อ "กัน":** `ProximityGateStore.clear()`/
+`clearRegion()` (บรรทัด 179-206) แก้ไฟล์ prefs ชื่อ `beacon_kit_android.proximity`
+(บรรทัด 209) เท่านั้น · `BackgroundRegionStore` (ชั้นที่ 1, ห้ามแตะตาม PR A exit-clear)
+แก้ไฟล์ prefs คนละชื่ออีกไฟล์ · คูลดาวน์ใหม่นี้อยู่ที่ `notification_cooldown_v1` ซึ่ง
+**ไม่มีโค้ดจุดไหนเรียก `.clear()` เลยนอกจาก `recordLongCooldownPosted` (§3.1) ที่เขียน
+ทีละ key ด้วย `putLong` เท่านั้น** — ข้อกำหนดนี้คือ**เหตุผลที่ต้องแยกไฟล์ prefs** ตั้งแต่ต้น
+ไม่ใช่สิ่งที่ต้องเผื่อโค้ดกันไว้ทีหลัง (นี่คือหัวใจของ §12.6.1: ตัวที่ทำให้เกิดบั๊กคือ
+state ที่ถูกล้าง ดังนั้นตัวที่จะแก้บั๊กต้องอยู่นอกเส้นทางที่ถูกล้างเสมอ) **ห้าม**เพิ่ม
+โค้ดที่เรียก `.clear()`/`clearRegion()`-เทียบเท่าของไฟล์นี้จากที่ไหนในอนาคตโดยไม่แก้
+ADR นี้ก่อน
+
+### 4. ⚠️ คำตอบข้อบังคับ: จุดโพสต์ notification ชั้นที่ 2 ฝั่ง iOS อยู่ใน **example app**
+ไม่ใช่ SDK — ออกแบบคู่ขนาน ไม่ใช่หนี้ parity
+
+ยืนยันจากโค้ดจริง: `posted=requested` (สตริงตัวชี้ว่านี่คือจุดโพสต์) อยู่ใน
+`packages/beacon_kit/example/ios/Runner/AppDelegate.swift:418` เพียงจุดเดียว ภายใน
+`recordNotificationEvent()` (บรรทัด 406-421) ที่ถูกเรียกจาก `recordProximityEvent()`
+(บรรทัด 331-392, เรียก `recordNotificationEvent` ที่บรรทัด 385 แล้วเรียก
+`postNotification()` จริงที่บรรทัด 387) — ทั้งหมดอยู่ใต้ `Runner/` (target ของ example
+app) **ไม่มีไฟล์ไหนใน `packages/beacon_kit_ios/` เรียก `UNUserNotificationCenter`
+เลย** ตรงกับที่ ADR-20 หัวข้อ 6 บันทึกไว้แล้วฝั่ง Android ("notification ยิงจาก native
+ใน example app... ตรรกะ presentation อยู่ใน example") **สรุป: ต้องออกแบบคู่ขนาน
+เต็มรูปแบบ — นี่ไม่ใช่หนี้ parity เพราะ SDK ไม่เคยมีความรับผิดชอบส่วนนี้ตั้งแต่แรก**
+
+**สิ่งที่พบเพิ่มระหว่างอ่านโค้ด — ฝั่ง iOS มีคูลดาวน์ 60 วินาที/key อยู่แล้วเหมือนกัน**
+(`proximityNotificationCooldownMillis`, บรรทัด 290 · `consumeProximityCooldown`,
+บรรทัด 546-558 · เรียกที่บรรทัด 378) เก็บใน `UserDefaults(suiteName: "beacon_kit_example.proximity_cooldown")`
+(บรรทัด 293) ด้วย **wall clock** (`event.timestampMillis`, ความเห็นบรรทัด 543-545
+ยอมรับความเสี่ยงเรื่องปรับนาฬิกาไว้ตรง ๆ อยู่แล้ว) — **key ของคูลดาวน์เดิมฝั่ง iOS
+ตรงกับ key ของ `ProximityGate` อยู่แล้ว** (`proximityCooldownKey(for:)`, บรรทัด
+526-533: `[regionIdentifier, uuid, major, minor].joined(separator: "|")`) **ต่างจาก
+ฝั่ง Android ที่คูลดาวน์เดิมไม่มี uuid** — ดังนั้นฝั่ง iOS **ไม่ต้องเขียนฟังก์ชันสร้าง
+key ใหม่** อย่างที่ฝั่ง Android ต้องทำ ใช้ `proximityCooldownKey(for:)` เดิมซ้ำได้เลย
+
+**การออกแบบคูลดาวน์ที่สอง (30 นาที) ฝั่ง iOS — เท่าที่ทำได้โดยไม่แก้ SDK:**
+
+| | คูลดาวน์เดิม (ADR-21/22, บรรทัด 290-293) | **คูลดาวน์ใหม่ของ ADR นี้** |
+|---|---|---|
+| อายุ | 60 วินาที | **30 นาที** (ค่าเดียวกับฝั่ง Android — ยังไม่ calibrate เหมือนกัน) |
+| key | `proximityCooldownKey(for:)` (บรรทัด 526-533) | **ใช้ฟังก์ชันเดิมซ้ำ** — รูปร่างตรงกันอยู่แล้ว |
+| store | `UserDefaults(suiteName: "beacon_kit_example.proximity_cooldown")` | `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v1")` — **ชื่อนี้เป็นการเลือกของสถาปนิกรอบนี้เพื่อให้สมมาตรกับชื่อไฟล์ Android ไม่ใช่ข้อบังคับจากที่ไหน** |
+| นาฬิกา | wall clock (`event.timestampMillis`) | **`ProcessInfo.processInfo.systemUptime`** — ตัวเดียวที่ใกล้เคียง `elapsedRealtime` ที่สุดบน iOS (นับจาก boot ไม่กระโดดตาม NTP) |
+
+⚠️ **หมายเหตุ: นี่คือการเบี่ยงจากทางเลือกที่คูลดาวน์ 60 วินาทีเดิมของ iOS เลือกไว้เอง**
+(kdoc บรรทัด 543-545 เลือก wall clock ตรง ๆ) **ด้วยเหตุผลเดียวกับที่ Android เลือก
+`elapsedRealtime`**: หน้าต่าง 30 นาทีมีโอกาสคาบเกี่ยวกับการซิงก์เวลาอัตโนมัติสูงกว่า
+หน้าต่าง 60 วินาทีมาก — ยังไม่มีข้อมูลจริงว่า `systemUptime` นับเวลาที่เครื่องหลับ
+หรือไม่บน iOS รุ่นที่ทดสอบ (คอมเมนต์บรรทัด 616-619 ของไฟล์เดียวกันบอกไว้แล้วว่า
+`ProcessInfo.systemUptime` **ไม่นับเวลาที่เครื่องหลับ** ต่างจาก `SystemClock.elapsedRealtime()`
+ของ Android ที่นับ — **ไม่ยืนยันเพิ่มเติมนอกเหนือคอมเมนต์ที่มีอยู่แล้วในไฟล์**) ผลคือ
+คูลดาวน์ 30 นาทีนี้**อาจนับสั้นกว่าที่ตั้งใจจริงถ้าเครื่องหลับระหว่างนั้น** — ยอมรับ
+เป็นความเสี่ยงระดับ POC เหมือนที่ Android ยอมรับเรื่อง reboot รีเซ็ตค่า
+
+**ถ้าติดคูลดาวน์:** เขียนบรรทัดหลักฐานรูปร่างเดียวกับที่ `postNotification()` ใช้อยู่แล้ว
+ตอน `UNUserNotificationCenter.add` คืน error (บรรทัด 636-661: `event=notification`,
+`posted=false`, `reason=<text>`) — **รูปแบบนี้มีอยู่แล้วในโค้ด ไม่ใช่การเพิ่ม column ใหม่**
+เพียงใส่ `reason="cooldown"` และต่อท้าย `sinceLastPostedMs=<n>`:
+
+```swift
+private func recordNotificationSuppressed(_ event: BeaconKitProximityChangedEvent, sinceLastPostedMs: Int64) {
+  BackgroundEvidenceLog.shared.append(
+    line: BackgroundEvidenceLog.line(
+      timestamp: event.timestamp,
+      event: "notification",
+      regionIdentifier: event.regionIdentifier,
+      conclusion: currentRunContext(),
+      rawSignals: rawSignalSummary(receiverEntry: true)
+        + " posted=false reason=cooldown sinceLastPostedMs=\(sinceLastPostedMs)"
+    )
+  )
+}
+```
+
+### 4.1 ⚠️ แก้ไขจากรอบรีวิว 16 ก.ย. 2026 — ปัญหาเดียวกับ §3.1 เกิดฝั่ง iOS ด้วย
+และรุนแรงกว่า เพราะไม่มีสัญญาณ "สำเร็จ" แบบ synchronous ให้ใช้เลย
+
+ฉบับแรกของหัวข้อนี้ตั้งใจให้จดเวลาคูลดาวน์ **ก่อน** เรียก `postNotification()` (แนว
+เดียวกับที่คูลดาวน์ 60 วินาทีเดิมทำอยู่แล้วที่บรรทัด 378) ซึ่งมีบั๊กเดียวกับ §3.1 เป๊ะ
+บวกปัญหาเพิ่มอีกชั้น: **`postNotification(title:body:)` (บรรทัด 633) คืนค่า `Void`
+ในปัจจุบัน และต่างจาก Android ตรงที่**ไม่มี**สัญญาณ "จะสำเร็จไหม" แบบ synchronous
+ให้เรียกก่อนเลย** — `UNUserNotificationCenter.current().add(request) { error in ... }`
+เป็น completion handler แบบ**อะซิงโครนัส** และรายงานได้แค่ทาง**ล้มเหลว** (`error != nil`)
+เท่านั้น (ดู kdoc บรรทัด 396-400 ของไฟล์เดียวกันที่ยอมรับข้อจำกัดนี้ไว้แล้วเรื่อง
+`posted=requested` ≠ ผู้ใช้เห็นจริง) **จึงไม่มีทางเลือกที่แรงเท่า Android ตรงนี้จริง ๆ**
+— สัญญาณที่ดีที่สุดที่มีคือ **"ฝั่งเราส่ง request ให้ระบบแล้วไม่มี error กลับมาทันที"**
+(ยังไม่ยืนยันว่าผู้ใช้เห็น เหมือนกับที่ `posted=requested` เตือนไว้อยู่แล้ว) ซึ่งรู้ผลได้
+ก็ต่อเมื่ออยู่ **ใน completion handler เท่านั้น** ไม่ใช่ตอนเรียก `postNotification()`
+
+**ทางแก้:** เพิ่มพารามิเตอร์ `onDelivered: (() -> Void)? = nil` ให้ `postNotification`
+(ค่า default `nil` ทำให้ผู้เรียกเดิมทั้งสองจุดที่ไม่เกี่ยวกับคูลดาวน์นี้ — บรรทัด 275
+ของ `recordRegionEvent` ชั้นที่ 1 และบรรทัด 812 ของปุ่มทดสอบผ่าน Flutter — **ไม่ต้อง
+แก้เลยแม้แต่บรรทัดเดียว** พฤติกรรมเดิมของทั้งสองจุดยังเหมือนเดิม 100%) แล้วเรียก
+closure นั้นจากใน branch ที่ `error == nil` เท่านั้น — คนละจุดกับ branch ที่เขียน
+`posted=false` เดิม (บรรทัด 657-661) ซึ่ง**ไม่แตะ**:
+
+```swift
+private func postNotification(title: String, body: String, onDelivered: (() -> Void)? = nil) {
+  let content = UNMutableNotificationContent()
+  content.title = title
+  content.body = body
+  content.sound = .default
+  UNUserNotificationCenter.current().add(
+    UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+  ) { error in
+    guard let error = error else {
+      onDelivered?()   // เรียกเฉพาะตอนไม่มี error — ADR-25 §4.1
+      return
+    }
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: Date(), event: "notification", regionIdentifier: "-",
+        conclusion: "notifyFailed",
+        rawSignals: "posted=false "
+          + "reason=\(String(describing: error).replacingOccurrences(of: " ", with: "_"))"
+      )
+    )
+  }
+}
+
+/// 30 นาที — ADR-25 §2: เลือกจากการอ่าน §12.6 ยังไม่ calibrate กับข้อมูลจริง
+private static let proximityLongNotificationCooldownSeconds: TimeInterval = 30 * 60
+private static let proximityLongCooldownSuiteName = "beacon_kit_example.notification_cooldown_v1"
+
+private func recordLongCooldownPosted(key: String, atUptime: TimeInterval) {
+  guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return }
+  defaults.set(atUptime, forKey: key)
+}
+
+private func longCooldownBlockedSinceMs(key: String, nowUptime: TimeInterval) -> Int64? {
+  guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
+  let lastUptime = defaults.double(forKey: key)
+  if lastUptime == 0 { return nil }          // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+  if lastUptime > nowUptime { return nil }   // reboot แล้ว (systemUptime รีเซ็ต)
+  let sinceSeconds = nowUptime - lastUptime
+  return sinceSeconds < Self.proximityLongNotificationCooldownSeconds
+    ? Int64(sinceSeconds * 1000) : nil
+}
+```
+
+**ลำดับที่แก้ใน `recordProximityEvent()`** (แทนที่ตำแหน่งเดิมก่อนบรรทัด 378):
+
+```swift
+let longKey = proximityCooldownKey(for: event)   // ใช้ฟังก์ชันเดิมซ้ำตามที่หัวข้อ 4 บอกไว้
+let nowUptime = ProcessInfo.processInfo.systemUptime
+if let sinceLastPostedMs = longCooldownBlockedSinceMs(key: longKey, nowUptime: nowUptime) {
+  recordNotificationSuppressed(event, sinceLastPostedMs: sinceLastPostedMs)
+  return
+}
+guard consumeProximityCooldown(key: proximityCooldownKey(for: event), nowMillis: event.timestampMillis)
+else { return }   // คูลดาวน์ 60 วินาทีเดิม — ไม่แตะ
+
+recordNotificationEvent(event)
+postNotification(
+  title: "...", body: "...",
+  onDelivered: { [weak self] in
+    self?.recordLongCooldownPosted(key: longKey, atUptime: nowUptime)   // จดตอนรู้ผลว่าไม่มี error เท่านั้น
+  }
+)
+```
+
+⚠️ **ข้อจำกัดที่ต้องเขียนตรง ๆ — ไม่ใช่ระดับความแม่นยำเดียวกับฝั่ง Android:**
+`error == nil` ยืนยันได้แค่ "ระบบรับ request แล้วไม่ปฏิเสธทันที" **ไม่ยืนยันว่า
+`blockedByUser`-เทียบเท่า/สิทธิ์ notification ถูกปิดไว้** เพราะ iOS ไม่มี API
+แบบ `deliveryReason()` ของ Android — เคสที่ผู้ใช้ปิดสิทธิ์ notification ทั้งหมดไว้
+ล่วงหน้าอาจยังทำให้ `error == nil` (ระบบรับ request ไว้เงียบ ๆ โดยไม่ยิงจริง) ซึ่งจะ
+จดเวลาคูลดาวน์ผิดเหมือนปัญหาเดิมของ §4 ฉบับแรก **แต่แคบลงมากแล้ว** (เหลือเฉพาะเคส
+"สิทธิ์ปิดแบบไม่มี error" ไม่ใช่ทุกเคสที่ยังไม่รู้ผลเหมือนฉบับแรก) — บันทึกไว้เป็นข้อจำกัด
+ที่ยังไม่ตัดสิน ดูหัวข้อ 6
+
+**`reason=` ที่มีอยู่จริงในโค้ด iOS ตอนนี้ — คนละรูปแบบกับ Android โดยสิ้นเชิง:**
+บรรทัด `event=notification` เส้นทาง**สำเร็จ** (`recordNotificationEvent`, บรรทัด
+406-421) **ไม่มีคอลัมน์ `reason=` เลย** (มีแค่ `bucket=`/`from=`/`beacon=`/`mode=`/
+`posted=requested`) ส่วนบรรทัด `event=notification` เส้นทาง**ล้มเหลว** (`postNotification`
+error callback, บรรทัด 657-659) มี `reason=<String(describing: error)>` เป็น**ข้อความ
+อิสระจาก OS ไม่ใช่ enum ปิด** ต่างจาก Android ที่เป็นเซตค่าปิดสี่ค่า **`reason=cooldown`
+จึงเข้ากับรูปแบบของบรรทัดล้มเหลว (`posted=false` + `reason=` ข้อความอิสระ) ได้พอดีโดย
+ไม่ต้องแก้ schema ของบรรทัดสำเร็จเลย**
+
+### 5. ⚠️ คำตอบข้อบังคับ: `ProximityGate.kt` (Android) **ยังไม่มี** `sinceLastSeenMs`
+บน transition — ต้องเพิ่มฝั่ง Kotlin เท่านั้น
+
+ตรวจจากโค้ดจริง: `ProximityTransition` (`ProximityGate.kt:76-86`) มีฟิลด์แค่ `key`,
+`from`, `to`, `reason`, `medianMeters` — **ไม่มี `lastSeen`/`sinceLastSeenMs` เลย**
+ข้อมูลที่ต้องใช้คำนวณค่านี้**มีอยู่แล้วใน scope เดียวกัน** ตอน `sweepStale()`
+(`ProximityGate.kt:331-355`) แต่ถูกทิ้งไป: `now = clock()` (บรรทัด 332) และ
+`state.lastSampleAt` (ผ่าน `isStale()`, บรรทัด 362-365) ทั้งสองตัวพร้อมอยู่ในสโคปเดียวกัน
+ตรงจุดที่สร้าง `ProximityTransition(reason = STALE, ...)` (บรรทัด 342-350) พอดี —
+สอดคล้องกับที่ §12.5.3 ระบุไว้: ไฟล์ `docs/test-data/2026-09-16_android_overnight_slot1_round2_redmi.log`
+มี `reason=stale` **46 บรรทัด** และมี `sinceLastSeenMs=` **0 บรรทัด**
+
+**ทางแก้ — เพิ่ม field ใหม่แบบ optional เฉพาะฝั่ง Android เท่านั้น (4 ไฟล์ Kotlin
+ล้วน ไม่แตะ Dart/iOS/platform channel เลยสักจุด):**
+
+1. **`ProximityGate.kt`** — เพิ่ม `val sinceLastSeenMs: Long? = null` ต่อจาก
+   `medianMeters` ใน `ProximityTransition` แล้วในกิ่ง `STALE` ของ `sweepStale()`
+   ส่งค่า `sinceLastSeenMs = now - lastSampleAt` (ใช้ `lastSampleAt` เดิมที่ `isStale()`
+   อ่านแล้ว) — transition อื่น (`closer`/`farther`/`entered` จาก `push()`) ปล่อยเป็น
+   `null` ตาม default เพราะฟิลด์นี้มีความหมายเฉพาะตอน "เงียบไปแล้วกี่มิลลิวินาที"
+   เท่านั้น ไม่ใช่ทุก transition
+2. **`BackgroundProximityMonitor.kt`** — เพิ่ม `val sinceLastSeenMs: Long? = null`
+   ในคลาส `ProximityChangedEvent` (ต่อท้ายฟิลด์เดิม ก่อนปิดคลาส บรรทัด ~95-102)
+   **ต้องเขียนเป็นฟิลด์ log-only เหมือน `rssi`/`txPower`/`beaconTag`/`storeError`/
+   `droppedNoIdentityCount` (มี `⚠️` comment แบบเดียวกันกำกับ)** — **ห้ามเพิ่มเข้า
+   "ฟิลด์ 9 ตัวแรก" ที่ kdoc ของคลาสนี้ (บรรทัด 6-10) นิยามว่าเป็นสัญญา wire ของ
+   ADR-20 หัวข้อ 5** เพราะสัญญานั้นยังไม่ถูกส่งขึ้น Dart เลย (**ไม่มี MethodChannel
+   ไม่มี EventChannel** ตามบรรทัด 9-10 ของ kdoc เดียวกัน) — field ใหม่นี้จึงไม่มีทาง
+   ทะลุไปที่ platform channel/Dart อยู่แล้วโดยธรรมชาติของคลาสนี้ ไม่ต้องเผื่อโค้ดกัน
+3. **`BeaconScanReceiver.kt`** — ตอนประกอบ `ProximityChangedEvent(...)` (บรรทัด
+   219-236) เติม `sinceLastSeenMs = item.transition.sinceLastSeenMs,`
+4. **`ExampleProximityWatcher.kt`** — ใน `rawSignalsSuffix()` (บรรทัด 148-189) ต่อท้าย
+   คอลัมน์ใหม่ `append(" sinceLastSeenMs=${event.sinceLastSeenMs ?: "n/a"}")` ตามธรรมเนียม
+   เดิมของไฟล์นี้ที่พิมพ์ `n/a` เสมอเมื่อไม่มีค่า ไม่ปล่อยว่าง
+
+**ผลลัพธ์ที่ต้องได้:** บรรทัด `event=proximity` ที่ `reason=stale` มีคอลัมน์
+`sinceLastSeenMs=<n>` ทุกบรรทัด — เก็บ log รอบใหม่แล้วนำ `sinceLastSeenMs` ของทุก
+`reason=stale` มาดูการกระจาย (median/p90) จึงจะเลือกค่า `staleAfterMillis` ใหม่ได้
+ตามที่ §7.1/§12.5.3 บังคับไว้ **และ**เป็นเงื่อนไขที่หัวข้อ 2 ของ ADR นี้ผูกไว้ก่อนจะ
+calibrate ค่าคูลดาวน์ 30 นาที **ขอบเขต: Android เท่านั้น ตามที่โจทย์กำหนด — ไม่มี
+การเปลี่ยนแปลงฝั่ง iOS ในหัวข้อนี้**
+
+### 6. สิ่งที่ยังไม่ตัดสิน — เหตุผลที่สถานะยังเป็น `proposed`
+
+1. **ลำดับคูลดาวน์สองชั้น (§3/§4) ยังไม่ได้ทดสอบว่าอ่านง่ายจริงหรือไม่** — ผู้ทดสอบ
+   ที่เห็นบรรทัด `posted=false reason=cooldown` ถี่ ๆ อาจตีความผิดว่า SDK เงียบ
+   ทั้งที่จริงคือแอปตัดสินใจไม่ยิงเอง ต้องมีรอบอ่าน log จริงก่อนถึงจะรู้ว่าพอหรือไม่
+2. **30 นาทีอาจนานเกินไปสำหรับ use case ที่ลูกค้าเดินเข้า-ออกสาขาเร็ว** — ยังไม่มี
+   ข้อมูลว่าลูกค้าจริงอยู่ในระยะ near/immediate นานเท่าไรโดยเฉลี่ย ค่านี้เลือกจากมุม
+   "กันสแปมจาก state ที่ถูกล้าง" อย่างเดียว ยังไม่ชั่งกับมุม UX ของสถานการณ์ใช้จริง
+3. **iOS ใช้ `ProcessInfo.systemUptime` ที่ยังไม่ยืนยันพฤติกรรมช่วงเครื่องหลับ** —
+   ดูหัวข้อ 4 ⚠️ ถ้าพบว่านับเวลาต่างจากที่คอมเมนต์เดิมในไฟล์บอกไว้ ต้องกลับมาทบทวน
+   ทางเลือกนาฬิกาของ ADR นี้ใหม่
+4. **ยังไม่มีรอบเดินจริงยืนยันว่าคูลดาวน์ 30 นาทีนี้ตัด 24/26 ใบที่ §12.6 พบได้จริง**
+   — ทั้งหมดในหัวข้อ 3/4 เป็นการออกแบบจากการอ่านโค้ด+ตัวเลขของ §12.6 เท่านั้น ยังไม่
+   ผ่านอุปกรณ์จริงสักรอบ
+5. **§4.1 — สัญญาณ "โพสต์สำเร็จ" ฝั่ง iOS (`error == nil` ใน completion handler)
+   อ่อนกว่าฝั่ง Android (`deliveryReason() == granted`) จริง** เพราะ iOS ไม่มี API
+   แบบ Android ที่เช็คสิทธิ์แบบ synchronous ก่อนยิง — เคส "ปิดสิทธิ์ notification
+   ทั้งหมดไว้ล่วงหน้าแบบไม่มี error กลับมา" ยังมีโอกาสจดเวลาคูลดาวน์ผิดอยู่ (แคบลงจาก
+   ฉบับแรกมากแล้ว แต่ยังไม่ปิดสนิท) — ยังไม่มีข้อมูลจริงว่าเกิดบ่อยแค่ไหนในทางปฏิบัติ
+   บนเครื่องทดสอบจริง
+
+### 7. ไฟล์ที่ต้องแก้ — สรุปตามแพลตฟอร์ม (สำหรับส่งต่อ `flutter-dev` **หลังตัดสินใจ
+เสร็จ** เท่านั้น)
+
+| แพลตฟอร์ม | ไฟล์ | แก้อะไร |
+|---|---|---|
+| example Android | `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/ExampleProximityWatcher.kt` | เพิ่มคูลดาวน์ 30 นาที (§3/§3.1): const, key, `longCooldownSinceLastPostedOrNull` (ตรวจ) + `recordLongCooldownPosted` (จด — เรียกหลัง `post()` คืน `true` เท่านั้น), เรียกตรวจก่อนคูลดาวน์เดิม |
+| example Android | `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/ExampleNotifications.kt` | เพิ่ม `recordSuppressed()` (§3) — ไม่แก้ `deliveryReason()` เดิม · เปลี่ยน `post()` จาก `Unit` เป็น `Boolean` (คืน `reason == REASON_GRANTED`, §3.1) โดยไม่แก้ลำดับ/พฤติกรรมภายในฟังก์ชันเลย |
+| example iOS | `packages/beacon_kit/example/ios/Runner/AppDelegate.swift` | เพิ่มคูลดาวน์ 30 นาที (§4/§4.1): const, suite ใหม่, `longCooldownBlockedSinceMs` (ตรวจ) + `recordLongCooldownPosted` (จด), `recordNotificationSuppressed`, เพิ่มพารามิเตอร์ `onDelivered:` ให้ `postNotification` (default `nil` — ผู้เรียกเดิมไม่กระทบ) แล้วจดคูลดาวน์เฉพาะใน closure นั้น |
+| SDK Android | `packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/ProximityGate.kt` | เพิ่ม `sinceLastSeenMs` ใน `ProximityTransition` + คำนวณใน `sweepStale()` (§5) |
+| SDK Android | `packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BackgroundProximityMonitor.kt` | เพิ่ม `sinceLastSeenMs` ใน `ProximityChangedEvent` (log-only, §5) |
+| SDK Android | `packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BeaconScanReceiver.kt` | ส่งต่อ `item.transition.sinceLastSeenMs` เข้า `ProximityChangedEvent` (§5) |
+
+**ไม่แตะ:** `staleAfterMillis`, `BackgroundRegionMonitor.kt`, `proximity_gate.dart`,
+`ProximityGate.swift`, `ProximityGateStore.swift`, ไฟล์ build ใด ๆ, platform channel/
+Dart ใด ๆ
+
+### อ้างอิง
+
+ADR-20 หัวข้อ 3 (รูปร่าง key) · หัวข้อ 6 (ตาราง "ยังไม่ทำในรอบนี้" — คูลดาวน์เดิมเป็น
+นโยบายแอป) · หัวข้อ 7/7.1 (ห้ามขยับ `staleAfterMillis`) · **หัวข้อ 12.5.3/12.6/12.6.1
+(ที่มาของตัวเลขทั้งหมดในหัวข้อ 1)** — ADR-21 หัวข้อ 3 (`ProximityKeyCodec`) — ADR-22
+(คูลดาวน์ 60 วินาที iOS) — `ExampleProximityWatcher.kt` (โค้ดปัจจุบัน, Android) —
+`AppDelegate.swift` (โค้ดปัจจุบัน, iOS) — `ProximityGateStore.kt`/`BeaconScanReceiver.kt`
+(รูปร่าง key `region|uuid|major|minor`) — `docs/test-data/2026-09-16_android_overnight_slot1_round2_redmi.log`
