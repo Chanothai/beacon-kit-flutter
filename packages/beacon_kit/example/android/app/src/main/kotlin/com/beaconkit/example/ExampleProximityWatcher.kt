@@ -46,7 +46,7 @@ object ExampleProximityWatcher {
      * (ADR-25 §2) **ค่า 30 นาที: เลือกจากการอ่าน §12.6 เท่านั้น ยังไม่ calibrate
      * กับข้อมูลจริง** (ADR-25 §2)
      */
-    private const val LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
+    internal const val LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
 
     /** ไฟล์ prefs ใหม่ แยกจากทุก store เดิม (ADR-25 §3) */
     private const val LONG_COOLDOWN_PREFS = "notification_cooldown_v1"
@@ -336,7 +336,7 @@ object ExampleProximityWatcher {
      * `proximityKeyFor()` ตรง ๆ เพราะฟังก์ชันนั้นรับ non-null ล้วน) — `uuid`
      * เป็น `lowercase()` ให้ตรงกับที่ gate ใช้เทียบ
      */
-    private fun longCooldownKeyFor(event: ProximityChangedEvent): String =
+    internal fun longCooldownKeyFor(event: ProximityChangedEvent): String =
         listOf(
             event.regionIdentifier,
             event.uuid?.lowercase() ?: "-",
@@ -345,6 +345,15 @@ object ExampleProximityWatcher {
         ).joinToString("|")
 
     /**
+     * **pure function ล้วน ไม่รับ `Context` เลย** — ตรรกะตัดสินใจของคูลดาวน์
+     * 30 นาทีแยกออกจาก I/O ของ `SharedPreferences` ตามแพทเทิร์นเดียวกับที่
+     * `ProximityGate` แยกออกจาก `ProximityGateStore` (แก้ตามรอบรีวิว 16 ก.ย.
+     * 2026, ADR-25 §3.1): โมดูล `app` มี `testImplementation` แค่ `kotlin-test`
+     * ตัวเดียว ไม่มี mockito/Robolectric ให้ mock `Context`/`SharedPreferences`
+     * ได้เลย ถ้าตรรกะเทียบเวลายังปนอยู่กับการเรียก `getSharedPreferences()`
+     * ตรง ๆ จะเขียน unit test คลุมไม่ได้เลยโดยไม่เพิ่ม dependency ในไฟล์ build
+     * (ซึ่งงานนี้ห้ามแตะ) — แยกเป็นฟังก์ชันนี้แล้วเทสต์เรียกตรง ๆ ได้ทันที
+     *
      * `null` เมื่อไม่ติดคูลดาวน์ 30 นาที (ยิงได้) · ค่าที่ไม่ใช่ `null` คือจำนวน
      * มิลลิวินาทีตั้งแต่โพสต์สำเร็จครั้งล่าสุด (ใช้ต่อท้ายบรรทัดหลักฐาน
      * `sinceLastPostedMs=`) — **อ่านอย่างเดียว ไม่จด** แยกจาก [recordLongCooldownPosted]
@@ -354,6 +363,27 @@ object ExampleProximityWatcher {
      * ตามการซิงก์เวลาเครือข่าย/ผู้ใช้ปรับนาฬิกาเอง **ข้อแลก:** รีเซ็ตทุกครั้งที่
      * เครื่อง reboot — ถ้าค่าที่เก็บไว้มากกว่าค่าปัจจุบัน (reboot ระหว่างนั้น) ถือว่า
      * ไม่อยู่ใน cooldown
+     *
+     * @param lastPostedElapsedMillisOrZero เวลา ([SystemClock.elapsedRealtime])
+     *   ที่โพสต์คีย์นี้สำเร็จครั้งล่าสุด · `0L` = ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+     *   (ค่าเดียวกับ default ของ `SharedPreferences.getLong(key, 0L)` ตรง ๆ
+     *   จึงไม่ต้องมี sentinel แยกต่างหาก)
+     * @param nowElapsedMillis เวลาปัจจุบัน ([SystemClock.elapsedRealtime])
+     */
+    internal fun longCooldownSinceLastPostedMillisOrNull(
+        lastPostedElapsedMillisOrZero: Long,
+        nowElapsedMillis: Long,
+    ): Long? {
+        if (lastPostedElapsedMillisOrZero == 0L) return null // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+        if (lastPostedElapsedMillisOrZero > nowElapsedMillis) return null // reboot แล้ว (elapsedRealtime รีเซ็ต)
+        val since = nowElapsedMillis - lastPostedElapsedMillisOrZero
+        return if (since < LONG_COOLDOWN_MILLIS) since else null
+    }
+
+    /**
+     * ชั้น I/O ที่บางที่สุด — แค่ **"อ่านค่าของ key"** จาก `SharedPreferences` แล้ว
+     * ส่งต่อให้ [longCooldownSinceLastPostedMillisOrNull] (pure) ตัดสินใจทั้งหมด
+     * (ADR-25 §3.1) ไม่มีตรรกะเทียบเวลาอยู่ในฟังก์ชันนี้เลยแม้แต่บรรทัดเดียว
      */
     private fun longCooldownSinceLastPostedOrNull(
         context: Context,
@@ -361,11 +391,7 @@ object ExampleProximityWatcher {
         nowElapsed: Long,
     ): Long? {
         val prefs = context.getSharedPreferences(LONG_COOLDOWN_PREFS, Context.MODE_PRIVATE)
-        val lastElapsed = prefs.getLong(key, 0L)
-        if (lastElapsed == 0L) return null // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
-        if (lastElapsed > nowElapsed) return null // เครื่อง reboot แล้ว (elapsedRealtime รีเซ็ต)
-        val since = nowElapsed - lastElapsed
-        return if (since < LONG_COOLDOWN_MILLIS) since else null
+        return longCooldownSinceLastPostedMillisOrNull(prefs.getLong(key, 0L), nowElapsed)
     }
 
     /**

@@ -630,23 +630,49 @@ import beacon_kit_ios
     defaults.set(atUptime, forKey: key)
   }
 
+  /// **pure function ล้วน ไม่แตะ `UserDefaults` เลย** — ตรรกะตัดสินใจของคูลดาวน์
+  /// 30 นาทีแยกออกจาก I/O เดียวกับที่ฝั่ง Android แยก
+  /// `longCooldownSinceLastPostedMillisOrNull` ออกจาก `SharedPreferences`
+  /// (ADR-25 §4.1, แก้ตามรอบรีวิว 16 ก.ย. 2026) — แพทเทิร์นเดียวกับ `runContext`/
+  /// `proximityRawSignalsSuffix` ในไฟล์นี้ที่แยกเป็น pure `static func` ให้
+  /// `RunnerTests` เรียกตรง ๆ ได้ผ่าน `@testable import Runner` โดยไม่ต้องมี
+  /// `UserDefaults` จริง
+  ///
   /// `nil` เมื่อไม่ติดคูลดาวน์ 30 นาที (ยิงได้) · ค่าที่ไม่ใช่ `nil` คือจำนวน
-  /// มิลลิวินาทีตั้งแต่โพสต์สำเร็จครั้งล่าสุด — **อ่านอย่างเดียว ไม่จด** แยกจาก
-  /// [recordLongCooldownPosted] ตามที่ ADR-25 §4.1 บังคับ
+  /// มิลลิวินาทีตั้งแต่โพสต์สำเร็จครั้งล่าสุด
   ///
   /// ใช้ `ProcessInfo.processInfo.systemUptime` ไม่ใช่ wall clock (ADR-25 §4):
   /// ตัวเดียวที่ใกล้เคียง `elapsedRealtime` ที่สุดบน iOS (นับจาก boot ไม่กระโดด
   /// ตาม NTP) ⚠️ **ไม่นับเวลาที่เครื่องหลับ** ต่างจาก `SystemClock.elapsedRealtime()`
   /// ของ Android — คูลดาวน์นี้อาจนับสั้นกว่าที่ตั้งใจจริงถ้าเครื่องหลับระหว่างนั้น
   /// (ยอมรับเป็นความเสี่ยงระดับ POC เหมือนที่ Android ยอมรับเรื่อง reboot รีเซ็ตค่า)
-  private func longCooldownBlockedSinceMs(key: String, nowUptime: TimeInterval) -> Int64? {
-    guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
-    let lastUptime = defaults.double(forKey: key)
-    if lastUptime == 0 { return nil }  // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
-    if lastUptime > nowUptime { return nil }  // reboot แล้ว (systemUptime รีเซ็ต)
-    let sinceSeconds = nowUptime - lastUptime
+  ///
+  /// - Parameters:
+  ///   - lastPostedUptimeOrZero: `systemUptime` ตอนโพสต์คีย์นี้สำเร็จครั้งล่าสุด
+  ///     · `0` = ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (ค่าเดียวกับ default ของ
+  ///     `UserDefaults.double(forKey:)` ตรง ๆ จึงไม่ต้องมี sentinel แยกต่างหาก)
+  ///   - nowUptime: `ProcessInfo.processInfo.systemUptime` ปัจจุบัน
+  static func longCooldownSinceLastPostedMillisOrNull(
+    lastPostedUptimeOrZero: TimeInterval,
+    nowUptime: TimeInterval
+  ) -> Int64? {
+    if lastPostedUptimeOrZero == 0 { return nil }  // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+    if lastPostedUptimeOrZero > nowUptime { return nil }  // reboot แล้ว (systemUptime รีเซ็ต)
+    let sinceSeconds = nowUptime - lastPostedUptimeOrZero
     return sinceSeconds < Self.proximityLongNotificationCooldownSeconds
       ? Int64(sinceSeconds * 1000) : nil
+  }
+
+  /// ชั้น I/O ที่บางที่สุด — แค่ **"อ่านค่าของ key"** จาก `UserDefaults` แล้วส่งต่อให้
+  /// [longCooldownSinceLastPostedMillisOrNull] (pure) ตัดสินใจทั้งหมด (ADR-25
+  /// §4.1) ไม่มีตรรกะเทียบเวลาอยู่ในฟังก์ชันนี้เลยแม้แต่บรรทัดเดียว — **อ่านอย่างเดียว
+  /// ไม่จด** แยกจาก [recordLongCooldownPosted]
+  private func longCooldownBlockedSinceMs(key: String, nowUptime: TimeInterval) -> Int64? {
+    guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
+    return Self.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedUptimeOrZero: defaults.double(forKey: key),
+      nowUptime: nowUptime
+    )
   }
 
   /// **ตรรกะการตัดสินล้วน (pure)** — แยกออกจาก `currentRunContext()` เพื่อให้
