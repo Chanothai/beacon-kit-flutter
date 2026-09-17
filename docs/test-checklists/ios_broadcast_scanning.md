@@ -26,6 +26,12 @@
 | สิทธิ์ location / notification | _(ผู้ทดสอบกรอกทุกรอบ — `Always`? granted?)_ |
 | **advertising interval ของบีคอนที่ใช้ทดสอบ** | _(ผู้ทดสอบกรอกทุกรอบ — **ห้ามเว้น**)_ |
 
+🆔 **บิลด์ตั้งแต่ 17 ก.ย. 2026 เป็นต้นไปใช้ bundle ID ใหม่ของ iOS example**
+(`com.chanothai.beaconkit.example`) — แอปใหม่ในสายตาระบบ สถานะที่สะสมในเครื่อง
+(store / คูลดาวน์ / `monitoredRegions` / สิทธิ์) เริ่มจากศูนย์ทั้งหมด **อ่านหัวข้อ
+"bundle ID ของ example เปลี่ยน — เส้นแบ่งหลักฐาน 17 ก.ย. 2026" ข้างล่างก่อนเทียบผล
+ข้ามวันนี้**
+
 📒 **ค่าปัจจุบันของบีคอนทุกตัว + ประวัติการเปลี่ยนแปลง อยู่ที่
 [`docs/beacon-inventory.md`](../beacon-inventory.md)** — ต้องอ่านประกอบทุกครั้งที่
 ตีความผลของช่วงเวลาใดช่วงเวลาหนึ่ง
@@ -1277,6 +1283,49 @@ CoreBluetooth — decode URL frame จากอุปกรณ์ที่ไม
 "คอมไพล์ผ่าน + mock test เขียว" เป็น verified
 
 ---
+
+## 🆔 bundle ID ของ example เปลี่ยน — เส้นแบ่งหลักฐาน 17 ก.ย. 2026
+
+**iOS example เปลี่ยน `PRODUCT_BUNDLE_IDENTIFIER` จาก `com.beaconkit.example` เป็น
+`com.chanothai.beaconkit.example`** (`example/ios/Runner.xcodeproj/project.pbxproj` —
+`Runner` ครบทั้งสาม configuration · `RunnerTests` เป็น
+`com.chanothai.beaconkit.example.RunnerTests`) · ฝั่ง **Android ไม่เปลี่ยน** ยังเป็น
+`com.beaconkit.example` เหมือนเดิม — คำสั่ง `adb` ทุกบรรทัดใน
+[`android_background_runbook.md`](./android_background_runbook.md) ยังใช้ได้ตามเดิม
+
+**ทำไม:** 17 ก.ย. 2026 Personal Team (ฟรี) สร้าง App ID `com.beaconkit.example` ไม่ได้
+เพราะชื่อนี้ถูกทีมอื่นจดไปแล้ว — เป็นข้อจำกัดของบัญชี ไม่ใช่บั๊กของโปรเจกต์ และไม่มีทางแก้อื่น
+บน Personal Team นอกจากเปลี่ยนชื่อ · แอปจริงต้องจด bundle ID ของตัวเองใต้ทีม paid ของ
+บริษัทอยู่แล้ว ห้ามใช้ชื่อของ example (ดู [`integration-guide.md` §1](../integration-guide.md))
+
+### ⚠️ ผลต่อการอ่านหลักฐาน — ต้องรู้ก่อนเทียบรอบก่อน/หลัง 17 ก.ย.
+
+สำหรับ iOS **bundle ID คนละตัว = แอปคนละตัว** ระบบไม่ได้อัปเกรดของเดิมทับ แต่ติดตั้ง
+แอปใหม่ที่มี container ของตัวเอง (ตัวเก่ายังอยู่บนเครื่องจนกว่าจะลบเอง) ทุกอย่างที่ผูกกับ
+container หรือกับ "แอปตัวนี้" ในสายตาระบบ จึง**เริ่มจากศูนย์**:
+
+| สิ่งที่เริ่มใหม่ | เก็บอยู่ที่ไหน |
+|---|---|
+| store ของชั้นที่ 2 (ADR-21) | `UserDefaults(suiteName: "com.bigc.beacon_kit_ios.proximity")` (`ProximityGateStore.swift:34`) |
+| คูลดาวน์สั้นของชั้นที่ 2 | `UserDefaults(suiteName: "beacon_kit_example.proximity_cooldown")` (`AppDelegate.swift:407`) |
+| คูลดาวน์ 30 นาที (ADR-25) | `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v2")` (`AppDelegate.swift:454`) |
+| ไฟล์หลักฐาน B5/B6 | `region_events.log` ใน container ของแอป (`BackgroundEvidenceLog.swift:23`) |
+| region ที่ลงทะเบียนค้างไว้กับระบบ (`monitoredRegions`) | locationd เก็บแยกต่อแอป — แอปใหม่เริ่มที่ 0 region |
+| สิทธิ์ location / notification | ต้องกดอนุญาตใหม่ทั้งหมด — prompt ครั้งแรกกลับมา (ข้อ 1 เดินใหม่ได้เต็มรูปแบบ) |
+
+**ห้ามเทียบข้ามเส้น 17 ก.ย. ในระดับ "สถานะที่สะสมไว้"** — เช่น "คูลดาวน์ยังไม่หมดจากรอบ
+เมื่อวาน" หรือ "region ค้าง `inside` ข้ามคืน" ของรอบก่อนหน้า **ไม่มีผลกับรอบหลังจากนี้เลย**
+สิ่งที่ยังเทียบข้ามเส้นได้คือ **พฤติกรรม** — ลำดับ event, latency `enter`→`near`,
+`relaunchedFromTerminated` เกิดหรือไม่, `posted`/`reason` ที่เลือก — เพราะไม่ได้ขึ้นกับ
+ค่าที่สะสมไว้ก่อนหน้า
+
+**ผลที่บันทึกไว้แล้วในไฟล์นี้ยังใช้ได้ทั้งหมด** — ทุกแถวที่ลงวันที่ก่อน 17 ก.ย. 2026 ยังเป็น
+หลักฐานที่ถูกต้องของบิลด์และสภาพตอนนั้น เพียงแต่รอบใหม่จะไม่ได้ "ต่อ" จากสถานะนั้น ·
+รอบแรกหลังเปลี่ยนชื่อจึงเทียบได้เฉพาะกับรอบที่เริ่มจากเครื่องสะอาดเหมือนกัน
+
+**ยังไม่มีรอบเดินจริงบนบิลด์ที่ใช้ bundle ID ใหม่** — `xcodebuild build` + `RunnerTests`
+ผ่านบน simulator เท่านั้น ซึ่งตาม CONTRIBUTING ข้อ 4 **ไม่นับเป็นการยืนยันอะไรทั้งสิ้น**
+สำหรับเคสในไฟล์นี้
 
 ## interval ของบีคอน — ตัวแปรกวนที่เพิ่งค้นพบ (เพิ่ม 10 ก.ย. 2026)
 
