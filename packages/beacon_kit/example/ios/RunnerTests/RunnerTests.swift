@@ -607,10 +607,11 @@ class RunnerTests: XCTestCase {
   // เครื่องถูกปรับย้อนหลัง" (ดู §4.3.1/§4.3.2) และเพิ่มเทสต์ใหม่เคส 8 สำหรับช่องโหว่
   // ที่ guard นี้จับไม่ได้ (ก2 ใน §4.3.1)
   //
-  // `AppDelegate.longCooldownSinceLastPostedMillisOrNull(lastPostedEpochSecondsOrZero:nowEpochSeconds:)`
-  // เป็น `static func` ไม่มีการระบุ access modifier จึงเป็น `internal` ตามค่า
-  // default ของ Swift — เข้าถึงได้จริงผ่าน `@testable import Runner` โดยไม่ต้อง
-  // มี `AppDelegate` instance เพราะเป็น pure function ล้วน (8d31df0)
+  // `AppDelegate.longCooldownSinceLastPostedMillisOrNull(lastPostedEpochSecondsOrZero:nowEpochSeconds:cooldownSeconds:)`
+  // (ลายเซ็นเพิ่มพารามิเตอร์ที่สาม `cooldownSeconds` แล้ว, ADR-25 §8.4.1, ดูหมายเหตุ
+  // ด้านล่าง) เป็น `static func` ไม่มีการระบุ access modifier จึงเป็น `internal`
+  // ตามค่า default ของ Swift — เข้าถึงได้จริงผ่าน `@testable import Runner` โดยไม่
+  // ต้องมี `AppDelegate` instance เพราะเป็น pure function ล้วน (8d31df0)
   //
   // ✅ **เคส 4 (รูปร่างของ key) เคยทดสอบที่นี่ไม่ได้ — แก้แล้วใน `6e3470d`:**
   // `proximityCooldownKey(for:)` เดิมเป็น `private func` (instance method) ซึ่ง
@@ -631,13 +632,31 @@ class RunnerTests: XCTestCase {
   // จึงอ้างค่าจริงตรง ๆ ผ่าน `AppDelegate.proximityLongNotificationCooldownSeconds`
   // ไม่ต้อง hardcode `30 * 60` ซ้ำอีกต่อไป — เท่ากับที่ฝั่ง Android อ้าง
   // `LONG_COOLDOWN_MILLIS` ตรง ๆ อยู่แล้ว
+  //
+  // ⚠️ **ถอนย่อหน้าข้างบนบางส่วนแล้ว (แก้ 17 ก.ย. 2026, ADR-25 §8/§8.4.1,
+  // commit `8b20433`) — อย่าลบทิ้ง เก็บไว้เป็นประวัติ:** `proximityLongNotificationCooldownSeconds`
+  // ถูก**ลบสัญลักษณ์ทิ้งไปแล้ว** (ไม่ใช่แค่เปลี่ยน access) แยกออกเป็นสามสัญลักษณ์ใหม่
+  // ตาม §8.4: `AppDelegate.productDefaultLongCooldownSeconds` (ค่าสินค้า 24 ชม.,
+  // `static let`, internal), `AppDelegate.testingLongCooldownSeconds` (ค่าที่
+  // example override จริง 30 นาที, `static let`, internal — สัญลักษณ์ที่เทสต์กลุ่ม
+  // นี้ควรอ้างแทน) และ `longCooldownSeconds` (**instance** `var` — ค่าที่ใช้งานจริง
+  // runtime, `private`, ตั้งค่าใน `didFinishLaunchingWithOptions`)
+  //
+  // `longCooldownSinceLastPostedMillisOrNull` ยังเป็น `static func` internal
+  // เหมือนเดิม **แต่เพิ่มพารามิเตอร์ที่สาม `cooldownSeconds` ที่ไม่มีค่า default
+  // โดยตั้งใจ** (ADR-25 §8.4.1 — เหตุผลเดียวกับฝั่ง Android ที่เพิ่ม `cooldownMillis`)
+  // เพื่อบังคับให้ทุกจุดเรียกด้านล่างระบุหน้าต่างที่ตั้งใจทดสอบชัดเจน — **ทุกจุดเรียก
+  // ในกลุ่มนี้แก้ให้ส่ง `cooldownSeconds: AppDelegate.testingLongCooldownSeconds`
+  // เพื่อยังทดสอบหน้าต่าง 30 นาทีเหมือนเดิมทุกประการ ไม่ใช่หน้าต่างค่าสินค้า 24 ชม.
+  // ที่จะเกิดขึ้นถ้ามีค่า default** (ตามที่ §8.9 เตือนไว้ว่าเป็นความเงียบที่อันตราย)
 
   /// เคส 1: ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (`0` — sentinel ของ
   /// `UserDefaults.double(forKey:)` ที่ไม่พบ key) → ต้องยิงได้ (`nil`)
   func testLongCooldownAllowsFirstEverPostForKey() {
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: 0,
-      nowEpochSeconds: 1_000
+      nowEpochSeconds: 1_000,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertNil(result, "ไม่เคยโพสต์คีย์นี้มาก่อนต้องยิงได้เสมอ")
@@ -652,7 +671,8 @@ class RunnerTests: XCTestCase {
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPosted,
-      nowEpochSeconds: now
+      nowEpochSeconds: now,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertEqual(
@@ -664,19 +684,24 @@ class RunnerTests: XCTestCase {
 
   /// เคส 3ก: ขอบล่าง — เหลืออีกน้อยกว่า 1 วินาทีจะครบ 30 นาที → ยังติดคูลดาวน์
   ///
-  /// **อ้างค่าคงที่จริง ไม่ hardcode `30 * 60`** — `proximityLongNotificationCooldownSeconds`
-  /// ถูกเปลี่ยนจาก `private` เป็น `internal` แล้ว (`6e3470d`) เทียบเท่าที่ฝั่ง
-  /// Android อ้าง `LONG_COOLDOWN_MILLIS` ตรง ๆ อยู่แล้ว — ถ้าใครแก้ค่าจริงในอนาคต
-  /// เทสต์นี้จะยังตรวจถูกจุดเสมอ ไม่มีค่าคู่ขนานให้ drift
+  /// **อ้างค่าคงที่จริง ไม่ hardcode `30 * 60`** — เดิมอ้าง
+  /// `proximityLongNotificationCooldownSeconds` (`internal`, `6e3470d`) แต่สัญลักษณ์
+  /// นั้น**ถูกลบทิ้งไปแล้ว** (ADR-25 §8.4, `8b20433`) แยกเป็นสามสัญลักษณ์ใหม่ — เคส
+  /// นี้ตั้งใจทดสอบ**หน้าต่างที่ example override จริง (30 นาที)** จึงอ้าง
+  /// `AppDelegate.testingLongCooldownSeconds` (`internal` เช่นกัน) แทน **ไม่ใช่**
+  /// `productDefaultLongCooldownSeconds` (ค่าสินค้า 24 ชม. — คนละหน้าต่างกัน) และ
+  /// ส่งเป็นอาร์กิวเมนต์ที่สามของฟังก์ชันตรง ๆ (พารามิเตอร์ใหม่ ไม่มีค่า default
+  /// โดยตั้งใจ, ADR-25 §8.4.1) — แก้ 17 ก.ย. 2026
   func testLongCooldownStillBlocksOneSecondBeforeWindowElapses() {
     // lastPosted ต้องไม่เป็น 0 — 0 คือ sentinel ของ "ไม่เคยโพสต์มาก่อน"
     let lastPosted: TimeInterval = 1
-    let elapsed = AppDelegate.proximityLongNotificationCooldownSeconds - 1
+    let elapsed = AppDelegate.testingLongCooldownSeconds - 1
     let now = lastPosted + elapsed
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPosted,
-      nowEpochSeconds: now
+      nowEpochSeconds: now,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertEqual(
@@ -687,31 +712,125 @@ class RunnerTests: XCTestCase {
   }
 
   /// เคส 3ข: ขอบพอดี — `now - lastPosted == 30 นาที` พอดี → ต้องยิงได้ เพราะ
-  /// เงื่อนไขในโค้ดจริงเป็น `sinceSeconds < proximityLongNotificationCooldownSeconds`
-  /// (ไม่ใช่ `<=`)
+  /// เงื่อนไขในโค้ดจริงเป็น `sinceSeconds < cooldownSeconds` (ไม่ใช่ `<=`)
+  ///
+  /// ⚠️ แก้ 17 ก.ย. 2026 (ADR-25 §8.4/§8.4.1) — เหตุผลเดียวกับเคส 3ก ข้างบน
   func testLongCooldownAllowsExactlyAtWindowBoundary() {
     let lastPosted: TimeInterval = 1
-    let now = lastPosted + AppDelegate.proximityLongNotificationCooldownSeconds
+    let now = lastPosted + AppDelegate.testingLongCooldownSeconds
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPosted,
-      nowEpochSeconds: now
+      nowEpochSeconds: now,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertNil(result, "since == 30 นาทีพอดีต้องยิงได้ เพราะเงื่อนไขเป็น <")
   }
 
   /// เคส 3ค: เกินขอบไปแล้ว 1 วินาที → ต้องยิงได้เช่นกัน
+  ///
+  /// ⚠️ แก้ 17 ก.ย. 2026 (ADR-25 §8.4/§8.4.1) — เหตุผลเดียวกับเคส 3ก/3ข ข้างบน
   func testLongCooldownAllowsOneSecondAfterWindowElapses() {
     let lastPosted: TimeInterval = 1
-    let now = lastPosted + AppDelegate.proximityLongNotificationCooldownSeconds + 1
+    let now = lastPosted + AppDelegate.testingLongCooldownSeconds + 1
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPosted,
-      nowEpochSeconds: now
+      nowEpochSeconds: now,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertNil(result, "เกิน 30 นาทีไปแล้วต้องยิงได้")
+  }
+
+  /// เคส 3ง (เพิ่มโดย beacon-qa, 17 ก.ย. 2026, ADR-25 §8.8) — **ขอบของหน้าต่างต้อง
+  /// เลื่อนตามค่า `cooldownSeconds` ที่ส่งเข้าไปจริง ไม่ใช่ค่าคงที่ที่ผูกตายตัว** ใช้
+  /// ค่าที่**ไม่ใช่ 30 นาที** (45 นาที) โดยตั้งใจ เพื่อพิสูจน์ว่าพฤติกรรมของฟังก์ชัน
+  /// ไม่ได้ผูกกับตัวเลข 30 นาทีเป็นการเฉพาะ (ถ้ามีใคร hardcode ตัวเลข 30 นาทีกลับ
+  /// เข้าไปในฟังก์ชันแทนการใช้พารามิเตอร์ เทสนี้จะแดงทันที ในขณะที่เทส 3ก/3ข/3ค ที่
+  /// ใช้ 30 นาทีอาจยังบังเอิญเขียวอยู่) — เทียบเท่า
+  /// `longCooldownBoundaryShiftsWithProvidedCooldownMillisNotThirtyMinutes` ฝั่ง
+  /// Android
+  func testLongCooldownBoundaryShiftsWithProvidedCooldownSecondsNotThirtyMinutes() {
+    let differentCooldownSeconds: TimeInterval = 45 * 60 // 45 นาที — ไม่ใช่ 30 นาที
+    let lastPosted: TimeInterval = 1
+
+    let justBeforeBoundary = lastPosted + differentCooldownSeconds - 1
+    let stillBlocked = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: justBeforeBoundary,
+      cooldownSeconds: differentCooldownSeconds
+    )
+    XCTAssertEqual(
+      stillBlocked,
+      Int64((differentCooldownSeconds - 1) * 1000),
+      "ยังไม่ครบ 45 นาที (ขาดอยู่ 1 วินาที) ต้องยังติดคูลดาวน์ — ตามค่าที่ส่งเข้ามา ไม่ใช่ 30 นาที"
+    )
+
+    let exactBoundary = lastPosted + differentCooldownSeconds
+    let allowedAtBoundary = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: exactBoundary,
+      cooldownSeconds: differentCooldownSeconds
+    )
+    XCTAssertNil(
+      allowedAtBoundary,
+      "since == cooldownSeconds (45 นาที) พอดีต้องยิงได้ เพราะเงื่อนไขเป็น < ไม่ใช่ <= " +
+        "ไม่ว่าค่าที่ส่งเข้ามาจะเป็น 30 นาทีหรือไม่ก็ตาม"
+    )
+  }
+
+  /// เพิ่มโดย beacon-qa, 17 ก.ย. 2026 (ADR-25 §8.8, ข้อแรก) — **ค่าเริ่มต้นของสินค้า
+  /// (product default) ต้องเป็น 24 ชั่วโมงจริง** ยืนยันค่าคงที่ตรง ๆ เป็นวินาที
+  /// (`86_400`) เพื่อกันคนเผลอแก้ค่านี้โดยไม่ตั้งใจ — เทียบเท่า
+  /// `defaultLongCooldownMillisIsProductDefaultTwentyFourHours` ฝั่ง Android
+  func testProductDefaultLongCooldownSecondsIsTwentyFourHours() {
+    XCTAssertEqual(
+      AppDelegate.productDefaultLongCooldownSeconds,
+      86_400,
+      "ค่าเริ่มต้นของสินค้าต้องเป็น 24 ชั่วโมง (24*60*60 วินาที) ตาม ADR-25 §8.1"
+    )
+  }
+
+  /// เพิ่มโดย beacon-qa, 17 ก.ย. 2026 (ADR-25 §8.8, ข้อสอง — **เคสสำคัญที่สุดของรอบ
+  /// นี้**) — **pure function ต้องใช้ค่า `cooldownSeconds` ที่ส่งเข้ามาจริง ไม่ใช่
+  /// ค่าคงที่เดิมที่แฝงอยู่ในฟังก์ชัน** ส่งค่าคูลดาวน์เล็ก ๆ (1 วินาที — ต่างจากทั้ง
+  /// ค่าสินค้า 24 ชม. และค่าทดสอบ 30 นาทีอย่างชัดเจน) แล้วยืนยันว่าขอบของหน้าต่าง
+  /// ขยับตามค่านั้นจริง — **ถ้าใครเผลอ hardcode ค่าเดิม (30 นาทีหรือ 24 ชม.) กลับ
+  /// เข้าไปในฟังก์ชันแทนการอ่านพารามิเตอร์ `cooldownSeconds` เทสนี้ต้องแดงทันที**
+  /// เพราะ 1 วินาทีเล็กกว่าทั้งสองค่านั้นมหาศาล — เทียบเท่า
+  /// `longCooldownSinceLastPostedUsesProvidedCooldownMillisNotHardcodedConstant`
+  /// ฝั่ง Android
+  func testLongCooldownSinceLastPostedUsesProvidedCooldownSecondsNotHardcodedConstant() {
+    let tinyCooldownSeconds: TimeInterval = 1
+    let lastPosted: TimeInterval = 1_000
+
+    // ยังไม่ครบ 1 วินาที (เหลืออีก 0.5 วินาที) — ต้องยังติดคูลดาวน์
+    let stillBlocked = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: lastPosted + 0.5,
+      cooldownSeconds: tinyCooldownSeconds
+    )
+    XCTAssertEqual(
+      stillBlocked,
+      500,
+      "ต้องยังติดคูลดาวน์ตามค่าเล็ก ๆ ที่ส่งเข้ามา (1 วินาที) ไม่ใช่ค่าคงที่เดิม (30 นาที/24 ชม.)"
+    )
+
+    // เกิน 1 วินาทีไปแล้วเยอะมาก (5 วินาที) — ถ้าฟังก์ชัน hardcode ค่าเดิมไว้ (30
+    // นาที = 1800 วินาที) ผลตรงนี้จะยังเป็นคูลดาวน์อยู่ (ผิด) เพราะ 5 วินาทียังไม่
+    // ครบ 30 นาที — เทสนี้จึงแดงทันทีถ้ามีคนเผลอ hardcode กลับเข้าไป
+    let allowedAfterTinyWindow = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: lastPosted + 5,
+      cooldownSeconds: tinyCooldownSeconds
+    )
+    XCTAssertNil(
+      allowedAfterTinyWindow,
+      "เกินคูลดาวน์เล็ก ๆ (1 วินาที) ที่ส่งเข้ามาไปนานแล้วต้องยิงได้ — ถ้าแดง แปลว่าฟังก์ชันใช้ " +
+        "ค่าคงที่เดิมแทนพารามิเตอร์ที่ส่งเข้ามาจริง"
+    )
   }
 
   // MARK: - ADR-25 §4 เคส 4 — รูปร่างของ key (เปิดให้เทสได้แล้วใน `6e3470d`)
@@ -815,7 +934,8 @@ class RunnerTests: XCTestCase {
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: valueAsIfReadBackFromDefaultsAfterProcessRestart,
-      nowEpochSeconds: nowAfterRestart
+      nowEpochSeconds: nowAfterRestart,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertEqual(
@@ -845,7 +965,8 @@ class RunnerTests: XCTestCase {
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPostedEpochSecondsBeforeClockAdjustment,
-      nowEpochSeconds: nowEpochSecondsAfterClockSetBackwards
+      nowEpochSeconds: nowEpochSecondsAfterClockSetBackwards,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertNil(
@@ -885,7 +1006,8 @@ class RunnerTests: XCTestCase {
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPostedEpochSeconds,
-      nowEpochSeconds: nowEpochSeconds
+      nowEpochSeconds: nowEpochSeconds,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertNotNil(
@@ -925,11 +1047,13 @@ class RunnerTests: XCTestCase {
 
     let resultA = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPosted,
-      nowEpochSeconds: now
+      nowEpochSeconds: now,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
     let resultB = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: lastPosted,
-      nowEpochSeconds: now
+      nowEpochSeconds: now,
+      cooldownSeconds: AppDelegate.testingLongCooldownSeconds
     )
 
     XCTAssertEqual(resultA, Int64(elapsed * 1000))
@@ -939,4 +1063,84 @@ class RunnerTests: XCTestCase {
       "เวลาที่ผ่านไปเท่ากันต้องได้ผลเดียวกันเสมอ ไม่ขึ้นกับ transition ใด ๆ"
     )
   }
+
+  // MARK: - เทสที่รอบก่อนเขียนไม่ได้ (ADR-25 §8.8/§9.7) — เขียนได้แล้วรอบนี้ หลัง
+  // `flutter-dev` เปิดสามจุดจาก `private` เป็น `internal` (17 ก.ย. 2026,
+  // precedent เดียวกับ `6e3470d`): `AppDelegate.longCooldownSeconds` เป็น
+  // `var` (internal, `AppDelegate.swift:78`) และ
+  // `AppDelegate.layer1NotificationsEnabled` เป็น `static let` (internal,
+  // `AppDelegate.swift:336`) — **ไม่แตะค่า/ชื่อ/ตรรกะ** เปลี่ยนแค่ access modifier
+
+  /// เพิ่มโดย beacon-qa, 17 ก.ย. 2026 (ADR-25 §8.8, ข้อแรก — เทียบเท่า
+  /// `AppDelegate()` instance ของฝั่ง Android) — `AppDelegate()` ใหม่ (ก่อนเรียก
+  /// `didFinishLaunchingWithOptions`) ต้องมี `longCooldownSeconds ==
+  /// productDefaultLongCooldownSeconds` (ค่าสินค้า 24 ชม.) **ไม่ใช่**
+  /// `testingLongCooldownSeconds` (ค่าทดสอบ 30 นาที) — ถ้าใครสลับ default ผิดข้าง
+  /// ใน stored property initializer (`AppDelegate.swift:78`) เทสนี้ต้องแดงทันที
+  ///
+  /// ⚠️ **เทสนี้ไม่ได้พิสูจน์ว่า `didFinishLaunchingWithOptions` override เป็น 30
+  /// นาทีจริงตอน launch** — เส้นทางนั้นต้องเรียกเมธอดทั้งเมธอด ซึ่งแตะ
+  /// `CLLocationManager`/`UNUserNotificationCenter`/plugin registration ฯลฯ ที่
+  /// ต้องมี app lifecycle จริง ยืนยันด้วย unit test ในไฟล์นี้ไม่ได้ — เทสนี้
+  /// พิสูจน์ได้แค่ **ค่า default ของ instance ตอนสร้างใหม่** เท่านั้น การยืนยันว่า
+  /// override จริงเกิดขึ้นตอน launch ต้องทำบนอุปกรณ์จริง (ดู
+  /// `docs/test-checklists/ios_broadcast_scanning.md`)
+  func testNewAppDelegateInstanceDefaultsToProductCooldownNotTestingCooldown() {
+    let appDelegate = AppDelegate()
+
+    XCTAssertEqual(
+      appDelegate.longCooldownSeconds,
+      AppDelegate.productDefaultLongCooldownSeconds,
+      "AppDelegate() ใหม่ต้องมีค่าเริ่มต้นเป็นค่าสินค้า (24 ชม.) ไม่ใช่ค่าทดสอบ (30 นาที)"
+    )
+    XCTAssertNotEqual(
+      appDelegate.longCooldownSeconds,
+      AppDelegate.testingLongCooldownSeconds,
+      "ค่าเริ่มต้นต้องไม่ใช่ค่าทดสอบ 30 นาที — ค่านั้นถูก override เฉพาะใน " +
+        "didFinishLaunchingWithOptions เท่านั้น ไม่ใช่ default ของ instance"
+    )
+  }
+
+  /// เพิ่มโดย beacon-qa, 17 ก.ย. 2026 (ADR-25 §9.7 — เทียบเท่า
+  /// `layer1NotificationsFlagIsDisabledByDefault` ฝั่ง Android)
+  ///
+  /// ⚠️ **เทสนี้กันอะไร — อ่านให้ชัดก่อนเชื่อว่าเทสนี้ "ครอบคลุม" ADR-25 §9 ทั้งข้อ:**
+  /// เทสนี้**กันคนเผลอ merge สาขาที่เปิด flag ไว้ตอน debug** (เช่นเปิดชั่วคราวเพื่อ
+  /// เทสต์ notification บนโต๊ะแล้วลืมปิดก่อนส่ง PR) เท่านั้น — **ไม่ใช่การพิสูจน์ว่า
+  /// บรรทัดหลักฐาน `event=notification ... reason=disabled` ถูกเขียนจริงตอน flag
+  /// ปิด** ส่วนนั้นต้องมี `BackgroundEvidenceLog.shared`/`UserDefaults`/ไฟล์จริง
+  /// เพื่อรัน `recordRegionEvent(_:)`/`recordRegionNotificationDisabled(_:)` ซึ่ง
+  /// ยืนยันไม่ได้ด้วย unit test ในไฟล์นี้ (ดูหมายเหตุท้ายไฟล์ — ต้องยืนยันบน
+  /// อุปกรณ์จริงเท่านั้น)
+  func testLayer1NotificationsFlagIsDisabledByDefault() {
+    XCTAssertFalse(
+      AppDelegate.layer1NotificationsEnabled,
+      "flag ชั้น 1 ต้องปิดเป็นค่าเริ่มต้น (ADR-25 §9) — ถ้าแดง แปลว่ามีคน merge " +
+        "สาขาที่เปิด flag ไว้ตอน debug"
+    )
+  }
+
+  // MARK: - หนี้ที่ยังทดสอบไม่ได้ (บันทึกโดย beacon-qa, 17 ก.ย. 2026, ADR-25 §8.8/§9.7)
+  //
+  // ✅ **access level ของทั้งสองจุด (`longCooldownSeconds`,
+  // `layer1NotificationsEnabled`) เปิดแล้วรอบสอง (17 ก.ย. 2026) โดย
+  // `flutter-dev`** — เทสสองตัวข้างบน (`testNewAppDelegateInstanceDefaultsTo...`,
+  // `testLayer1NotificationsFlagIsDisabledByDefault`) ปิดหนี้ข้อ "สร้าง
+  // instance/อ่าน flag ไม่ได้เลย" ที่เคยบันทึกไว้ตรงนี้แล้ว
+  //
+  // ⚠️ **หนี้ที่เหลือ (ยังปิดไม่ได้แม้ access level เปิดแล้ว):**
+  //
+  // §9.7 ยังต้องการเทสยืนยันว่า**บรรทัดหลักฐาน `reason=disabled` ถูกเขียนจริงตอน
+  // flag ปิด** และ **ไม่มีการเรียก `postNotification`/`UNUserNotificationCenter`
+  // จริง** — ทำไม่ได้ในไฟล์นี้เพราะตรรกะแยกสาขาอยู่ใน `recordRegionEvent(_:)` ซึ่ง
+  // เป็น instance method ที่เขียนไฟล์ผ่าน `BackgroundEvidenceLog.shared` (I/O ของ
+  // `UserDefaults`/ไฟล์จริง) — ไม่มี fake/mock ให้แทนที่ใน target นี้ ยืนยันได้จริง
+  // เฉพาะบนอุปกรณ์จริงเท่านั้น (ดู `docs/test-checklists/ios_broadcast_scanning.md`)
+  //
+  // §8.8 ยังต้องการเทสยืนยันว่า `didFinishLaunchingWithOptions` **override**
+  // `longCooldownSeconds` เป็น `testingLongCooldownSeconds` จริงตอน launch (ไม่ใช่
+  // แค่ค่า default ของ instance ที่เทสข้างบนพิสูจน์แล้ว) — เรียกเมธอดนั้นทั้งเมธอด
+  // ไม่ได้ในไฟล์นี้เพราะแตะ `CLLocationManager`/`UNUserNotificationCenter`/
+  // `BeaconKitIosPlugin.startBackgroundRegionMonitoring` ที่ต้องมี app lifecycle
+  // จริง — ยืนยันได้เฉพาะบนอุปกรณ์จริงเท่านั้นเช่นกัน
 }
