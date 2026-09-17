@@ -5472,6 +5472,14 @@ store ที่เส้นทางล้าง state (`ProximityGateStore`, `B
 
 ### 3. ออกแบบฝั่ง Android — `ExampleProximityWatcher.kt`
 
+> ⚠️ **สนิปเพ็ตโค้ดในหัวข้อนี้เป็นฉบับก่อน §8 (17 ก.ย. 2026) — อย่าคัดไปใช้ตรง ๆ:**
+> `LONG_COOLDOWN_MILLIS` ถูกเปลี่ยนเป็น `DEFAULT_LONG_COOLDOWN_MILLIS` (ค่าสินค้า
+> 24 ชั่วโมง ไม่ใช่ 30 นาที) และ `proximityLongNotificationCooldownSeconds` ถูก**ลบ**
+> แทนด้วย `productDefaultLongCooldownSeconds`/`testingLongCooldownSeconds`/instance
+> `longCooldownSeconds` · pure function ทั้งสองฝั่งรับค่าคูลดาวน์เป็นพารามิเตอร์ที่สาม
+> **โดยไม่มีค่า default** (§8.4.1) — **ฉบับที่ตรงกับโค้ดจริงอยู่ที่ §8.3/§8.4**
+> หัวข้อนี้เก็บไว้เป็นบันทึกว่าการออกแบบรอบแรกหน้าตาอย่างไรเท่านั้น
+
 ไฟล์จริง: `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/ExampleProximityWatcher.kt`
 (จุดโพสต์ชั้นที่ 2 เดี่ยวจุดเดียว — `onProximityChanged()` บรรทัด 51-128)
 
@@ -5656,6 +5664,14 @@ ADR นี้ก่อน
 
 ### 4. ⚠️ คำตอบข้อบังคับ: จุดโพสต์ notification ชั้นที่ 2 ฝั่ง iOS อยู่ใน **example app**
 ไม่ใช่ SDK — ออกแบบคู่ขนาน ไม่ใช่หนี้ parity
+
+> ⚠️ **สนิปเพ็ตโค้ดในหัวข้อนี้เป็นฉบับก่อน §8 (17 ก.ย. 2026) — อย่าคัดไปใช้ตรง ๆ:**
+> `LONG_COOLDOWN_MILLIS` ถูกเปลี่ยนเป็น `DEFAULT_LONG_COOLDOWN_MILLIS` (ค่าสินค้า
+> 24 ชั่วโมง ไม่ใช่ 30 นาที) และ `proximityLongNotificationCooldownSeconds` ถูก**ลบ**
+> แทนด้วย `productDefaultLongCooldownSeconds`/`testingLongCooldownSeconds`/instance
+> `longCooldownSeconds` · pure function ทั้งสองฝั่งรับค่าคูลดาวน์เป็นพารามิเตอร์ที่สาม
+> **โดยไม่มีค่า default** (§8.4.1) — **ฉบับที่ตรงกับโค้ดจริงอยู่ที่ §8.3/§8.4**
+> หัวข้อนี้เก็บไว้เป็นบันทึกว่าการออกแบบรอบแรกหน้าตาอย่างไรเท่านั้น
 
 ยืนยันจากโค้ดจริง: `posted=requested` (สตริงตัวชี้ว่านี่คือจุดโพสต์) อยู่ใน
 `packages/beacon_kit/example/ios/Runner/AppDelegate.swift:418` เพียงจุดเดียว ภายใน
@@ -6064,6 +6080,12 @@ returned value is identical to the result of `mach_absolute_time()`" — ตร�
 ### 4.3.2 สัญญาของ pure function ใหม่ — สำหรับ `flutter-dev` implement และ
 `beacon-qa` เทส
 
+> ⚠️ **สนิปเพ็ตในหัวข้อนี้เป็นฉบับก่อน §8 (17 ก.ย. 2026):** ลายเซ็นจริงตอนนี้มี
+> **พารามิเตอร์ที่สาม `cooldownSeconds: TimeInterval` (ไม่มีค่า default ตาม §8.4.1)**
+> และ `proximityLongNotificationCooldownSeconds` ถูกลบไปแล้ว — **ฉบับที่ตรงกับโค้ดจริง
+> อยู่ที่ §8.4** · เนื้อหาเรื่อง**ฐานเวลา** (wall clock) ของหัวข้อนี้ยังจริงทุกประการ
+> ส่วนที่ล้าสมัยคือ**ลายเซ็น**เท่านั้น
+
 **ชื่อฟังก์ชันไม่เปลี่ยน** (`longCooldownSinceLastPostedMillisOrNull`) — เปลี่ยนแค่
 **ความหมายและชื่อพารามิเตอร์เวลา** จาก "systemUptime" เป็น "epoch seconds" (wall
 clock) ตรรกะภายในฟังก์ชัน**ไม่เปลี่ยนแม้แต่บรรทัดเดียว** (เหตุผล: ฟังก์ชันนี้เป็น
@@ -6323,11 +6345,25 @@ calibrate ค่าคูลดาวน์ 30 นาที **ขอบเขต
 Dart ใด ๆ
 
 ### 8. คูลดาวน์เป็น "ค่าตั้ง" ของ watcher — แยก default ของสินค้า (24 ชม.) ออกจาก
-override ของ example (30 นาที) (เพิ่ม 17 ก.ย. 2026 — ออกแบบเท่านั้น ยังไม่ implement)
+override ของ example (30 นาที) (เพิ่ม 17 ก.ย. 2026)
 
-> **สถานะ: accepted (การออกแบบ) — โค้ดยังไม่ถูกแก้สักบรรทัดในรอบนี้** ขอบเขตของรอบนี้
-> คือ `ARCHITECTURE.md` เท่านั้น implement เป็นงานของ `flutter-dev` รอบถัดไปตาม §8.7/§9.6
-> ด้านล่าง · **ไม่แตะ SDK** (`packages/beacon_kit_android/`, `packages/beacon_kit_ios/`,
+> **สถานะ: code-complete, unverified — implement แล้วใน commit `8b20433` (โค้ด) ·
+> `6bb546b` (access) · `c7fd4e2` (เทส) ของ PR เดียวกับที่เขียนหัวข้อนี้** ดูสถานะ
+> ผลทดสอบที่ `docs/test-checklists/android_background_scanning.md` ข้อ 13 · 14 และ
+> `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 21.1 · 21.4 · 22.1
+>
+> ⚠️ **ถอนแบนเนอร์เดิม (17 ก.ย. 2026, รอบตรวจ):** ฉบับแรกเขียนว่า *"accepted
+> (การออกแบบ) — โค้ดยังไม่ถูกแก้สักบรรทัดในรอบนี้ ... implement เป็นงานของ
+> `flutter-dev` รอบถัดไป"* ซึ่งจริง ณ ตอนเขียน (commit `b1ba6c4`) แต่**เป็นเท็จ
+> ภายใน 11 นาทีถัดมา** เมื่อ `8b20433` implement จริงในสาขาเดียวกัน — เป็นบั๊ก
+> คลาสเดียวกับที่ CONTRIBUTING.md หัวข้อ 8 บันทึกว่าเคยเกิดกับ ADR-16/ADR-17
+> (แบนเนอร์ค้างในสถานะที่เก่ากว่าโค้ด ทิศทาง understate) · **หมายเหตุสำหรับคนที่
+> จะเพิ่มเครื่องมือตรวจ:** ทั้ง `grep` ของกฎข้อ 8 และ `tool/check_adr_banners.sh`
+> **จับเคสนี้ไม่ได้** เพราะตัวแรกตรวจแค่ว่าแบนเนอร์ไม่มีคำว่าผลทดสอบปนอยู่ ตัวที่สอง
+> ตรวจแค่ว่าตัวชี้ชี้ไปที่มีอยู่จริง — ไม่มีตัวไหนตรวจว่าแบนเนอร์ "ตามทันโค้ด" หรือยัง
+>
+> **ยังไม่ verified:** ยังไม่มีรอบเดินอุปกรณ์จริงกับค่าสินค้า 24 ชั่วโมงเลยสักรอบ
+> (หลักฐานที่มีทดสอบค่า 30 นาทีเท่านั้น) · **ไม่แตะ SDK** (`packages/beacon_kit_android/`, `packages/beacon_kit_ios/`,
 > `packages/beacon_kit/lib/`) แม้แต่บรรทัดเดียว — ทุกอย่างในหัวข้อนี้อยู่ใน example app
 > ล้วน (`ExampleProximityWatcher.kt`/`ExampleApplication.kt` ฝั่ง Android,
 > `AppDelegate.swift` ฝั่ง iOS)
@@ -6726,8 +6762,20 @@ wall clock (รอดข้าม reboot, เสี่ยงเรื่อง�
   เป็น instance method และไฟล์นี้มีแพทเทิร์น instance var ที่ตั้งค่าตอน launch อยู่แล้ว
 
 ### 9. notification ชั้นที่ 1 (`enter`/`exit`) ปิดโดยค่าเริ่มต้นใน example — บรรทัด
-หลักฐานยังต้องเขียนเสมอ (เพิ่ม 17 ก.ย. 2026 — ออกแบบเท่านั้น ยังไม่ implement)
+หลักฐานยังต้องเขียนเสมอ (เพิ่ม 17 ก.ย. 2026)
 
+> **สถานะ: code-complete, unverified — implement แล้วใน commit `8b20433` ของ PR
+> เดียวกับที่เขียนหัวข้อนี้** ดูสถานะผลทดสอบที่
+> `docs/test-checklists/android_background_scanning.md` ข้อ 14 และ
+> `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 22.1
+>
+> ⚠️ **ถอนข้อความ "ออกแบบเท่านั้น ยังไม่ implement" ของหัวเรื่องเดิม (17 ก.ย. 2026,
+> รอบตรวจ)** — เหตุผลเดียวกับ §8 ทุกประการ
+>
+> **ยังไม่ verified:** unit test ยืนยันได้แค่ว่า flag มีค่าเริ่มต้นเป็นปิด — **ไม่ได้
+> พิสูจน์ว่าบรรทัด `posted=false reason=disabled` ถูกเขียนลงไฟล์จริง** เส้นทางนั้น
+> ต้องมี `Context`/ไฟล์จริง ต้องยืนยันด้วยอุปกรณ์จริงเท่านั้น
+>
 > **ขอบเขต: ไม่แตะชั้นที่ 2 (proximity, ADR-20/ADR-21/ADR-22) และไม่แตะ
 > `staleAfterMillis`/`BackgroundRegionMonitor.kt` ตามขอบเขตเดิมของ ADR-25 ทั้งฉบับ**
 > — หัวข้อนี้แก้เฉพาะจุดที่ยิง notification ของ `enter`/`exit` ในสอง example app
