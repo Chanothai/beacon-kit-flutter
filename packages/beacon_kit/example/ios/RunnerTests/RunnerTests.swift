@@ -1143,4 +1143,134 @@ class RunnerTests: XCTestCase {
   // ไม่ได้ในไฟล์นี้เพราะแตะ `CLLocationManager`/`UNUserNotificationCenter`/
   // `BeaconKitIosPlugin.startBackgroundRegionMonitoring` ที่ต้องมี app lifecycle
   // จริง — ยืนยันได้เฉพาะบนอุปกรณ์จริงเท่านั้นเช่นกัน
+
+  // MARK: - ADR-26 §1/§6/§7 — บทบาท zone/point ของ region ชั้นที่ 2
+  // (เพิ่มโดย beacon-qa, 17 ก.ย. 2026)
+  //
+  // เคสที่ ADR-26 §6 บังคับให้คลุม (event ที่เป็น zone ต้องไม่โพสต์ notification
+  // จริง + เขียน reason=zoneRegion, event ที่เป็น point ต้องไหลผ่านเหมือนเดิม,
+  // บีคอนเดียวในสอง region ต้องได้ notification ใบเดียว) **ทดสอบด้วย unit test
+  // ในไฟล์นี้ไม่ได้ทั้งดุ้น** เพราะเส้นทางที่ตัดสินใจจริง
+  // (`AppDelegate.recordProximityEvent(_:)`) เป็น instance method ที่เขียนไฟล์
+  // ผ่าน `BackgroundEvidenceLog.shared` (I/O ของ `UserDefaults`/ไฟล์จริง) และ
+  // เรียก `UNUserNotificationCenter` จริงเมื่อ post — เหตุผลเดียวกับหนี้ข้อ §9.7
+  // ที่บันทึกไว้ข้างบนทั้งหมด (ไม่มี fake/mock ให้แทนที่ใน target นี้)
+  //
+  // สิ่งที่**เป็น pure data จริงและเทสได้แน่นอน** คือตาราง
+  // `AppDelegate.regionRoles` เอง — สามเทสข้างล่างพิสูจน์แค่ตัวตารางค่าคงที่
+  // (ไม่ได้พิสูจน์ว่า `recordProximityEvent(_:)` เอาตารางนี้ไปใช้ถูกจุด/ถูก
+  // ลำดับ — อ่านคอมเมนต์ของแต่ละเทสให้ชัดก่อนอ้างว่าเทสนี้ "คลุม ADR-26" ทั้งข้อ)
+
+  /// **สิ่งที่เทสนี้พิสูจน์จริง:** ตาราง `AppDelegate.regionRoles` มีครบสี่
+  /// identifier ตามตาราง ADR-26 §1 เป๊ะ และแมป `k9p-point`/`minew-test` ไป
+  /// `.point` ส่วน `k9p-default`/`bigc-test` ไป `.zone` — โดยเฉพาะ
+  /// `minew-test` ซึ่ง**ไม่มี major/minor เลยเหมือน `bigc-test`/`k9p-default`**
+  /// แต่ต้องยังเป็น `.point` (กับดักที่ ADR-26 §1/§7 เตือนไว้ตรง ๆ ว่าห้าม
+  /// derive role จากการมี/ไม่มี major/minor) — ถ้าใครเปลี่ยนตรรกะเป็น
+  /// `major != nil ? .point : .zone` เทสนี้จะแดงทันทีที่บรรทัดของ `minew-test`
+  ///
+  /// **สิ่งที่เทสนี้ไม่พิสูจน์:** ไม่ได้พิสูจน์ว่า `recordProximityEvent(_:)`
+  /// อ่านตารางนี้ถูกจุด/ถูกลำดับ (ก่อนคูลดาวน์ทั้งสองตัว) หรือว่า `.zone` ทำให้
+  /// ไม่มีการเรียก `UNUserNotificationCenter.add()`/คูลดาวน์จริง — ดูหนี้ท้าย
+  /// ไฟล์นี้
+  func testRegionRolesTableMapsAllFourDocumentedIdentifiersToCorrectRole() {
+    XCTAssertEqual(
+      AppDelegate.regionRoles["k9p-default"], .zone,
+      "k9p-default ต้องเป็น zone ตาม ADR-26 §1"
+    )
+    XCTAssertEqual(
+      AppDelegate.regionRoles["bigc-test"], .zone,
+      "bigc-test ต้องเป็น zone ตาม ADR-26 §1"
+    )
+    XCTAssertEqual(
+      AppDelegate.regionRoles["k9p-point"], .point,
+      "k9p-point ต้องเป็น point ตาม ADR-26 §1"
+    )
+    XCTAssertEqual(
+      AppDelegate.regionRoles["minew-test"], .point,
+      "minew-test ต้องเป็น point แม้ไม่มี major/minor เลย — ห้าม derive จาก " +
+        "major/minor (กับดักที่ ADR-26 §1/§7 เตือนไว้)"
+    )
+  }
+
+  /// **สิ่งที่เทสนี้พิสูจน์จริง:** ตารางมี**เท่ากับ**สี่ entry พอดี (ไม่ใช่แค่
+  /// "มีอย่างน้อยสี่ entry ที่ถูกต้อง") — กันเคสที่มีคนเผลอเพิ่ม identifier
+  /// ใหม่เข้าตารางโดยไม่อัปเดตเทสตัวบน (ซึ่งจะยังเขียวอยู่ถ้าเช็คแค่สี่ค่าที่
+  /// รู้จัก) และไม่ได้ sync กับฝั่ง Android
+  func testRegionRolesTableHasExactlyFourEntriesNoUndocumentedIdentifiers() {
+    XCTAssertEqual(
+      Set(AppDelegate.regionRoles.keys),
+      Set(["k9p-default", "bigc-test", "k9p-point", "minew-test"]),
+      "ตารางต้องมีเท่ากับสี่ identifier ตาม ADR-26 §1 พอดี ไม่มากไม่น้อย"
+    )
+  }
+
+  /// **สิ่งที่เทสนี้พิสูจน์จริง:** identifier ที่ไม่เคยลงทะเบียนไว้ (เช่น
+  /// region ใหม่ในอนาคตที่ยังลืมประกาศ role) **ไม่มีอยู่ในตาราง** — ซึ่งเป็น
+  /// precondition ที่ทำให้ expression `Self.regionRoles[event.regionIdentifier]
+  /// ?? .zone` (`AppDelegate.swift:540`) resolve เป็น `.zone` จริงถ้าถูกเรียก
+  ///
+  /// **สิ่งที่เทสนี้ไม่พิสูจน์:** **ไม่ได้เรียก `recordProximityEvent(_:)`
+  /// จริง** — ฟังก์ชันนั้นเป็น instance method ที่เขียนไฟล์ผ่าน
+  /// `BackgroundEvidenceLog.shared` เทสนี้จึงพิสูจน์ได้แค่ว่า "ตารางไม่มี key
+  /// นี้" ไม่ใช่ "โค้ดจริงจะ fallback เป็น .zone เมื่อเจอ identifier นี้" (แม้
+  /// จะอ่านซอร์สแล้วเห็น `?? .zone` ตรง ๆ ก็ตาม — การอ่านโค้ดกับการรันเทสต์
+  /// เป็นหลักฐานคนละชนิดกัน)
+  func testUnknownRegionIdentifierIsAbsentFromRolesTableSoNilCoalescingWouldResolveToZone() {
+    XCTAssertNil(
+      AppDelegate.regionRoles["some-future-region-not-yet-declared"],
+      "identifier ที่ไม่รู้จักต้องไม่มีอยู่ในตาราง เพื่อให้ fallback ในโค้ดจริง " +
+        "(`?? .zone`) มีผลจริงตามที่ ADR-26 §7 ต้องการ (fail-safe = zone)"
+    )
+  }
 }
+
+/*
+ * ## หนี้ ADR-26 (บันทึกโดย beacon-qa, 17 ก.ย. 2026) — สามเคสของ §6 คลุมด้วย
+ * unit test ในไฟล์นี้ไม่ได้เลยทั้งดุ้น เหตุผลเดียวกับหนี้ §9.7/§8.8 ข้างบน
+ * ทั้งหมด (`recordProximityEvent(_:)` เป็น instance method ที่เขียนไฟล์ผ่าน
+ * `BackgroundEvidenceLog.shared`/`UserDefaults` และเรียก
+ * `UNUserNotificationCenter` จริง — ไม่มี fake/mock ให้แทนที่ใน target นี้) —
+ * สามเทสใหม่ท้ายไฟล์นี้คลุมได้แค่ตัวตาราง `AppDelegate.regionRoles` (pure
+ * data) เท่านั้น ไม่ใช่พฤติกรรมจริงของ `recordProximityEvent(_:)`:
+ *
+ * 1. **zone ไม่โพสต์ notification จริง + เขียน `reason=zoneRegion`** — ต้อง
+ *    ยืนยันว่า (ก) ไม่มีการเรียก `UNUserNotificationCenter.add()` จริงสำหรับ
+ *    event ที่ region เป็น zone และ (ข) บรรทัด `event=notification ...
+ *    posted=false reason=zoneRegion` ถูกเขียนจริงลงไฟล์ — ทั้งสองข้อต้องมี
+ *    `UNUserNotificationCenter`/`UserDefaults`/ไฟล์จริงเพื่อรัน
+ *    `recordNotificationZoneSuppressed(_:)`
+ * 2. **point ไหลผ่านเหมือนเดิม (regression ของ ADR-25)** — ต้องยืนยันว่า
+ *    event ของ `k9p-point`/`minew-test` ยังไหลเข้าคูลดาวน์ 30 นาที/24 ชม.
+ *    แล้ว 60 วินาทีเหมือนก่อน ADR-26 ทุกประการ — ต้องมี `UserDefaults` จริง
+ *    (สอง suite) เพื่อยืนยัน
+ * 3. **บีคอนเดียวอยู่สอง region (`bigc-test` + `k9p-point`) ได้ notification
+ *    ใบเดียว** — เคสสำคัญที่สุดของ ADR-26 (§7: "เทสของ point/zone แยกกัน
+ *    เคส 1-2 จับบั๊กนี้ไม่ได้") ต้องจำลองสอง `BeaconKitProximityChangedEvent`
+ *    (คนละ `regionIdentifier`, uuid/major/minor เดียวกัน) ยิงเข้า
+ *    `recordProximityEvent(_:)` ติดกัน แล้วนับจำนวนครั้งที่
+ *    `UNUserNotificationCenter.add()` ถูกเรียกจริง (ต้องเป็น 1 ไม่ใช่ 2) —
+ *    ทำไม่ได้โดยไม่มี mock ของ `UNUserNotificationCenter`
+ *
+ * **วิธียืนยันบนอุปกรณ์จริง (K9P จริงบนโต๊ะทดสอบ)** — เหมือนฝั่ง Android
+ * (ดูหนี้ ADR-26 ท้าย `ExampleProximityWatcherTest.kt`) ทุกขั้นตอน:
+ * - ใช้บีคอนทะเบียน #2 (`major: 9902`, `minor: 2`, tag `55:50`) ที่ broadcast
+ *   ด้วย UUID ของ `bigc-test`/`k9p-point`
+ *   (`89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF`)
+ * - เดินเข้าใกล้จนเกิด transition เป็น near/immediate ครั้งแรก (`from=none`
+ *   หรือ `from=far`) แล้วดึงไฟล์ log ออกมาอ่าน (ผ่าน evidence log panel ใน
+ *   แอป หรือดึงจาก Application Support ผ่าน Xcode Devices window)
+ * - **คาดหวัง:** เห็นบรรทัด `event=proximity` **สองบรรทัด** (หนึ่งจาก
+ *   `regionIdentifier=bigc-test`, หนึ่งจาก `regionIdentifier=k9p-point` —
+ *   ทั้งสองมาจาก `didRange` คนละ constraint ของ region เดียวกัน ADR-26 §2)
+ *   แต่บรรทัด `event=notification` ต้องมี**แค่บรรทัดเดียว** โดยต้องเป็น
+ *   `regionIdentifier=k9p-point` และมี `reason=granted` (หรือ
+ *   `reason=cooldown` ถ้าเพิ่งยิงไปไม่นาน) — ส่วนบรรทัด `event=notification`
+ *   ของ `bigc-test` ต้องมี `posted=false reason=zoneRegion` เสมอ
+ * - **ยืนยันด้วยว่าไม่มี notification ใบที่สองโผล่ที่หน้าจอ/notification
+ *   center จริง** ไม่ใช่แค่อ่านจากไฟล์ log — เผื่อกรณีบรรทัด log ถูกต้องแต่
+ *   `UNUserNotificationCenter.add()` ถูกเรียกซ้ำโดยไม่ได้ตั้งใจ (log กับ
+ *   notification จริงเป็นคนละเส้นทางกัน)
+ * - ทำซ้ำกับ `minew-test` (point ที่ไม่มี major/minor) แยกต่างหาก เพื่อยืนยัน
+ *   ว่ายังได้ notification ปกติ (ไม่ได้ถูกกันเป็น zone เพราะไม่มี major/minor)
+ */

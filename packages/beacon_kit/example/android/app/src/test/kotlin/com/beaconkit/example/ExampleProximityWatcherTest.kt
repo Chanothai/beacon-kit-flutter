@@ -565,6 +565,105 @@ class ExampleProximityWatcherTest {
         assertEquals(elapsed, resultA)
         assertEquals(resultA, resultB, "เวลาที่ผ่านไปเท่ากันต้องได้ผลเดียวกันเสมอ ไม่ขึ้นกับ transition ใด ๆ")
     }
+
+    // ------------------------------------------------------------------
+    // ADR-26 §1/§6/§7 — บทบาท zone/point ของ region ชั้นที่ 2
+    // (เพิ่มโดย beacon-qa, 17 ก.ย. 2026)
+    //
+    // เคสที่ ADR-26 §6 บังคับให้คลุม (event ที่เป็น zone ต้องไม่ post() +
+    // เขียน reason=zoneRegion, event ที่เป็น point ต้องไหลผ่านเหมือนเดิม,
+    // บีคอนเดียวในสอง region ต้องได้ notification ใบเดียว) **ทดสอบด้วย unit
+    // test ในไฟล์นี้ไม่ได้ทั้งดุ้น** เพราะเส้นทางที่ตัดสินใจจริง
+    // (`ExampleProximityWatcher.onProximityChanged`) เป็น `private fun` ที่รับ
+    // `Context` จริงเพื่อเรียก `BackgroundEvidenceLog.append()`/
+    // `ExampleNotifications.recordSuppressed()`/`ExampleNotifications.post()`
+    // — เหตุผลเดียวกับหนี้ข้อ 5 ของ ADR-20 ที่บันทึกไว้ท้ายไฟล์นี้ทั้งหมด
+    // (โมดูล `app` ไม่มี mockito-core/Robolectric และ QA agent ไม่มีสิทธิ์เพิ่ม
+    // dependency ในรอบนี้) — สามเคสนั้นบันทึกไว้เป็นหนี้ hardware-in-the-loop
+    // ท้ายไฟล์นี้แทน
+    //
+    // สิ่งที่**เป็น pure function จริงและเทสได้แน่นอน** คือตาราง
+    // `ExampleApplication.EXAMPLE_REGION_ROLES` เอง — สี่เทสข้างล่างพิสูจน์แค่
+    // ตัวตารางค่าคงที่ (ไม่ได้พิสูจน์ว่า `onProximityChanged` เอาตารางนี้ไปใช้
+    // ถูกจุด/ถูกลำดับ — อ่านคอมเมนต์ของแต่ละเทสให้ชัดก่อนอ้างว่าเทสนี้ "คลุม
+    // ADR-26" ทั้งข้อ)
+    // ------------------------------------------------------------------
+
+    /**
+     * **สิ่งที่เทสนี้พิสูจน์จริง:** ตาราง `EXAMPLE_REGION_ROLES` มีครบสี่
+     * identifier ตามตาราง ADR-26 §1 เป๊ะ และแมป `k9p-point`/`minew-test` ไป
+     * `POINT` ส่วน `k9p-default`/`bigc-test` ไป `ZONE` — โดยเฉพาะ `minew-test`
+     * ซึ่ง**ไม่มี major/minor เลยเหมือน `bigc-test`/`k9p-default`** แต่ต้องยัง
+     * เป็น `POINT` (กับดักที่ ADR-26 §1/§7 เตือนไว้ตรง ๆ ว่าห้าม derive role
+     * จากการมี/ไม่มี major/minor) — ถ้าใครเปลี่ยนตรรกะเป็น
+     * `if (major != null) POINT else ZONE` เทสนี้จะแดงทันทีที่บรรทัดของ
+     * `minew-test`
+     *
+     * **สิ่งที่เทสนี้ไม่พิสูจน์:** ไม่ได้พิสูจน์ว่า `onProximityChanged` อ่าน
+     * ตารางนี้ถูกจุด/ถูกลำดับ (ก่อนคูลดาวน์ทั้งสองตัว) หรือว่า `role == ZONE`
+     * ทำให้ไม่มีการเรียก `post()`/คูลดาวน์จริง — ดูหนี้ท้ายไฟล์นี้
+     */
+    @Test
+    fun exampleRegionRolesTableMapsAllFourDocumentedIdentifiersToCorrectRole() {
+        assertEquals(
+            ExampleApplication.ExampleRegionRole.ZONE,
+            ExampleApplication.EXAMPLE_REGION_ROLES["k9p-default"],
+            "k9p-default ต้องเป็น zone ตาม ADR-26 §1",
+        )
+        assertEquals(
+            ExampleApplication.ExampleRegionRole.ZONE,
+            ExampleApplication.EXAMPLE_REGION_ROLES["bigc-test"],
+            "bigc-test ต้องเป็น zone ตาม ADR-26 §1",
+        )
+        assertEquals(
+            ExampleApplication.ExampleRegionRole.POINT,
+            ExampleApplication.EXAMPLE_REGION_ROLES["k9p-point"],
+            "k9p-point ต้องเป็น point ตาม ADR-26 §1",
+        )
+        assertEquals(
+            ExampleApplication.ExampleRegionRole.POINT,
+            ExampleApplication.EXAMPLE_REGION_ROLES["minew-test"],
+            "minew-test ต้องเป็น point แม้ไม่มี major/minor เลย — ห้าม derive จาก " +
+                "major/minor (กับดักที่ ADR-26 §1/§7 เตือนไว้)",
+        )
+    }
+
+    /**
+     * **สิ่งที่เทสนี้พิสูจน์จริง:** ตารางมี**เท่ากับ**สี่ entry พอดี (ไม่ใช่
+     * แค่ "มีอย่างน้อยสี่ entry ที่ถูกต้อง") — กันเคสที่มีคนเผลอเพิ่ม
+     * identifier ใหม่เข้าตารางโดยไม่อัปเดตเทสตัวบน (ซึ่งจะยังเขียวอยู่ถ้าเช็ค
+     * แค่สี่ค่าที่รู้จัก) และไม่ได้ sync กับฝั่ง iOS
+     */
+    @Test
+    fun exampleRegionRolesTableHasExactlyFourEntriesNoUndocumentedIdentifiers() {
+        assertEquals(
+            setOf("k9p-default", "bigc-test", "k9p-point", "minew-test"),
+            ExampleApplication.EXAMPLE_REGION_ROLES.keys,
+            "ตารางต้องมีเท่ากับสี่ identifier ตาม ADR-26 §1 พอดี ไม่มากไม่น้อย",
+        )
+    }
+
+    /**
+     * **สิ่งที่เทสนี้พิสูจน์จริง:** identifier ที่ไม่เคยลงทะเบียนไว้ (เช่น
+     * region ใหม่ในอนาคตที่ยังลืมประกาศ role) **ไม่มีอยู่ในตาราง** — ซึ่งเป็น
+     * precondition ที่ทำให้ expression `EXAMPLE_REGION_ROLES[event.regionIdentifier]
+     * ?: ExampleRegionRole.ZONE` (`ExampleProximityWatcher.kt:143-144`) resolve
+     * เป็น `ZONE` จริงถ้าถูกเรียก
+     *
+     * **สิ่งที่เทสนี้ไม่พิสูจน์:** **ไม่ได้เรียก `onProximityChanged` จริง** —
+     * ฟังก์ชันนั้น `private` และต้องมี `Context` เทสนี้จึงพิสูจน์ได้แค่ว่า
+     * "ตารางไม่มี key นี้" ไม่ใช่ "โค้ดจริงจะ fallback เป็น ZONE เมื่อเจอ
+     * identifier นี้" (แม้จะอ่านซอร์สแล้วเห็น `?: ExampleRegionRole.ZONE`
+     * ตรง ๆ ก็ตาม — การอ่านโค้ดกับการรันเทสต์เป็นหลักฐานคนละชนิดกัน)
+     */
+    @Test
+    fun unknownRegionIdentifierIsAbsentFromRolesTableSoElvisFallbackWouldResolveToZone() {
+        assertTrue(
+            !ExampleApplication.EXAMPLE_REGION_ROLES.containsKey("some-future-region-not-yet-declared"),
+            "identifier ที่ไม่รู้จักต้องไม่มีอยู่ในตาราง เพื่อให้ fallback ในโค้ดจริง " +
+                "(`?: ExampleRegionRole.ZONE`) มีผลจริงตามที่ ADR-26 §7 ต้องการ (fail-safe = ZONE)",
+        )
+    }
 }
 
 /*
@@ -644,4 +743,48 @@ class ExampleProximityWatcherTest {
  * `DEFAULT_LONG_COOLDOWN_MILLIS` เอง ไม่ใช่ผลของการเรียก `install()` โดยไม่ระบุ
  * พารามิเตอร์) — ยังต้องยืนยันว่า `install()` ใช้ default นี้จริงบนอุปกรณ์จริง
  * เท่านั้น (ดู `docs/test-checklists/android_background_scanning.md`)
+ *
+ * ## หนี้ ADR-26 (บันทึกโดย beacon-qa, 17 ก.ย. 2026) — สามเคสของ §6 คลุมด้วย
+ * unit test ในไฟล์นี้ไม่ได้เลยทั้งดุ้น เหตุผลเดียวกับหนี้ข้อ 5 ของ ADR-20
+ * ข้างบน (`onProximityChanged` เป็น `private fun` ต้องมี `Context` จริง โมดูล
+ * `app` ไม่มี mockito-core) — สี่เทสใหม่ท้ายกลุ่มเทสนี้คลุมได้แค่ตัวตาราง
+ * ค่าคงที่ `EXAMPLE_REGION_ROLES` (pure data) เท่านั้น ไม่ใช่พฤติกรรมจริงของ
+ * `onProximityChanged`:
+ *
+ * 1. **zone ไม่โพสต์ + เขียน `reason=zoneRegion`** — ต้องยืนยันว่า
+ *    (ก) ไม่มีการเรียก `ExampleNotifications.post()` จริงสำหรับ event ที่
+ *    region เป็น zone และ (ข) บรรทัด `event=notification ... posted=false
+ *    reason=zoneRegion` ถูกเขียนจริงลงไฟล์ — ทั้งสองข้อต้องมี `Context` จริง
+ *    เพื่อเรียก `BackgroundEvidenceLog.append()`/`ExampleNotifications
+ *    .recordSuppressed()`
+ * 2. **point ไหลผ่านเหมือนเดิม (regression ของ ADR-25)** — ต้องยืนยันว่า
+ *    event ของ `k9p-point`/`minew-test` ยังไหลเข้าคูลดาวน์ 30 นาที/24 ชม. แล้ว
+ *    60 วินาทีเหมือนก่อน ADR-26 ทุกประการ — ต้องมี `SharedPreferences` จริง
+ *    (สอง store) เพื่อยืนยัน
+ * 3. **บีคอนเดียวอยู่สอง region (`bigc-test` + `k9p-point`) ได้ notification
+ *    ใบเดียว** — เคสสำคัญที่สุดของ ADR-26 (§7: "เทสของ point/zone แยกกัน เคส
+ *    1-2 จับบั๊กนี้ไม่ได้") ต้องจำลองสอง `ProximityChangedEvent` (คนละ
+ *    `regionIdentifier`, uuid/major/minor เดียวกัน) ยิงเข้า
+ *    `onProximityChanged` ติดกัน แล้วนับจำนวนครั้งที่ `ExampleNotifications
+ *    .post()` ถูกเรียกจริง (ต้องเป็น 1 ไม่ใช่ 2) — ทำไม่ได้โดยไม่มี Context/
+ *    mock
+ *
+ * **วิธียืนยันบนอุปกรณ์จริง (K9P จริงบนโต๊ะทดสอบ):**
+ * - ใช้บีคอนทะเบียน #2 (`major: 9902`, `minor: 2`, tag `55:50`) ที่ broadcast
+ *   ด้วย UUID ของ `bigc-test`/`k9p-point` (`89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF`)
+ * - เดินเข้าใกล้จนเกิด transition เป็น near/immediate ครั้งแรก (`from=none`
+ *   หรือ `from=far`) แล้วดึง `region_events.log` ออกมาอ่าน (ผ่าน evidence log
+ *   panel ในแอป หรือ `adb pull`)
+ * - **คาดหวัง:** เห็นบรรทัด `event=proximity` **สองบรรทัด** (หนึ่งจาก
+ *   `regionIdentifier=bigc-test`, หนึ่งจาก `regionIdentifier=k9p-point` — ทั้ง
+ *   สองมาจาก `ScanFilter` คนละตัวของ region เดียวกัน ADR-26 §2) แต่บรรทัด
+ *   `event=notification` ต้องมี**แค่บรรทัดเดียว** โดยต้องเป็น
+ *   `regionIdentifier=k9p-point` และมี `reason=granted` (หรือ `reason=cooldown`
+ *   ถ้าเพิ่งยิงไปไม่นาน) — ส่วนบรรทัด `event=notification` ของ `bigc-test`
+ *   ต้องมี `posted=false reason=zoneRegion` เสมอ
+ * - **ยืนยันด้วยว่าไม่มี notification ใบที่สองโผล่ที่หน้าจอ/status bar จริง**
+ *   ไม่ใช่แค่อ่านจากไฟล์ log — เผื่อกรณีบรรทัด log ถูกต้องแต่ `post()` ถูกเรียก
+ *   ซ้ำโดยไม่ได้ตั้งใจ (log กับ notification จริงเป็นคนละเส้นทางกัน)
+ * - ทำซ้ำกับ `minew-test` (point ที่ไม่มี major/minor) แยกต่างหาก เพื่อยืนยันว่า
+ *   ยังได้ notification ปกติ (ไม่ได้ถูกกันเป็น zone เพราะไม่มี major/minor)
  */
