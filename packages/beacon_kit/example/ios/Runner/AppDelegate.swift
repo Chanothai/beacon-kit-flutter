@@ -306,8 +306,27 @@ import beacon_kit_ios
   static let proximityLongNotificationCooldownSeconds: TimeInterval = 30 * 60
 
   /// suite ใหม่ของคูลดาวน์ 30 นาที — ชื่อนี้เลือกให้สมมาตรกับชื่อไฟล์ Android
-  /// (`notification_cooldown_v1`) ไม่ใช่ข้อบังคับจากที่ไหน (ADR-25 §4)
-  private static let proximityLongCooldownSuiteName = "beacon_kit_example.notification_cooldown_v1"
+  /// (`notification_cooldown_v1`) ไม่ใช่ข้อบังคับจากที่ไหน (ADR-25 §4 — เดิมชื่อ
+  /// `notification_cooldown_v1`)
+  ///
+  /// ⚠️ **ขยับเป็น `_v2` (ADR-25 §4.3.3, เพิ่ม 17 ก.ย. 2026)** — ค่าที่เก็บอยู่เดิม
+  /// ใน `_v1` เป็น `TimeInterval` แทน **วินาทีนับจาก boot** (`systemUptime`) ส่วน
+  /// ค่าใหม่หลัง §4.3 เป็น **วินาทีนับจาก epoch 1970** (`Date().timeIntervalSince1970`)
+  /// — หน่วยเดียวกัน (วินาที) แต่ฐานคนละอันโดยสิ้นเชิง เทียบกันตรง ๆ ไม่ได้ ถ้าไม่
+  /// เปลี่ยนชื่อ suite เครื่องที่เคยติดตั้งเวอร์ชันก่อนหน้าจะมีค่า `systemUptime`
+  /// เก่าค้างอยู่ในคีย์เดิม โค้ดใหม่จะอ่านมันเป็น epoch seconds ตรง ๆ (เช่น 45,000
+  /// วินาทีหลัง epoch 1970 = ประมาณเที่ยงคืนวันที่ 2 ม.ค. 1970) ซึ่งเทียบกับ
+  /// `nowEpochSeconds` ปี 2026 (~1.77×10⁹) แล้ว `lastPostedEpochSecondsOrZero >
+  /// nowEpochSeconds` เป็นเท็จเสมอ ไหลไปคำนวณ `sinceSeconds ≈ nowEpochSeconds` ซึ่ง
+  /// มากกว่า 1800 วินาทีมหาศาล → ฟังก์ชันคืน `nil` เสมอ = คูลดาวน์มองว่า "ไม่เคยติด"
+  /// ทันทีหลังอัปเกรด ผลจริงคือ **ได้ notification เกินมาหนึ่งใบต่อบีคอนตอนอัปเกรด
+  /// ครั้งเดียว** (ความเสี่ยงระดับเดียวกับที่ §4.2 เคยยอมรับไว้กับกรณี key เปลี่ยน
+  /// รูปร่าง ไม่ใช่บั๊กร้ายแรง) แต่ยังต้องเปลี่ยนชื่อ suite อยู่ดี เพราะการพึ่งว่า
+  /// "uptime เป็นเลขน้อยกว่า epoch เสมอ" เป็นข้อเท็จจริงเชิงตัวเลข ณ ตอนนี้ ไม่ใช่
+  /// สัญญาที่โค้ดบังคับไว้ และการแยก suite ต่อ "ฐานเวลาที่เข้ากันไม่ได้" เป็น
+  /// แพทเทิร์นเดียวกับที่ ADR นี้ใช้อยู่แล้วตอนแยกคูลดาวน์ 30 นาทีออกจากคูลดาวน์
+  /// 60 วินาทีตั้งแต่ §2
+  private static let proximityLongCooldownSuiteName = "beacon_kit_example.notification_cooldown_v2"
 
   /// เขียน log + ยิง notification ของ transition ชั้นที่ 2 จาก **โค้ด native ล้วน**
   ///
@@ -386,12 +405,17 @@ import beacon_kit_ios
     //    กี่ครั้ง" ที่ ADR-21 หัวข้อ 7 ข้อ 3 สั่งให้เก็บจึงไม่หายไปไหน
     guard event.from == nil || event.from == .far else { return }
 
-    // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§4/§4.1) — เช็ค**ก่อน**คูลดาวน์เดิม
+    // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§4/§4.1/§4.3) — เช็ค**ก่อน**คูลดาวน์เดิม
     //    60 วินาทีเพราะนี่คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ ใช้ [proximityCooldownKey]
     //    เดิมซ้ำ (key ของคูลดาวน์เดิมตรงกับ key ของ `ProximityGate` อยู่แล้ว)
+    //
+    //    **wall clock ไม่ใช่ `systemUptime` (ADR-25 §4.3)** — อ่านนาฬิกาครั้งเดียว
+    //    ตอนต้นแล้วใช้ซ้ำทั้งตอนตรวจ (`longCooldownBlockedSinceMs`) และตอนจด
+    //    (`recordLongCooldownPosted` ใน closure `onDelivered` ด้านล่าง) ห้ามอ่านซ้ำ
+    //    ใน closure (หลักการเดิมของ §3.1/§4.1)
     let longKey = Self.proximityCooldownKey(for: event)
-    let nowUptime = ProcessInfo.processInfo.systemUptime
-    if let sinceLastPostedMs = longCooldownBlockedSinceMs(key: longKey, nowUptime: nowUptime) {
+    let nowEpochSeconds = Date().timeIntervalSince1970
+    if let sinceLastPostedMs = longCooldownBlockedSinceMs(key: longKey, nowEpochSeconds: nowEpochSeconds) {
       recordNotificationSuppressed(event, sinceLastPostedMs: sinceLastPostedMs)
       return
     }
@@ -417,7 +441,8 @@ import beacon_kit_ios
         + "mode=\(event.mode.rawValue) · procUuid=\(BackgroundEvidenceLog.processId)",
       onDelivered: { [weak self] in
         // จดเวลาคูลดาวน์ 30 นาทีเฉพาะตอนรู้ผลว่าไม่มี error เท่านั้น (ADR-25 §4.1)
-        self?.recordLongCooldownPosted(key: longKey, atUptime: nowUptime)
+        // ใช้ `nowEpochSeconds` ที่อ่านไว้ตอนต้นซ้ำ ไม่อ่านนาฬิกาใหม่ในนี้ (§4.3.2)
+        self?.recordLongCooldownPosted(key: longKey, atEpochSeconds: nowEpochSeconds)
       }
     )
   }
@@ -657,10 +682,12 @@ import beacon_kit_ios
   }
 
   /// เรียก**หลังรู้ผลว่าไม่มี error จาก `UNUserNotificationCenter.add` แล้วเท่านั้น**
-  /// — ไม่ใช่ตอนผ่านประตู 30 นาที (ADR-25 §4.1)
-  private func recordLongCooldownPosted(key: String, atUptime: TimeInterval) {
+  /// — ไม่ใช่ตอนผ่านประตู 30 นาที (ADR-25 §4.1) · พารามิเตอร์เป็น
+  /// `Date().timeIntervalSince1970` (wall clock) ตั้งแต่ ADR-25 §4.3 — เดิมเคยเป็น
+  /// `atUptime: TimeInterval` (`ProcessInfo.processInfo.systemUptime`) ถอนแล้ว
+  private func recordLongCooldownPosted(key: String, atEpochSeconds: TimeInterval) {
     guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return }
-    defaults.set(atUptime, forKey: key)
+    defaults.set(atEpochSeconds, forKey: key)
   }
 
   /// **pure function ล้วน ไม่แตะ `UserDefaults` เลย** — ตรรกะตัดสินใจของคูลดาวน์
@@ -674,24 +701,49 @@ import beacon_kit_ios
   /// `nil` เมื่อไม่ติดคูลดาวน์ 30 นาที (ยิงได้) · ค่าที่ไม่ใช่ `nil` คือจำนวน
   /// มิลลิวินาทีตั้งแต่โพสต์สำเร็จครั้งล่าสุด
   ///
-  /// ใช้ `ProcessInfo.processInfo.systemUptime` ไม่ใช่ wall clock (ADR-25 §4):
-  /// ตัวเดียวที่ใกล้เคียง `elapsedRealtime` ที่สุดบน iOS (นับจาก boot ไม่กระโดด
-  /// ตาม NTP) ⚠️ **ไม่นับเวลาที่เครื่องหลับ** ต่างจาก `SystemClock.elapsedRealtime()`
-  /// ของ Android — คูลดาวน์นี้อาจนับสั้นกว่าที่ตั้งใจจริงถ้าเครื่องหลับระหว่างนั้น
-  /// (ยอมรับเป็นความเสี่ยงระดับ POC เหมือนที่ Android ยอมรับเรื่อง reboot รีเซ็ตค่า)
+  /// ⚠️ **ถอนย่อหน้าเดิมทั้งหมดแล้ว (ADR-25 §4.3, แก้ 17 ก.ย. 2026)** — ฉบับก่อน
+  /// หน้าเขียนว่า "ใช้ `ProcessInfo.processInfo.systemUptime` ไม่ใช่ wall clock
+  /// (ADR-25 §4): ตัวเดียวที่ใกล้เคียง `elapsedRealtime` ที่สุดบน iOS ... คูลดาวน์
+  /// นี้อาจนับสั้นกว่าที่ตั้งใจจริงถ้าเครื่องหลับระหว่างนั้น (ยอมรับเป็นความเสี่ยง
+  /// ระดับ POC เหมือนที่ Android ยอมรับเรื่อง reboot รีเซ็ตค่า)" — **ผิดทั้งขนาดและ
+  /// ทิศทาง** ตัวเลขจากบรีฟผู้ทดสอบรอบ 16-17 ก.ย. 2026 ชี้ว่า `systemUptime` ไม่นับ
+  /// เวลาที่เครื่องหลับจริง ทำให้คูลดาวน์ที่ตั้งไว้ 30 นาทีกลายเป็นเวลาจริงยาวกว่า
+  /// ที่ตั้งใจประมาณ **2.7-2.8 เท่า** (ไม่ใช่สั้นกว่า) — คือ **fail-closed อย่างเป็น
+  /// ระบบ** (กลืนแจ้งเตือนที่ควรได้ไป) ไม่ใช่ fail-open เล็กน้อยแบบที่ Android เจอ
+  /// ตอน reboot
+  ///
+  /// **ของจริงตอนนี้: ใช้ wall clock (`Date().timeIntervalSince1970`) แทน (ADR-25
+  /// §4.3/§4.3.1)** เพราะ "คูลดาวน์ 30 นาที" ที่ทีมธุรกิจเข้าใจคือ 30 นาทีของเวลา
+  /// จริงบนโลก ไม่ใช่ 30 นาทีของเวลาที่เครื่องตื่นอยู่ และคูลดาวน์ 60 วินาทีเดิมของ
+  /// ไฟล์นี้ (`consumeProximityCooldown`) ใช้ wall clock (`event.timestampMillis`)
+  /// อยู่แล้วตั้งแต่ต้น
+  ///
+  /// **ข้อเสียของ wall clock ที่ต้องเขียนตรง ๆ — ไม่ปิดบัง (ADR-25 §4.3.1):**
+  /// ผู้ใช้/ระบบปรับนาฬิกาเครื่อง (manual หรือ NTP sync) มีผลต่อคูลดาวน์นี้โดยตรง
+  /// ต่างจาก `systemUptime`/`CLOCK_MONOTONIC` ที่ไม่กระทบเลย แยกเป็นสองทิศตามขนาด
+  /// การปรับเทียบกับเวลาที่ผ่านไปตั้งแต่โพสต์สำเร็จครั้งล่าสุด:
+  /// - **ปรับไปข้างหน้า** หรือ **ปรับย้อนหลังมากกว่าเวลาที่ผ่านไปจริง** (เข้า guard
+  ///   `lastPostedEpochSecondsOrZero > nowEpochSeconds` ด้านล่าง) → **fail-open**
+  ///   (ยิงเร็ว/บ่อยกว่าที่ตั้งใจ)
+  /// - **ปรับย้อนหลังน้อยกว่าเวลาที่ผ่านไปจริง** (guard ไม่ติด) → **fail-closed แต่
+  ///   มีเพดานเท่ากับขนาดของการปรับนาฬิกาครั้งนั้นเท่านั้น** (หลักวินาทีถึงสิบนาที)
+  ///   ต่างจากบั๊ก `systemUptime` ที่กำลังแก้อยู่ซึ่งยืดเป็นสัดส่วนกับเวลาที่เครื่อง
+  ///   หลับทุกครั้งไม่มีเพดาน — ยอมรับความเสี่ยงที่เหลือนี้เป็นระดับ POC (ADR-25
+  ///   §4.3.1)
   ///
   /// - Parameters:
-  ///   - lastPostedUptimeOrZero: `systemUptime` ตอนโพสต์คีย์นี้สำเร็จครั้งล่าสุด
-  ///     · `0` = ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (ค่าเดียวกับ default ของ
-  ///     `UserDefaults.double(forKey:)` ตรง ๆ จึงไม่ต้องมี sentinel แยกต่างหาก)
-  ///   - nowUptime: `ProcessInfo.processInfo.systemUptime` ปัจจุบัน
+  ///   - lastPostedEpochSecondsOrZero: `Date().timeIntervalSince1970` ตอนโพสต์
+  ///     คีย์นี้สำเร็จครั้งล่าสุด · `0` = ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน (ค่าเดียวกับ
+  ///     default ของ `UserDefaults.double(forKey:)` ตรง ๆ จึงไม่ต้องมี sentinel
+  ///     แยกต่างหาก)
+  ///   - nowEpochSeconds: `Date().timeIntervalSince1970` ปัจจุบัน
   static func longCooldownSinceLastPostedMillisOrNull(
-    lastPostedUptimeOrZero: TimeInterval,
-    nowUptime: TimeInterval
+    lastPostedEpochSecondsOrZero: TimeInterval,
+    nowEpochSeconds: TimeInterval
   ) -> Int64? {
-    if lastPostedUptimeOrZero == 0 { return nil }  // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
-    if lastPostedUptimeOrZero > nowUptime { return nil }  // reboot แล้ว (systemUptime รีเซ็ต)
-    let sinceSeconds = nowUptime - lastPostedUptimeOrZero
+    if lastPostedEpochSecondsOrZero == 0 { return nil }  // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
+    if lastPostedEpochSecondsOrZero > nowEpochSeconds { return nil }  // นาฬิกาถูกปรับย้อนหลัง
+    let sinceSeconds = nowEpochSeconds - lastPostedEpochSecondsOrZero
     return sinceSeconds < Self.proximityLongNotificationCooldownSeconds
       ? Int64(sinceSeconds * 1000) : nil
   }
@@ -699,12 +751,14 @@ import beacon_kit_ios
   /// ชั้น I/O ที่บางที่สุด — แค่ **"อ่านค่าของ key"** จาก `UserDefaults` แล้วส่งต่อให้
   /// [longCooldownSinceLastPostedMillisOrNull] (pure) ตัดสินใจทั้งหมด (ADR-25
   /// §4.1) ไม่มีตรรกะเทียบเวลาอยู่ในฟังก์ชันนี้เลยแม้แต่บรรทัดเดียว — **อ่านอย่างเดียว
-  /// ไม่จด** แยกจาก [recordLongCooldownPosted]
-  private func longCooldownBlockedSinceMs(key: String, nowUptime: TimeInterval) -> Int64? {
+  /// ไม่จด** แยกจาก [recordLongCooldownPosted] · พารามิเตอร์เป็น
+  /// `Date().timeIntervalSince1970` (wall clock) ตั้งแต่ ADR-25 §4.3 — เดิมเคยเป็น
+  /// `nowUptime: TimeInterval` (`ProcessInfo.processInfo.systemUptime`) ถอนแล้ว
+  private func longCooldownBlockedSinceMs(key: String, nowEpochSeconds: TimeInterval) -> Int64? {
     guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
     return Self.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: defaults.double(forKey: key),
-      nowUptime: nowUptime
+      lastPostedEpochSecondsOrZero: defaults.double(forKey: key),
+      nowEpochSeconds: nowEpochSeconds
     )
   }
 
