@@ -7024,3 +7024,365 @@ ADR-20 หัวข้อ 3 (รูปร่าง key) · หัวข้อ 6 
 · §4.3.4 (ความต่างฐานเวลาสองแพลตฟอร์มที่ §8.6 วิเคราะห์ต่อ) · `ExampleApplication.kt`
 (โค้ดปัจจุบัน, layer 1 Android) · `ExampleNotifications.kt` (`recordSuppressed()`,
 `deliveryReason()`) · `tool/analyze_region_log.dart` (ตรวจแล้วว่าไม่กระทบ, §9.5)
+
+## ADR-26: บทบาท zone/point ของ region ชั้นที่ 2 — บีคอนที่อยู่สอง region พร้อมกันได้โปรโมชันจาก point เท่านั้น (เพิ่ม 17 ก.ย. 2026)
+
+> **สถานะ: accepted** (หัวหน้ายืนยันโมเดล zone/point นี้ 16 ก.ย. 2026)
+>
+> **ขอบเขต:** นโยบายของ **example app** เท่านั้น (เหมือน ADR-25) **ไม่ใช่ API ของ
+> `beacon_kit`** — ไม่แตะ `IBeaconRegionConfig`/`AndroidBeaconRegion` (`major`/`minor`
+> รองรับอยู่แล้วทั้งสองฝั่ง ดูหัวข้อ 0) ไม่แตะ `BeaconAdapter`/
+> `GenericIBeaconEddystoneAdapter` ไม่แตะ `ProximityGate` ทั้งสามพอร์ต (Dart/Kotlin/
+> Swift) ไม่แตะชั้นที่ 1 (`enter`/`exit`, ADR-8/ADR-14/ADR-16/ADR-17) และ**ไม่แตะ
+> คูลดาวน์ที่มีอยู่แล้วของ ADR-25 เลยสักบรรทัด** (60 วินาที/key เดิม + 30 นาที/24
+> ชม. ที่สอง) — ADR นี้เพิ่มเงื่อนไขใหม่ที่ตรวจ**ก่อน**คูลดาวน์เหล่านั้นเท่านั้น
+> ไม่ได้แก้ตัวคูลดาวน์เอง
+>
+> ⚠️ **รอบนี้ยังไม่แก้โค้ดสักไฟล์** — หัวข้อ 6 เป็นข้อเสนอชื่อค่าคงที่/จุดที่ต้องแก้
+> สำหรับ `flutter-dev` เท่านั้น ตามธรรมเนียมเดียวกับที่ ADR-25 เคยติดแบนเนอร์ผิดตอน
+> ยังไม่ implement (ดูบันทึกถอนแบนเนอร์ของ ADR-25) — **ADR นี้จะไม่ซ้ำรอยนั้น**
+> เพราะตอนเขียนนี้ (17 ก.ย. 2026) ยังไม่มี commit ใดแตะไฟล์ที่หัวข้อ 6 ระบุจริง
+
+### 0. ปัญหา — บีคอนตัวเดียวกันแต่สองบทบาท
+
+ตอนนี้ example app ลงทะเบียน 3 region คู่กันสองที่ใน `main.dart`
+(`packages/beacon_kit/example/lib/main.dart:116-118` ฝั่ง iOS ผ่าน
+`IBeaconRegionConfig`, บรรทัด 650-652 ฝั่ง Android ผ่าน `AndroidBeaconRegion`):
+`k9p-default` (UUID `7777772E-6B6B-6D63-6E2E-636F6D000001`, ไม่ระบุ major/minor),
+`bigc-test` (UUID `89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF`, ไม่ระบุ major/minor),
+`minew-test` (UUID `E8C65602-6D9C-44EF-9734-B2D3EF1CD961`, ไม่ระบุ major/minor)
+
+region ที่จะเพิ่มคือ **`k9p-point`** — UUID `89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF`
+major `9902` minor `2` — **UUID เดียวกับ `bigc-test` เป๊ะ** เพราะ `bigc-test` ไม่ระบุ
+major/minor เลย (wildcard ทั้ง UUID) บีคอนจริงที่มี major/minor `9902/2` (ทะเบียน #2
+tag `55:50`) จึงแมตช์ **ทั้งสอง region พร้อมกัน**: `bigc-test` (แมตช์เพราะเป็น
+wildcard ของ UUID เดียวกัน) และ `k9p-point` (แมตช์เพราะตรง major/minor เป๊ะ) — API
+ของทั้งสองแพลตฟอร์มรองรับ `major`/`minor` อยู่แล้วโดยไม่ต้องแตะ SDK
+(`IBeaconRegionConfig.major`/`.minor` เป็น `int?`,
+`packages/beacon_kit/lib/src/ibeacon_region_config.dart:15-23`; `AndroidBeaconRegion`
+เช่นกัน — แต่มี `assert(major != null || minor == null)` ที่
+`packages/beacon_kit_android/lib/src/android_background_region.dart:38-40`: **ระบุ
+minor โดยไม่ระบุ major ไม่ได้** เพราะ byte ของ minor อยู่ถัดจาก major ใน iBeacon
+payload, `ScanFilter` ข้ามไปกรองเฉพาะ minor ไม่ได้ — ไม่กระทบ `k9p-point` เพราะระบุ
+ทั้งสองค่าอยู่แล้ว)
+
+ผลที่ตามมาถ้าไม่มี ADR นี้: บีคอนตัวเดียวนั้นจะไหลเข้าชั้นที่ 2 เป็น **สอง event
+คนละ `regionIdentifier`** (ดูหัวข้อ 2) ซึ่งจะได้ notification **สองใบ** สำหรับการเข้า
+ใกล้ครั้งเดียว — เพราะ key ของคูลดาวน์ทั้งสองชั้น (60 วินาที + 30 นาที/24 ชม. ของ
+ADR-25) ขึ้นต้นด้วย `regionIdentifier` เสมอ (`region|uuid|major|minor` — ยืนยันจาก
+`proximityCooldownKey(for:)` ที่ `AppDelegate.swift:731-737` ฝั่ง iOS และ
+`longCooldownKeyFor`/`cooldownKeyFor` ฝั่ง Android
+`ExampleProximityWatcher.kt:288-315`) **คนละ region = คนละ key เสมอ** คูลดาวน์เดิม
+จึงแยกไม่ออกว่าเป็นบีคอนตัวเดียวกัน — นี่คือช่องว่างที่ ADR นี้ต้องปิด
+
+### 1. โมเดล zone + point
+
+- **`zone`** = region กว้าง ตอบคำถาม "อยู่ในพื้นที่ไหม" (ระดับสาขา/โซนกว้าง — ตรง
+  กับแนวคิด "ตาข่ายกันพลาด" ของ ADR-8)
+- **`point`** = จุดเฉพาะ ตอบคำถาม "ยืนอยู่ตรงจุดนี้ไหม" (ระดับชั้นวางสินค้า/ตำแหน่ง
+  เจาะจง — ตรงกับปัญหาที่ ADR-19 หัวข้อ 0 ตั้งไว้ตั้งแต่ต้น: "ยิงโปรโมชันเมื่อเข้า
+  ใกล้ชั้นวางสินค้าจริง ๆ ไม่ใช่แค่เดินเข้าสาขา")
+
+**การแบ่งบทบาทของ example รอบนี้:**
+
+| `regionIdentifier` | บทบาท | หมายเหตุ |
+|---|---|---|
+| `k9p-default` | `zone` | wildcard UUID เดิม |
+| `bigc-test` | `zone` | wildcard UUID เดิม — UUID เดียวกับ `k9p-point` |
+| `k9p-point` | `point` | major `9902` minor `2` เจาะจง |
+| `minew-test` | `point` | **ไม่มี major/minor เจาะจงเลย** (ดูคำเตือนข้างล่าง) |
+
+⚠️ **ข้อสังเกตสำคัญที่ต้องล็อกไว้ตรงนี้เพื่อไม่ให้ `flutter-dev` เดาผิด:** บทบาท
+zone/point **ไม่ใช่คุณสมบัติที่อนุมานได้จากการมี/ไม่มี `major`/`minor`** —
+`minew-test` ไม่ได้ระบุ major/minor เลยเหมือน `bigc-test`/`k9p-default` (ทั้งสามเป็น
+wildcard ทาง technical เท่ากันหมด) แต่ **`minew-test` ถูกกำหนดให้เป็น `point`
+เพราะเป็นการตัดสินใจเชิงนโยบายของสินค้า** (ฟลีตทดสอบยี่ห้อ Minew ตอนนี้มีบีคอนจริง
+อยู่ตัวเดียวภายใต้ UUID นั้น ความเจาะจงระดับ major/minor จึงไม่จำเป็นในทางปฏิบัติ แต่
+role ยังต้องถูก "ประกาศ" แยกต่างหาก ไม่ใช่เดาจาก payload) — **ถ้า `flutter-dev`
+เขียนตรรกะแบบ `role = if (major != null) POINT else ZONE` จะได้ `minew-test` เป็น
+`ZONE` ผิดทันที** ต้องใช้ตาราง mapping ตายตัวต่อ `regionIdentifier` string เท่านั้น
+(ดูหัวข้อ 6)
+
+### 2. trigger ชั้นที่ 2 ต่อแพลตฟอร์ม — และผลต่อโมเดล zone/point
+
+**iOS — CoreLocation ranging ผูกกับ monitoring แบบ 1:1 ในโค้ดปัจจุบัน:**
+`IBeaconRangingManager.applyParsedRegions(_:)`
+(`packages/beacon_kit_ios/ios/beacon_kit_ios/Sources/beacon_kit_ios/IBeaconRangingManager.swift:411-436`)
+เรียก `locationManager.startMonitoring(for: region)` (บรรทัด 435) **ตามด้วยทันที**
+`locationManager.startRangingBeacons(satisfying: parsedRegion.constraint)` (บรรทัด
+436) ให้กับ**ทุก**รายการใน `parsedRegions` — **ไม่มีเส้นทาง "range อย่างเดียว ไม่
+monitor" ในโค้ดตอนนี้เลย** ผลจาก `didRange`/`didFailRangingFor` (delegate ของระบบ)
+ถูกส่งต่อเข้า `runProximityLayer(regionIdentifier:beacons:fromRangeCallback:)`
+(บรรทัด 1028) โดย `regionIdentifier` มาจากการจับคู่ `CLBeaconIdentityConstraint` ที่
+ระบบส่งมากับ `constraintsByIdentifier` (บรรทัด 530, 611) — **Apple เรียก
+`didRange` แยกครั้งต่อ constraint ที่ลงทะเบียนไว้** ดังนั้นถ้าลงทะเบียนทั้ง
+`bigc-test` (wildcard UUID) และ `k9p-point` (UUID+major+minor เจาะจง) พร้อมกัน
+บีคอน `9902/2` ตัวเดียวจะทำให้เกิด **สอง `didRange` callback แยกกัน** (หนึ่งจาก
+constraint ของ `bigc-test`, หนึ่งจาก constraint ของ `k9p-point`) → **สอง
+`BeaconKitProximityChangedEvent` คนละ `regionIdentifier`** สำหรับเหตุการณ์ทาง
+กายภาพเดียวกัน — นี่คือกลไกจริงที่ทำให้ปัญหาในหัวข้อ 0 เกิดขึ้นจริง ไม่ใช่แค่ทฤษฎี
+
+**Android — `ScanFilter` ต่อ region ผ่าน `PendingIntent` แยกกัน:**
+`BackgroundRegionMonitor.registerScans()`
+(`packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BackgroundRegionMonitor.kt:245-286`)
+เรียก `scanner.startScan(listOf(region.toScanFilter()), settings, pendingIntent)`
+**แยกหนึ่งครั้งต่อหนึ่ง region** (บรรทัด 286) — การกรองเกิดที่ระดับ OS/BLE stack ผ่าน
+`ScanFilter` (เทียบ mask UUID/major/minor เต็ม 16 ไบต์ตามคอมเมนต์ในไฟล์เดียวกัน)
+ก่อนที่แอปจะตื่นด้วยซ้ำ — sighting เดียวกันที่ตรงกับ**หลาย** `ScanFilter` พร้อมกัน
+(wildcard ของ `bigc-test` และ exact-match ของ `k9p-point`) ทำให้ระบบส่ง broadcast
+แยกไปยัง**แต่ละ `PendingIntent`** ของ region นั้น ๆ → `BeaconScanReceiver.onReceive()`
+(`packages/beacon_kit_android/android/src/main/kotlin/com/bigc/beacon_kit_android/BeaconScanReceiver.kt:27`)
+ถูกเรียกแยกกันเช่นกัน คนละ `regionIdentifier` — **กลไกคนละแบบกับ iOS เป๊ะ (delegate
+ต่อ constraint ของระบบ vs. scan-filter fan-out ของ OS) แต่ผลลัพธ์เดียวกัน:** บีคอน
+กายภาพตัวเดียวเกิด 2 event คนละ region เมื่อ region สองอันคาบเกี่ยวกัน — ทั้งสอง
+แพลตฟอร์มจึงต้องการกติกาเดียวกันของ ADR นี้พอดี ไม่ใช่บังเอิญ
+
+**ต้นทุน/ข้อจำกัดของการเพิ่ม region เจาะจง major/minor — ต่างกันจริงระหว่างสองฝั่ง:**
+
+| | iOS | Android |
+|---|---|---|
+| ต้นทุนของ region ใหม่ 1 อัน | กิน 1 ใน 20 สล็อตของ `startMonitoring(for:)` เสมอ (ดูหัวข้อ 5) เพราะผูกกับ ranging แบบ 1:1 ไม่มีทางเลี่ยง | 1 การเรียก `startScan()`/`PendingIntent` เพิ่ม — **ไม่มีเพดานตัวเลขที่ enforce ในโค้ด `beacon_kit_android` เอง** (ต่างจาก iOS ที่มี `Self.maxMonitoredRegions = 20` เป็นค่าคงที่ในซอร์ส) |
+| หลักฐานว่ามีเพดานจริงไหม | ยืนยัน 2 ทางอิสระ: เอกสาร Apple (หัวข้อ 5) + ค่าคงที่ `maxMonitoredRegions = 20` ที่ enforce จริงในโค้ด (`IBeaconRangingManager.swift:47`, เช็คที่บรรทัด 176-177: `regions.count + currentlyMonitoredCount > 20` → error `TOO_MANY_REGIONS`) | มี failure code `SCAN_FAILED_APPLICATION_REGISTRATION_FAILED`/`SCAN_FAILED_SCANNING_TOO_FREQUENTLY` ที่โค้ด map ชื่อไว้แล้ว (`BackgroundRegionMonitor.kt:950-960`) ซึ่ง**พิสูจน์ว่าเพดานมีอยู่จริงในระบบ Android** แต่**ตัวเลขที่แน่นอนยังไม่ยืนยัน**ในรอบค้นคว้านี้ — ⚠️ อย่าเข้าใจผิดจากคอมเมนต์ที่ `BackgroundRegionMonitor.kt:26` ("ถูกมากเทียบกับเพดาน 20 region ของ ADR-8") คอมเมนต์นั้นพูดถึง**ต้นทุนของการอ่าน `SharedPreferences` ใน `reconcile()`** ไม่ใช่คำยืนยันว่าการลงทะเบียน `ScanFilter`/`startScan` ไม่มีเพดาน — คนละเรื่องกัน ห้ามเอามาอ้างแทนกัน |
+
+**สรุปหัวข้อนี้:** สองแพลตฟอร์มมี trigger คนละกลไก แต่ **การเพิ่ม region เจาะจง
+major/minor (`point`) มีต้นทุนสูงกว่าและมีเพดานที่รู้ตัวเลขแน่นอนกว่าบน iOS** เพราะ
+ranging/monitoring ผูกกันอยู่ในโค้ดปัจจุบัน — รายละเอียดคำถามเปิดเรื่องเพดานอยู่ที่
+หัวข้อ 5
+
+### 3. กติกาแกน — บีคอนที่อยู่ในสอง region ได้โปรโมชันจาก point เท่านั้น
+
+เมื่อ `BeaconKitProximityChangedEvent`/`ProximityChangedEvent` เข้าสู่ชั้นนโยบายของ
+แอป (จุดเดิม: `ExampleProximityWatcher.onProximityChanged()` ฝั่ง Android,
+`AppDelegate.recordProximityEvent(_:)` ฝั่ง iOS) และผ่านตัวกรอง "เข้าสู่ความใกล้"
+เดิมแล้ว (near/immediate + from==nil/far — ขั้นตอน 2/3 ของทั้งสองไฟล์):
+
+- **ถ้า `regionIdentifier` ของ event มีบทบาท `zone`:** เขียนบรรทัดหลักฐาน
+  `event=notification ... layer=2 posted=false reason=zoneRegion` **แล้ว
+  `return` ทันที** — **ห้ามเรียกฟังก์ชันคูลดาวน์ใด ๆ เลย** (ทั้งตัวเดิม 60 วินาที
+  และตัวที่สอง 30 นาที/24 ชม. ของ ADR-25) ไม่ว่าจะเป็นการอ่านหรือเขียน
+- **ถ้าบทบาทเป็น `point`:** ไหลต่อเข้าเส้นทางเดิมของ ADR-25 ทุกอย่าง (คูลดาวน์
+  30 นาที/24 ชม. ก่อน แล้วค่อยคูลดาวน์ 60 วินาทีเดิม แล้วค่อยยิง) — **ADR นี้ไม่แก้
+  เส้นทาง point เลยสักบรรทัด**
+
+**ทำไม zone ต้องเขียนบรรทัดหลักฐานเสมอ ไม่ใช่เงียบหาย:** หลักการเดียวกับ ADR-20
+§12.2/§12.5.3 ("ไม่มีบรรทัด ≠ หลักฐานเชิงลบ") ที่ ADR-25 §9 เพิ่งใช้ซ้ำกับ
+`reason=disabled` — ถ้า zone แค่ `return` เฉย ๆ โดยไม่เขียนอะไร ผู้ทดสอบที่อ่านไฟล์
+หลักฐานจะแยกไม่ออกระหว่าง "ระบบทำงานถูกต้อง (zone ถูกกันไว้ตามดีไซน์)" กับ "ชั้นที่ 2
+ไม่ทำงานเลย (บั๊ก)" ซึ่งเป็นบั๊กคนละชนิดที่ต้องแก้คนละทาง — เหมือนที่ ADR-25 §9.1
+เคยเตือนไว้กับเคส `disabled`
+
+**ทำไม cooldown store ต้องไม่ถูกแตะเลยสำหรับ zone (ไม่ใช่แค่ "ไม่ควร" แต่ "ห้าม
+เด็ดขาด"):**
+
+1. key ของคูลดาวน์ทั้งสองชั้นขึ้นต้นด้วย `regionIdentifier` (หัวข้อ 0) — key ของ
+   `bigc-test` กับ `k9p-point` สำหรับบีคอนตัวเดียวกันเป็นคนละ key อยู่แล้วโดย
+   โครงสร้าง แปลว่าถ้า zone ไปจดคูลดาวน์ด้วย **มันจะไม่ช่วยกันอะไรเลย** (คูลดาวน์
+   ของ key `bigc-test|...` ไม่มีทางไปกันการโพสต์ของ key `k9p-point|...` ได้ เพราะ
+   เป็นคนละ entry ในสโตร์คนละอัน) — การจดจึงเป็น**การเขียนที่ไม่มีใครอ่าน** ตั้งแต่
+   ต้น ไม่ใช่กลไกป้องกันอะไรจริง
+2. **ถ้ายังขืนจด** (เช่น เผื่ออนาคต) จะทำลายค่าคงที่หนึ่งเดียวที่ทำให้สโตร์คูลดาวน์
+   ตรวจสอบได้ง่าย: **"ทุก entry ในสโตร์นี้มาจากกิจกรรมของ `point` เท่านั้น"** — ถ้า
+   zone แทรกเข้าไปด้วย ใครก็ตามที่ไล่ตรวจไฟล์ `notification_cooldown_v1`
+   (Android) / suite `beacon_kit_example.proximity_cooldown_v2` (iOS) เพื่อ
+   debug คูลดาวน์ของ `point` จะต้องมาแยกก่อนว่า entry ไหนเป็นของ zone ที่ไม่มีวัน
+   ถูกใช้จริง เพิ่มงานตรวจสอบโดยไม่ได้อะไรกลับมาเลย — หลักการเดียวกับที่ ADR-25 §2
+   ยืนกรานเรื่องแยกไฟล์ prefs ของคูลดาวน์ออกจากสโตร์ที่ถูกล้าง (`ProximityGateStore`)
+   ตั้งแต่ต้น: **ความสะอาดของ invariant สำคัญกว่าความสะดวกที่คิดว่า "เผื่อไว้ก่อน"**
+3. เหตุผลเชิงดีบักที่คมกว่านั้น: ถ้า zone เรียกฟังก์ชันคูลดาวน์ (แม้จะเป็นคนละ key)
+   ก็ยังเสี่ยงเปลี่ยน **ลำดับการตรวจที่ผู้ทดสอบเห็นในไฟล์หลักฐาน** — ดูเหตุผลเต็มที่
+   หัวข้อ 4
+
+### 4. ลำดับการตรวจในชั้นที่ 2 — zoneRegion ต้องมาก่อนคูลดาวน์ทั้งสองตัวของ ADR-25
+
+**ตัดสินใจ: ตรวจบทบาท zone/point ทันทีหลังผ่านตัวกรอง near/immediate + from==far
+(ขั้นตอน 2/3 เดิม) และ**ก่อน**ขั้นตอน 3.5 (คูลดาวน์ 30 นาที/24 ชม.) และขั้นตอน 4
+(คูลดาวน์ 60 วินาที) ของทั้งสองไฟล์** — ตำแหน่งอ้างอิงปัจจุบัน (จะขยับเมื่อ
+implement จริง แต่ลำดับสัมพัทธ์ต้องคงไว้): iOS ระหว่างบรรทัด 486 (จบ guard
+`from==far`) กับบรรทัด 489 (เริ่มคอมเมนต์ `// 3.5)`) ของ `AppDelegate.swift` ·
+Android ระหว่างบรรทัด 134 (จบ guard เดียวกัน) กับบรรทัด 136 (เริ่มคอมเมนต์
+`// 3.5)`) ของ `ExampleProximityWatcher.kt`
+
+**เหตุผล — สองข้อ:**
+
+1. **ผลต่อ cooldown store:** ถ้าตรวจ zoneRegion **หลัง**คูลดาวน์ (เช่น หลังขั้นตอน
+   3.5) จะมีการอ่าน (และในกรณีขั้นตอน 4/60 วินาที คือ**เขียน**ด้วย เพราะ
+   `consumeCooldown`/`consumeProximityCooldown` แก้สถานะทันทีที่คืน `true`) ฟังก์ชัน
+   คูลดาวน์สำหรับ key ของ zone ก่อนจะมาเจอว่าถูกกันอยู่ดี — ขัดกับกติกาห้ามแตะ store
+   ของหัวข้อ 3 ตรง ๆ แม้ key จะแยกกันอยู่แล้วก็ตาม (การเขียนที่ไม่มีใครอ่านยังคง
+   เป็นการเขียนที่ไม่ควรเกิด)
+2. **ผลต่อบรรทัดหลักฐานที่ผู้ทดสอบเห็น:** ถ้าตรวจ zoneRegion หลังคูลดาวน์ และ
+   บังเอิญ key ของ zone นั้นติดคูลดาวน์อยู่พอดี (เช่น เคยมีบั๊กจดคูลดาวน์ผิดที่มาก่อน
+   หรือ implementation ผิดจนคูลดาวน์ของ zone ถูกจดจริง) ผู้ทดสอบจะเห็น
+   `reason=cooldown` แทนที่จะเป็น `reason=zoneRegion` — ทำให้เข้าใจผิดว่า "region
+   นี้แค่ติดคูลดาวน์ชั่วคราว เดี๋ยวก็โพสต์ได้" ทั้งที่ความจริงคือ **region นี้ไม่มี
+   วันโพสต์เลยตามดีไซน์** สองคำตอบนี้ต่างกันโดยสิ้นเชิงในเชิงปฏิบัติการ
+   (`cooldown` = "รอเดี๋ยว", `zoneRegion` = "ไม่ต้องรอ เพราะไม่ใช่ region ที่ยิง
+   โปรโมชัน") — การตรวจ zoneRegion ก่อนทำให้ `reason=` ทั้งชุดไม่มีทางกำกวมแบบนี้
+   ได้เลย หลักการเดียวกับที่ ADR-25 §9.4 แยก `reason=cooldown` ออกจาก
+   `reason=disabled` เพราะเป็นคนละแกนคำถาม ("แอปตัดสินใจไม่ลอง" vs "ระบบบล็อก" vs
+   ตอนนี้เพิ่ม "region นี้ไม่ใช่ point")
+
+**ผลคือลำดับเต็มของชั้นที่ 2 หลัง ADR นี้:** (1) เขียนบรรทัด `event=proximity` เสมอ
+→ (2) กรอง to∈{near,immediate} → (3) กรอง from∈{nil,far} → **(3.4 ใหม่) กรองบทบาท
+zone/point — zone: เขียน `reason=zoneRegion` แล้วจบ, point: ไปต่อ** → (3.5 เดิม)
+คูลดาวน์ 30 นาที/24 ชม. → (4 เดิม) คูลดาวน์ 60 วินาที → (5 เดิม) โพสต์จริง
+
+### 5. คำถามเปิด — เพดาน 20 region ของ iOS จะชนโมเดล point เมื่อไร (ยังไม่ตัดสินรอบนี้)
+
+**ตัวเลขที่ยืนยันได้จริง: 20** — ยืนยัน 3 ทางอิสระ:
+
+1. เอกสาร Apple ที่ยังอยู่จริง (ตรวจซ้ำด้วย WebFetch วันนี้ 17 ก.ย. 2026, ไม่ใช่จาก
+   ความจำ): [`startMonitoring(for:)`](https://developer.apple.com/library/archive/documentation/UserExperience/Conceptual/LocationAwarenessPG/RegionMonitoring/RegionMonitoring.html)
+   — คำพูดต้นฉบับ (ดึงซ้ำวันนี้): *"For this reason, Core Location limits to 20
+   the number of regions that may be simultaneously monitored by a single app."*
+   (หน้า `developer.apple.com`... เอกสาร archived เดียวกับที่ ADR-8 อ้างไว้แล้ว —
+   ยังไม่ถูกถอดออก ณ วันที่ตรวจ)
+2. ค่าคงที่ในซอร์สจริงของ `beacon_kit_ios`:
+   `private static let maxMonitoredRegions = 20`
+   (`IBeaconRangingManager.swift:47`) ที่ถูก**บังคับใช้จริง** ที่บรรทัด 176-177
+   (`regions.count + currentlyMonitoredCount > Self.maxMonitoredRegions` → error
+   `TOO_MANY_REGIONS`)
+3. ADR-8 (`ARCHITECTURE.md:780-869`) ซึ่งออกแบบสคีม "1 wide net + ไม่เกิน 19
+   region เจาะจงสาขา" **โดยตรงจากเลข 20 นี้** อยู่แล้วตั้งแต่ 29 ส.ค. 2026 — ตัวเลข
+   ไม่ได้ถูกคิดใหม่ในรอบนี้ เป็นเลขเดิมที่ยืนยันซ้ำ
+
+**สิ่งที่ยังไม่ยืนยัน (ห้ามเดา):** Apple ไม่มีเอกสารที่ระบุเพดานแยกต่างหากสำหรับ
+`startRangingBeacons(satisfying:)` เอง (ค้นทั้งหน้า official doc ปัจจุบันของ
+`startRangingBeacons(satisfying:)` และ web search แล้ว 17 ก.ย. 2026 — ไม่พบตัวเลข
+ใด ๆ ที่เจาะจงกับ ranging constraints โดยเฉพาะ แยกจากเพดาน monitoring) — **แต่ไม่มี
+ผลต่างในทางปฏิบัติ ณ วันนี้** เพราะโค้ดปัจจุบันผูก ranging กับ monitoring แบบ 1:1
+เสมอ (หัวข้อ 2) ทุก region ที่ registered จึงชนเพดาน 20 เดียวกันไม่ว่าจะต้องการแค่
+ranging (point) หรือ monitoring เต็มรูปแบบ (zone)
+
+**คำถามเปิด:** วันนี้มี 4 region (`k9p-default`, `bigc-test`, `minew-test`,
+`k9p-point`) จาก 20 — เหลือเยอะ ไม่ชนเพดานเร็ว ๆ นี้ แต่ ADR-8 ออกแบบชั้นที่ 1 ไว้
+แล้วว่าจะใช้ **สูงสุด 20 region พร้อมกัน** (1 wide net + 19 สาขาเจาะจง) เมื่อ BigC
+ขยายจำนวนสาขา — ถ้าธุรกิจต้องการ `point` ระดับ "ต่อชั้นวางสินค้า" หลายจุดภายใน
+สาขาเดียว (ตามปัญหาที่ ADR-19 หัวข้อ 0 ตั้งไว้แต่แรก) **`point` แต่ละจุดจะแย่งสล็อต
+เดียวกันกับ region เจาะจงสาขาของ ADR-8 ทันที** เพราะทั้งคู่ใช้เพดาน 20 เดียวกันใน
+โค้ดปัจจุบัน — คำถามที่ยังไม่ตอบ: จะถึงจุดชนกันเมื่อจำนวน `point` ที่ต้อง active
+พร้อมกันในสาขาเดียว + region เจาะจงสาขาที่ active ของ ADR-8 (ซึ่งสลับตามตำแหน่งผู้ใช้
+คร่าว ๆ) รวมกันเกิน 19 (20 ลบ wide net 1 อัน)
+
+**ทางออกที่เป็นไปได้ (ยกมาเป็นตัวเลือก ยังไม่ตัดสินในรอบนี้):**
+
+(ก) **แยก ranging ออกจาก monitoring ใน `beacon_kit_ios`** — เพิ่มเส้นทางที่เรียก
+    `startRangingBeacons(satisfying:)` โดยไม่เรียก `startMonitoring(for:)` คู่กัน
+    ถ้ายืนยันได้ว่า ranging ไม่มีเพดานแยกของตัวเอง (ข้อที่ยังไม่ยืนยันข้างบน) วิธีนี้
+    จะทำให้ `point` ไม่กินสล็อตของเพดาน 20 เลย — **แต่ต้องแก้ SDK** ไม่ใช่แค่ example
+    app แล้ว (นอกขอบเขต ADR นี้)
+(ข) **ให้ `point` เป็น tier ที่สามที่สลับเข้า/ออกแบบไดนามิก** เหมือนที่ ADR-8 สลับ
+    region เจาะจงสาขา — ลงทะเบียน `point` ของสาขาหนึ่ง ๆ เฉพาะตอนที่ยืนยันแล้วว่า
+    ผู้ใช้อยู่ใน `zone`/สาขานั้นจริง (เช่น เริ่ม ranging point เมื่อ `didEnterRegion`
+    ของ zone/สาขานั้นยิง แล้วหยุดตอน exit) — คุมจำนวน region ที่ active พร้อมกันได้
+    แต่เพิ่ม state machine ที่ซับซ้อนขึ้น
+(ค) **ไม่ต้องลงทะเบียน region ใหม่สำหรับ `point` ที่ UUID ซ้ำกับ `zone` ที่มีอยู่
+    แล้ว** — สังเกตจากโค้ดจริงว่า `runProximityLayer` ได้รับ `beacons: [CLBeacon]`
+    ที่แต่ละตัวมี `major`/`minor` ของตัวเองอยู่แล้ว (`beacon.major.uint16Value`,
+    `beacon.minor.uint16Value` — `IBeaconRangingManager.swift:1041-1042`) ไม่ว่า
+    จะมาจาก constraint แบบ wildcard หรือเจาะจง — เป็นไปได้ทางเทคนิคที่แอปจะจัด
+    ประเภท `point` **จาก `major`/`minor` ของแต่ละ sample หลัง `didRange` มาถึง**
+    แทนที่จะพึ่ง `regionIdentifier`/CLBeaconRegion ที่แยกกัน — วิธีนี้จะทำให้
+    `k9p-point` ไม่ต้องกิน region slot ของตัวเองเลยถ้า UUID ของมันซ้ำกับ zone ที่
+    ลงทะเบียนอยู่แล้ว (กรณี `k9p-point`/`bigc-test` ตรงเงื่อนไขนี้พอดี) — **แต่ใช้
+    ไม่ได้กับ `point` ที่ UUID ไม่ตรงกับ `zone` ใดเลย** (ต้องมี region ของตัวเอง
+    อยู่ดี) และเปลี่ยนความหมายของ `regionIdentifier` ที่แอปเห็นจาก "region ที่
+    ลงทะเบียนไว้" เป็น "role ที่คำนวณทีหลัง" ซึ่งเป็นการเปลี่ยนสัญญาที่ต้องคิดผลกระทบ
+    กับ ADR-25 ทั้งหมดใหม่ (คูลดาวน์ยึด `regionIdentifier` เป็น key)
+
+**ไม่ตัดสินในรอบนี้** — เก็บไว้เป็นคำถามเปิดสำหรับ ADR ถัดไปเมื่อจำนวน `point` ที่
+ต้องการจริงในสนามเริ่มชัดเจนกว่านี้
+
+### 6. ชื่อค่าคงที่/จุดที่ต้องแก้ — สำหรับ `flutter-dev` (รอบนี้ยังไม่แก้)
+
+**Android — `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/`**
+
+| ไฟล์ | แก้อะไร |
+|---|---|
+| `ExampleApplication.kt` | เพิ่ม `internal enum class ExampleRegionRole { ZONE, POINT }` และตาราง `internal val EXAMPLE_REGION_ROLES: Map<String, ExampleRegionRole>` ใน `companion object` เดียวกับ `LAYER1_NOTIFICATIONS_ENABLED` (ADR-25 §9.2) — **mapping ตายตัวต่อ string identifier ตามตารางหัวข้อ 1 ห้ามอนุมานจาก major/minor** — ค่า default ของ identifier ที่ไม่อยู่ในตาราง (fail-safe) = `ZONE` (ดูหัวข้อ 7 ข้อสุดท้าย) |
+| `ExampleProximityWatcher.kt` | แทรกขั้นตอนใหม่ (เรียกว่า **"3.4"** ในคอมเมนต์ — เลือกเลขนี้เพื่อให้**เลขเรียงตามลำดับที่รันจริง** และเลขขั้นตอนเดิม 3.5/4 ไม่ต้องขยับ · ⚠️ ฉบับแรกของ ADR นี้เรียกมันว่า "3.6" ซึ่งรันก่อน 3.5 — เลขขัดกับลำดับจริง แก้แล้ว 17 ก.ย. 2026 รอบตรวจ) ระหว่างบรรทัด 134 กับ 136 — เช็ค `ExampleApplication.EXAMPLE_REGION_ROLES[event.regionIdentifier] ?: ExampleRegionRole.ZONE`, ถ้า `ZONE` เรียก `ExampleNotifications.recordSuppressed(..., reason = "zoneRegion", extra = "role=zone")` แล้ว `return` — **ไม่แตะ `longCooldownKeyFor`/`cooldownKeyFor`/`consumeCooldown`/`longCooldownSinceLastPostedOrNull` เลยในสาขานี้** |
+| `ExampleNotifications.kt` | ไม่ต้องแก้ — ใช้ `recordSuppressed()` ที่มีอยู่แล้วตรง ๆ (กลไกเดียวกับ `reason=cooldown`/`reason=disabled` ตาม ADR-25 §9.4: พารามิเตอร์ `String` อิสระ ไม่ใช่ enum ปิด ไม่กระทบ `deliveryReason()`) |
+
+**iOS — `packages/beacon_kit/example/ios/Runner/AppDelegate.swift`**
+
+| ไฟล์/จุด | แก้อะไร |
+|---|---|
+| `AppDelegate.swift` (ค่าคงที่) | เพิ่ม `internal enum ExampleRegionRole { case zone, point }` และ `internal static let regionRoles: [String: ExampleRegionRole]` ใกล้กับ `layer1NotificationsEnabled`/`proximityCooldownSuiteName` — mapping ตายตัวเดียวกับตารางหัวข้อ 1 (ต้องตรงกับฝั่ง Android ทุก key/value ไม่ใช่แค่ความหมาย) |
+| `AppDelegate.swift` (`recordProximityEvent(_:)`) | แทรกขั้นตอนใหม่ระหว่างบรรทัด 486 กับ 489 — เช็ค `Self.regionRoles[event.regionIdentifier] ?? .zone`, ถ้า `.zone` เรียกฟังก์ชันใหม่ `recordNotificationZoneSuppressed(_:)` แล้ว `return` — **ไม่แตะ `proximityCooldownKey(for:)`/`longCooldownBlockedSinceMs`/`consumeProximityCooldown` เลยในสาขานี้** |
+| `AppDelegate.swift` (ฟังก์ชันใหม่) | `recordNotificationZoneSuppressed(_ event:)` — โครงเดียวกับ `recordNotificationSuppressed`/`recordRegionNotificationDisabled` ที่มีอยู่แล้ว: เขียนบรรทัด `event=notification` ด้วย `regionIdentifier: event.regionIdentifier` จริง (**ไม่ใช่ `"-"`** แบบ failure branch ของ `postNotification` — บทเรียนเดียวกับที่ ADR-25 §9.7/§9.8 เตือนไว้กับ `recordRegionNotificationDisabled`) ต่อท้ายด้วย `" posted=false reason=zoneRegion"` ใช้ `Self.notificationColumns(event)` ตัวเดียวกับเส้นทางอื่นเพื่อคอลัมน์ตรงกัน |
+
+**ค่า `reason=` ใหม่ทั้งสองแพลตฟอร์ม: `zoneRegion`** — string ตัวเดียวกันเป๊ะทั้งสอง
+ฝั่ง (ตัวพิมพ์แบบ camelCase ตรงกับ `disabled`/`cooldown` ที่มีอยู่แล้ว) — บน Android
+เป็นค่าที่ **7** ที่ปรากฏจริงบนบรรทัด `event=notification` (ต่อจาก
+`granted`/`permissionDenied`/`blockedByUser`/`channelBlocked`/`cooldown`/`disabled`
+ตามที่ ADR-25 §9.4 นับไว้) ใช้กลไกเดียวกับ `cooldown`/`disabled` เป๊ะ (พารามิเตอร์
+`String` อิสระของ `recordSuppressed()`, **ไม่แตะ `deliveryReason()`**)
+
+**เคสที่ unit test ต้องคลุม (ทั้งสองแพลตฟอร์ม):**
+
+1. event ที่ `regionIdentifier` = zone (เช่น `bigc-test`) ผ่านตัวกรอง near/immediate
+   + from==far แล้ว → **ต้องไม่มีการเรียก post()/`UNUserNotificationCenter.add()`
+   จริง** และมีบรรทัดหลักฐาน `posted=false reason=zoneRegion` — แยกสองสิ่งนี้เป็น
+   สองการยืนยันคนละจุด (แบบเดียวกับที่ ADR-25 §9.7 ทำกับเคส `disabled`)
+2. event ที่ `regionIdentifier` = point (เช่น `k9p-point`) → พฤติกรรมต้องเหมือน
+   ก่อน ADR นี้ทุกประการ (regression: ไหลผ่านคูลดาวน์ 30 นาที/24 ชม. แล้วคูลดาวน์
+   60 วินาทีตามเดิม)
+3. **จำลองบีคอนตัวเดียว (uuid/major/minor เดียวกัน) ยิงสอง event ติดกัน คนละ
+   `regionIdentifier`** (หนึ่งจาก `bigc-test`, หนึ่งจาก `k9p-point`) → ต้องได้
+   notification จริง **ใบเดียว** (จาก event ของ `k9p-point` เท่านั้น) — นี่คือเทส
+   ที่พิสูจน์กติกาแกนของหัวข้อ 3 โดยตรง
+4. `minew-test` (point ที่ไม่มี major/minor) ต้องยังทำงานเป็น `point` ปกติ — กัน
+   การเผลอ derive role จาก major/minor (หัวข้อ 1 คำเตือน)
+5. หลังเคส 1 (zone ถูกกัน) ต้องพิสูจน์ได้ว่า**ไม่มีการเรียก**ฟังก์ชันคูลดาวน์ใด ๆ
+   เลย — mock/spy `longCooldownSinceLastPostedOrNull`/`consumeCooldown` (Android)
+   หรือ `longCooldownBlockedSinceMs`/`consumeProximityCooldown` (iOS) แล้วยืนยันว่า
+   ไม่ถูกเรียกเลยสำหรับ key ของ zone นั้น
+
+### 7. อะไรจะพังถ้าทำผิด
+
+- **ถ้า derive บทบาทจาก `major != null`:** `minew-test` จะกลายเป็น `zone` ผิดทันที
+  (หัวข้อ 1) — ไม่มี error ไม่มี crash แค่ไม่มีวันได้ notification จาก `minew-test`
+  เลย ซึ่งมีหน้าตาเหมือน "ยี่ห้อ Minew ยังไม่ได้ integrate" ทุกประการ แยกออกจากกัน
+  ไม่ได้ถ้าไม่รู้ที่มาของ ADR นี้
+- **ถ้าตรวจ zoneRegion หลังคูลดาวน์แทนที่จะก่อน (สลับลำดับหัวข้อ 4):** `reason=`
+  บนบรรทัดหลักฐานจะสับสนระหว่าง `cooldown`/`zoneRegion` ตามจังหวะบังเอิญ (หัวข้อ 4
+  ข้อ 2) และคูลดาวน์ 60 วินาทีจะถูก "กิน" โดย key ของ zone ที่ไม่มีวันถูกใช้ประโยชน์
+  (หัวข้อ 3 ข้อ 1)
+- **ถ้า zone `return` เฉย ๆ ไม่เขียนบรรทัดหลักฐาน:** ผิดกติกา ADR-20 §12.2/§12.5.3
+  ตรง ๆ — แยกไม่ออกระหว่าง "zone ถูกกันตามดีไซน์" กับ "ชั้นที่ 2 ไม่ทำงาน" (หัวข้อ 3)
+- **ถ้าไม่กันเคส "บีคอนเดียวอยู่สอง region" ด้วยเทสข้อ 3 ของหัวข้อ 6:** ผู้ใช้จะได้
+  โปรโมชันสองใบซ้ำสำหรับการเข้าใกล้ครั้งเดียว (ปัญหาที่หัวข้อ 0 เปิดไว้) — บั๊กนี้
+  **เทสของ point/zone แยกกัน (เคส 1-2) จับไม่ได้** เพราะแต่ละเคสทดสอบ region เดียว
+  ไม่ได้จำลองสอง event มาจากบีคอนเดียวกัน
+- **ถ้า mapping ของ Android กับ iOS ไม่ตรงกัน** (เช่น ลืม sync ตารางตอนเพิ่ม region
+  ใหม่ในอนาคต) — พฤติกรรมจะต่างกันระหว่างสองแพลตฟอร์มสำหรับ region เดียวกัน โดยไม่มี
+  compile error ใด ๆ เตือน เพราะ mapping เป็นข้อมูล ไม่ใช่ type-checked ข้ามภาษา —
+  ผู้ตรวจ (`beacon-qa`) ต้อง diff ตารางทั้งสองไฟล์ทุกครั้งที่มีการแก้ก่อน merge
+- **ถ้า default ของ identifier ที่ไม่อยู่ในตารางไม่ใช่ `ZONE` (เช่น ปล่อยให้เป็น
+  `point`/crash/throw แทน):** region ใหม่ที่เพิ่มใน `main.dart` แล้วลืมประกาศ role
+  จะเริ่มยิง notification ทันทีโดยไม่มีใครตั้งใจ (หรือ crash ทั้งแอป) — fail-safe
+  ที่ตัดสินไว้ในหัวข้อ 6 คือ **เงียบไว้ก่อน (`ZONE`) ดีกว่าเสี่ยงสแปม** สอดคล้องกับ
+  หลักการเดียวกับที่ ADR-25 เลือกปิด layer 1 notification โดย default (§9.1)
+
+### อ้างอิง
+
+ADR-8 (เพดาน 20 region, สคีม 1 wide net + 19 สาขาเจาะจง, คำถามเปิดเรื่อง
+`didEnterRegion` ยิงกี่ครั้งเมื่อ region ซ้อนทับ — ยังไม่ตอบเช่นกัน คนละคำถามกับ
+ADR นี้แต่รากเดียวกัน) — ADR-19 หัวข้อ 0 (ที่มาของความต้องการ "จุดเจาะจงกว่าสาขา")
+— ADR-20 §12.2/§12.5.3 ("ไม่มีบรรทัด ≠ หลักฐานเชิงลบ") — ADR-21 §3
+(`ProximityKeyCodec`, รูปร่าง key `region|uuid|major|minor`) — ADR-25 ทั้งฉบับ
+(คูลดาวน์สองชั้นที่ ADR นี้ตรวจก่อนแต่ไม่แตะ) โดยเฉพาะ §2 (เหตุผลแยกสโตร์คูลดาวน์
+ออกจากสโตร์ที่ถูกล้าง — ใช้หลักการเดียวกันในหัวข้อ 3 ของ ADR นี้), §9 (แบบแผนธง
+เปิด/ปิดต่อแพลตฟอร์ม + `recordSuppressed()`/`recordRegionNotificationDisabled`
+ที่ ADR นี้ทำตามเป๊ะ) — `packages/beacon_kit/example/lib/main.dart:116-118,650-652`
+(รายการ region ปัจจุบัน) — `packages/beacon_kit/lib/src/ibeacon_region_config.dart`
+· `packages/beacon_kit_android/lib/src/android_background_region.dart` (major/minor
+API ที่มีอยู่แล้ว ไม่ต้องแตะ) — `IBeaconRangingManager.swift` (โค้ดปัจจุบัน, iOS
+trigger + เพดาน 20) — `BackgroundRegionMonitor.kt`/`BeaconScanReceiver.kt`
+(โค้ดปัจจุบัน, Android trigger) — `ExampleProximityWatcher.kt`/`AppDelegate.swift`
+(จุดแทรกขั้นตอน 3.4 ใหม่) — [Apple: Region Monitoring and iBeacon
+(archived)](https://developer.apple.com/library/archive/documentation/UserExperience/Conceptual/LocationAwarenessPG/RegionMonitoring/RegionMonitoring.html)
+(ตรวจซ้ำ 17 ก.ย. 2026) — [Apple: `startRangingBeacons(satisfying:)`
+doc](https://developer.apple.com/documentation/corelocation/cllocationmanager/startrangingbeacons(satisfying:))
+(ตรวจ 17 ก.ย. 2026 — ไม่พบเพดานเจาะจงของ ranging, บันทึกไว้เป็น "ยังไม่ยืนยัน"
+ในหัวข้อ 5)
