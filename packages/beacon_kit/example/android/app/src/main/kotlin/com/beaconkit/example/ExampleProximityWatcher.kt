@@ -133,6 +133,32 @@ object ExampleProximityWatcher {
         val from = event.from
         if (from != null && from != ProximityBucket.FAR) return
 
+        // 3.4) บทบาท zone/point ของ region ชั้นที่ 2 (ADR-26 หัวข้อ 3/4) — ต้องเช็ค
+        // **ก่อน**คูลดาวน์ทั้งสองตัวของ ADR-25 (3.5/4 ข้างล่าง) เสมอ: ถ้าเช็คทีหลัง
+        // การอ่าน/เขียนคูลดาวน์ของ key ที่เป็น zone จะเป็น "การเขียนที่ไม่มีใครอ่าน"
+        // (คนละ key กับ point อยู่แล้วเพราะ key ขึ้นต้นด้วย regionIdentifier) และ
+        // ทำให้ reason= บนบรรทัดหลักฐานกำกวมกับ reason=cooldown โดยไม่ตั้งใจ
+        // (ADR-26 หัวข้อ 4) — identifier ที่ไม่อยู่ในตาราง mapping fail-safe เป็น
+        // ZONE เสมอ (ADR-26 §7 ข้อสุดท้าย)
+        val role = ExampleApplication.EXAMPLE_REGION_ROLES[event.regionIdentifier]
+            ?: ExampleApplication.ExampleRegionRole.ZONE
+        if (role == ExampleApplication.ExampleRegionRole.ZONE) {
+            // **ห้ามแตะ longCooldownKeyFor/cooldownKeyFor/consumeCooldown/
+            // longCooldownSinceLastPostedOrNull เลยในสาขานี้** (ADR-26 §3) —
+            // เขียนบรรทัดหลักฐานเสมอแล้วจบ ไม่ใช่ return เฉย ๆ (ADR-20 §12.2/
+            // §12.5.3: "ไม่มีบรรทัด" ต้องไม่ถูกอ่านเป็นหลักฐานเชิงลบ)
+            ExampleNotifications.recordSuppressed(
+                context = context,
+                regionIdentifier = event.regionIdentifier,
+                beacon = beaconField(event),
+                mac = event.beaconTag ?: ExampleNotifications.BEACON_NOT_APPLICABLE,
+                layer = ExampleNotifications.LAYER_PROXIMITY,
+                reason = "zoneRegion",
+                extra = "role=zone",
+            )
+            return
+        }
+
         // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§3/§3.1) — เช็ค**ก่อน**คูลดาวน์
         // เดิม 60 วินาทีเพราะนี่คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ (คูลดาวน์เดิม
         // มักหมดอายุไปแล้วก่อนรอบล้าง-นับใหม่ถัดไปเสมอ) — `nowElapsed` อ่านครั้ง

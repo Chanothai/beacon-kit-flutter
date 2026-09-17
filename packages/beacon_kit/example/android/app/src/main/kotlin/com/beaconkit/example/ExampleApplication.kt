@@ -28,6 +28,24 @@ import com.bigc.beacon_kit_android.BackgroundRegionStateEvent
 class ExampleApplication : Application() {
 
     /**
+     * บทบาทของ region ชั้นที่ 2 (ADR-26 หัวข้อ 1) — **`ZONE`** ตอบว่า "อยู่ใน
+     * พื้นที่ไหม" (ตาข่ายกันพลาดระดับสาขา/โซนกว้าง) **`POINT`** ตอบว่า "ยืน
+     * อยู่ตรงจุดนี้ไหม" (ระดับชั้นวางสินค้า/ตำแหน่งเจาะจง)
+     *
+     * ⚠️ **ประกาศเป็นสมาชิกของคลาส ไม่ใช่ของ `companion object`** แม้ ADR-26 §6
+     * จะเขียนไว้ว่า "ใน companion object เดียวกับ `LAYER1_NOTIFICATIONS_ENABLED`"
+     * ก็ตาม — คลาส/enum ที่ประกาศอยู่*ภายใน* `companion object` ไม่ถูก promote
+     * ให้เรียกแบบ `Outer.Nested` ได้เหมือนฟังก์ชัน/ค่าคงที่ (ต้อง
+     * `Outer.Companion.Nested` เท่านั้น) — ยืนยันจากคอมไพเลอร์จริง
+     * (`:app:compileDebugKotlin` ล้มเหลวด้วย "Unresolved reference
+     * 'ExampleRegionRole'" ตอนเรียกจาก `ExampleProximityWatcher.kt` ด้วยไวยากรณ์
+     * ที่ ADR-26 §6 เขียนไว้) ย้ายออกมาเป็นสมาชิกของคลาสตรงนี้แทนเพื่อให้เรียกจาก
+     * ไฟล์อื่นด้วย `ExampleApplication.ExampleRegionRole.ZONE` ได้ตรงตามที่ ADR
+     * ตั้งใจ — ตาราง [EXAMPLE_REGION_ROLES] ยังอยู่ใน `companion object` ตามเดิม
+     */
+    internal enum class ExampleRegionRole { ZONE, POINT }
+
+    /**
      * `companion object` เพื่อให้ `MainActivity` เข้าถึงได้โดยไม่ต้องส่งต่อผ่าน
      * intent — และเพื่อให้เห็นชัดว่ามี **ตัวเดียวต่อ process** ไม่ใช่ตัวใหม่ทุก
      * ครั้งที่มีคนถาม (ถ้าสร้างใหม่ `processStartedElapsedMillis` จะรีเซ็ต แล้ว
@@ -47,6 +65,24 @@ class ExampleApplication : Application() {
          *  `internal` ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
          */
         internal const val LAYER1_NOTIFICATIONS_ENABLED = false
+
+        /**
+         * mapping ตายตัวต่อ `regionIdentifier` string ตามตาราง ADR-26 §1 —
+         * **ห้ามอนุมานบทบาทจาก major/minor** `minew-test` ไม่มี major/minor เลย
+         * เหมือน `bigc-test`/`k9p-default` แต่ยังถูกกำหนดเป็น `POINT` เพราะเป็น
+         * การตัดสินใจเชิงนโยบายของสินค้า ไม่ใช่คุณสมบัติที่ derive ได้จาก payload
+         * (ADR-26 §1 คำเตือน) — identifier ที่ไม่อยู่ในตารางนี้ fail-safe เป็น
+         * `ZONE` เสมอ (ดู [ExampleProximityWatcher], ADR-26 §7 ข้อสุดท้าย)
+         *
+         * **`internal` ไม่ใช่ `private`** ด้วยเหตุผลเดียวกับ
+         * [LAYER1_NOTIFICATIONS_ENABLED] — ต้องเข้าถึงได้จากเทส
+         */
+        internal val EXAMPLE_REGION_ROLES: Map<String, ExampleRegionRole> = mapOf(
+            "k9p-default" to ExampleRegionRole.ZONE,
+            "bigc-test" to ExampleRegionRole.ZONE,
+            "k9p-point" to ExampleRegionRole.POINT,
+            "minew-test" to ExampleRegionRole.POINT,
+        )
 
         // ⚠️ ค่าทดสอบ 30 นาที ไม่ใช่ค่าสินค้า (ค่าสินค้า = 24 ชั่วโมง,
         // ExampleProximityWatcher.DEFAULT_LONG_COOLDOWN_MILLIS, ADR-25 §8.1) — override
