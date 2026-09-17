@@ -350,6 +350,50 @@ import beacon_kit_ios
 
   // MARK: - หลักฐานของชั้นที่ 2 (proximity — ADR-21)
 
+  /// บทบาทของ region ชั้นที่ 2 (ADR-26 หัวข้อ 1) — `zone` ตอบว่า "อยู่ในพื้นที่
+  /// ไหม" (ตาข่ายกันพลาดระดับสาขา/โซนกว้าง) `point` ตอบว่า "ยืนอยู่ตรงจุดนี้ไหม"
+  /// (ระดับชั้นวางสินค้า/ตำแหน่งเจาะจง)
+  internal enum ExampleRegionRole {
+    case zone
+    case point
+  }
+
+  /// mapping ตายตัวต่อ `regionIdentifier` string ตามตาราง ADR-26 §1 — **ต้องตรง
+  /// กับ `ExampleApplication.EXAMPLE_REGION_ROLES` ฝั่ง Android ทุก key/value**
+  /// (ห้ามอนุมานบทบาทจาก major/minor — `minew-test` ไม่มี major/minor เลยเหมือน
+  /// `bigc-test`/`k9p-default` แต่ยังถูกกำหนดเป็น `.point` เพราะเป็นการตัดสินใจ
+  /// เชิงนโยบายของสินค้า ไม่ใช่คุณสมบัติที่ derive ได้จาก payload — ADR-26 §1
+  /// คำเตือน) — identifier ที่ไม่อยู่ในตารางนี้ fail-safe เป็น `.zone` เสมอ
+  /// (ADR-26 §7 ข้อสุดท้าย)
+  static let regionRoles: [String: ExampleRegionRole] = [
+    "k9p-default": .zone,
+    "bigc-test": .zone,
+    "k9p-point": .point,
+    "minew-test": .point,
+  ]
+
+  /// เขียนบรรทัดหลักฐานตอน region ชั้นที่ 2 มีบทบาท `zone` (ADR-26 หัวข้อ 3/4) —
+  /// โครงเดียวกับ [recordNotificationSuppressed]/[recordRegionNotificationDisabled]
+  /// ใช้ `event.regionIdentifier` จริง (**ไม่ใช่ `"-"`** แบบ failure branch ของ
+  /// `postNotification` — บทเรียนเดียวกับที่ ADR-25 §9.7/§9.8 เตือนไว้กับ
+  /// `recordRegionNotificationDisabled`) และ [notificationColumns] ตัวเดียวกับ
+  /// เส้นทางอื่นเพื่อคอลัมน์ตรงกัน — **ห้ามเรียกฟังก์ชันคูลดาวน์ใด ๆ ก่อน/หลัง
+  /// เรียกฟังก์ชันนี้เลย** (ADR-26 §3): ไม่แตะ `proximityCooldownKey(for:)`,
+  /// `longCooldownBlockedSinceMs`, `consumeProximityCooldown`
+  private func recordNotificationZoneSuppressed(_ event: BeaconKitProximityChangedEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "notification",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + Self.notificationColumns(event)
+          + " posted=false reason=zoneRegion"
+      )
+    )
+  }
+
   /// เว้นช่วง notification ต่อหนึ่งบีคอนอย่างน้อย 60 วินาที
   ///
   /// **เป็นค่าสำหรับ demo ล้วน ๆ ไม่ใช่ค่าที่ calibrate อะไร** — และเป็น**บทเรียน
@@ -485,6 +529,20 @@ import beacon_kit_ios
     //    **บรรทัดหลักฐานยังเขียนครบทุก flap** (ข้อ 1) ตัวเลข "สลับ near↔immediate
     //    กี่ครั้ง" ที่ ADR-21 หัวข้อ 7 ข้อ 3 สั่งให้เก็บจึงไม่หายไปไหน
     guard event.from == nil || event.from == .far else { return }
+
+    // 3.4) บทบาท zone/point ของ region ชั้นที่ 2 (ADR-26 หัวข้อ 3/4) — ต้องเช็ค
+    //    **ก่อน**คูลดาวน์ทั้งสองตัวของ ADR-25 (3.5/4 ข้างล่าง) เสมอ: ถ้าเช็ค
+    //    ทีหลัง การอ่าน/เขียนคูลดาวน์ของ key ที่เป็น zone จะเป็น "การเขียนที่ไม่มี
+    //    ใครอ่าน" (คนละ key กับ point อยู่แล้วเพราะ key ขึ้นต้นด้วย
+    //    regionIdentifier) และทำให้ reason= บนบรรทัดหลักฐานกำกวมกับ
+    //    reason=cooldown โดยไม่ตั้งใจ (ADR-26 หัวข้อ 4) — identifier ที่ไม่อยู่
+    //    ในตาราง mapping fail-safe เป็น .zone เสมอ (ADR-26 §7 ข้อสุดท้าย)
+    if (Self.regionRoles[event.regionIdentifier] ?? .zone) == .zone {
+      // **ห้ามแตะ proximityCooldownKey(for:)/longCooldownBlockedSinceMs/
+      // consumeProximityCooldown เลยในสาขานี้** (ADR-26 §3)
+      recordNotificationZoneSuppressed(event)
+      return
+    }
 
     // 3.5) คูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§4/§4.1/§4.3) — เช็ค**ก่อน**คูลดาวน์เดิม
     //    60 วินาทีเพราะนี่คือตัวที่ตอบปัญหาของ §12.6 จริง ๆ ใช้ [proximityCooldownKey]

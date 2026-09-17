@@ -36,6 +36,17 @@ const String _k9pDefaultUuid = '7777772E-6B6B-6D63-6E2E-636F6D000001';
 /// จากไฟล์นี้
 const String _bigcTestUuid = '89E2EDDA-D2C9-52F1-BC39-3489CC37E1EF';
 
+/// UUID ของ region `k9p-point` (ADR-26) — **alias ที่ชี้ไปค่าเดียวกับ
+/// [_bigcTestUuid] เป๊ะ โดยตั้งใจ** ไม่ใช่ค่าใหม่ที่บังเอิญตรงกัน
+///
+/// บีคอนทะเบียน #2 (`major: 9902`, `minor: 2`) จะแมตช์ **สอง region พร้อมกัน**:
+/// `bigc-test` (wildcard ทั้ง UUID นี้ บทบาท `zone`) และ `k9p-point` (UUID+major+
+/// minor เจาะจง บทบาท `point`) — เป็นความจงใจเพื่อพิสูจน์กติกา ADR-26 §3 ที่ว่า
+/// บีคอนซึ่งอยู่ในสอง region พร้อมกันจะได้โปรโมชันจาก region บทบาท `point`
+/// เท่านั้น ไม่ใช่ความผิดพลาดของการตั้งค่า ห้าม "แก้" ให้เป็นค่าอื่นหรือประกาศ
+/// ค่าคงที่ตัวที่สองที่มีสตริงเดียวกัน (ADR-26 §0)
+const String _k9pPointUuid = _bigcTestUuid;
+
 /// UUID ที่ scan ได้จากบีคอน Minew ตัวที่ได้รับจาก Tagarine — **ไม่ใช่ค่าโรงงาน
 /// ที่ยืนยันแล้วของ Minew** (ที่มาจริงต้องถามผู้ให้) บันทึกไว้ที่
 /// `docs/beacon-inventory.md` แถว #4 ใช้เป็น region ที่สามของ demo นี้เท่านั้น
@@ -116,6 +127,16 @@ class _ScanPageState extends State<ScanPage> {
           IBeaconRegionConfig(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
           IBeaconRegionConfig(identifier: 'bigc-test', uuid: _bigcTestUuid),
           IBeaconRegionConfig(identifier: 'minew-test', uuid: _minewTestUuid),
+          // ADR-26: บทบาท `point` — เจาะจง major/minor ของทะเบียน #2 ทับซ้อน
+          // กับ `bigc-test` (wildcard) โดยตั้งใจ เพื่อพิสูจน์ว่าบีคอนที่อยู่สอง
+          // region พร้อมกันได้โปรโมชันจาก point เท่านั้น (ดูคอมเมนต์ของ
+          // `_k9pPointUuid`)
+          IBeaconRegionConfig(
+            identifier: 'k9p-point',
+            uuid: _k9pPointUuid,
+            major: 9902,
+            minor: 2,
+          ),
         ],
       );
 
@@ -650,6 +671,17 @@ class _ScanPageState extends State<ScanPage> {
           AndroidBeaconRegion(identifier: 'k9p-default', uuid: _k9pDefaultUuid),
           AndroidBeaconRegion(identifier: 'bigc-test', uuid: _bigcTestUuid),
           AndroidBeaconRegion(identifier: 'minew-test', uuid: _minewTestUuid),
+          // ADR-26: บทบาท `point` — เจาะจง major/minor ของทะเบียน #2 ทับซ้อน
+          // กับ `bigc-test` (wildcard) โดยตั้งใจ เพื่อพิสูจน์ว่าบีคอนที่อยู่สอง
+          // region พร้อมกันได้โปรโมชันจาก point เท่านั้น (ดูคอมเมนต์ของ
+          // `_k9pPointUuid`) — assert ของ AndroidBeaconRegion ผ่านเพราะระบุ
+          // ทั้ง major/minor
+          AndroidBeaconRegion(
+            identifier: 'k9p-point',
+            uuid: _k9pPointUuid,
+            major: 9902,
+            minor: 2,
+          ),
         ],
         exitTimeoutSeconds: _androidExitTimeoutSeconds,
       );
