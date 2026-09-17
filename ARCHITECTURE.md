@@ -6347,10 +6347,16 @@ Dart ใด ๆ
 ### 8. คูลดาวน์เป็น "ค่าตั้ง" ของ watcher — แยก default ของสินค้า (24 ชม.) ออกจาก
 override ของ example (30 นาที) (เพิ่ม 17 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified — implement แล้วใน commit `8b20433` (โค้ด) ·
-> `6bb546b` (access) · `c7fd4e2` (เทส) ของ PR เดียวกับที่เขียนหัวข้อนี้** ดูสถานะ
-> ผลทดสอบที่ `docs/test-checklists/android_background_scanning.md` ข้อ 13 · 14 และ
-> `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 21.1 · 21.4 · 22.1
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> ข้อ 13 · 14** และ **`docs/test-checklists/ios_broadcast_scanning.md`
+> ข้อ 21.1 · 21.4 · 22.1** · โค้ด: commit `8b20433` · access: `6bb546b` · เทส: `c7fd4e2`
+> (PR เดียวกับที่เขียนหัวข้อนี้)
+>
+> ⚠️ **แก้ถ้อยคำแบนเนอร์ 17 ก.ย. 2026:** ฉบับก่อนหน้าขึ้นต้นว่า `สถานะ:
+> code-complete, unverified` ซึ่ง **ผิดกฎ CONTRIBUTING.md หัวข้อ 8** ที่ห้ามคำว่า
+> `unverified`/`observed`/`verified` อยู่ในแบนเนอร์เด็ดขาด (สถานะผลทดสอบต้องอยู่ใน
+> ไฟล์เช็คลิสต์ที่ชี้ไปเท่านั้น) — ผู้ตรวจรอบ PR ที่เขียนแบนเนอร์นั้นรัน grep ของกฎ
+> **ก่อน**ที่แบนเนอร์จะถูกเขียน จึงไม่เจอ และผู้เขียนไม่ได้รันซ้ำหลังแก้
 >
 > ⚠️ **ถอนแบนเนอร์เดิม (17 ก.ย. 2026, รอบตรวจ):** ฉบับแรกเขียนว่า *"accepted
 > (การออกแบบ) — โค้ดยังไม่ถูกแก้สักบรรทัดในรอบนี้ ... implement เป็นงานของ
@@ -6764,10 +6770,12 @@ wall clock (รอดข้าม reboot, เสี่ยงเรื่อง�
 ### 9. notification ชั้นที่ 1 (`enter`/`exit`) ปิดโดยค่าเริ่มต้นใน example — บรรทัด
 หลักฐานยังต้องเขียนเสมอ (เพิ่ม 17 ก.ย. 2026)
 
-> **สถานะ: code-complete, unverified — implement แล้วใน commit `8b20433` ของ PR
-> เดียวกับที่เขียนหัวข้อนี้** ดูสถานะผลทดสอบที่
-> `docs/test-checklists/android_background_scanning.md` ข้อ 14 และ
-> `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 22.1
+> **implemented — ดูสถานะผลทดสอบที่ `docs/test-checklists/android_background_scanning.md`
+> ข้อ 14** และ **`docs/test-checklists/ios_broadcast_scanning.md` ข้อ 22.1** ·
+> โค้ด: commit `8b20433` (PR เดียวกับที่เขียนหัวข้อนี้)
+>
+> ⚠️ **แก้ถ้อยคำแบนเนอร์ 17 ก.ย. 2026 ด้วยเหตุผลเดียวกับ §8** (คำว่า `unverified`
+> ห้ามอยู่ในแบนเนอร์ตาม CONTRIBUTING.md หัวข้อ 8)
 >
 > ⚠️ **ถอนข้อความ "ออกแบบเท่านั้น ยังไม่ implement" ของหัวเรื่องเดิม (17 ก.ย. 2026,
 > รอบตรวจ)** — เหตุผลเดียวกับ §8 ทุกประการ
@@ -7038,7 +7046,7 @@ ADR-20 หัวข้อ 3 (รูปร่าง key) · หัวข้อ 6 
 > ชม. ที่สอง) — ADR นี้เพิ่มเงื่อนไขใหม่ที่ตรวจ**ก่อน**คูลดาวน์เหล่านั้นเท่านั้น
 > ไม่ได้แก้ตัวคูลดาวน์เอง
 >
-> **implement แล้ว — `code-complete, unverified`** · โค้ด: commit `d91174d`
+> **implemented** · โค้ด: commit `d91174d`
 > (`main.dart` + `ExampleApplication.kt` + `ExampleProximityWatcher.kt` +
 > `AppDelegate.swift`) · เทส: `c7a9c14`
 >
@@ -7053,7 +7061,8 @@ ADR-20 หัวข้อ 3 (รูปร่าง key) · หัวข้อ 6 
 > ในรอบ implement เลยตามที่ CONTRIBUTING.md หัวข้อ 8 บังคับ** ไม่รอให้ผู้ตรวจจับ
 > (รอบ ADR-25 §8/§9 ปล่อยให้ผู้ตรวจจับ จึงกลายเป็น blocking ของ PR ก่อนหน้า)
 >
-> **ยังไม่ verified:** unit test คลุมได้แค่**ตาราง mapping** (`identifier → บทบาท`)
+> **สถานะผลทดสอบไม่อยู่ในแบนเนอร์นี้โดยตั้งใจ** (CONTRIBUTING.md หัวข้อ 8) — สรุป
+> สั้น ๆ เพื่อกันเข้าใจผิด: unit test คลุมได้แค่**ตาราง mapping** (`identifier → บทบาท`)
 > — พฤติกรรมจริง (zone ไม่โพสต์ · point โพสต์ · บีคอนสอง region ได้ใบเดียว ·
 > `registered=4`) **ยังไม่มีรอบเดินอุปกรณ์จริงเลยสักรอบ** ดูเกณฑ์รับงานในไฟล์
 > เช็คลิสต์ที่ชี้ไว้ข้างบน
