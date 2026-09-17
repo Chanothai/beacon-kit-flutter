@@ -39,14 +39,22 @@ object ExampleProximityWatcher {
     private const val COOLDOWN_PREFS = "example.proximity_notification_cooldown"
 
     /**
-     * คูลดาวน์ **ที่สอง** ต่อ key — 30 นาที ซ้อนอยู่**เหนือ** [NOTIFICATION_COOLDOWN_MILLIS]
+     * คูลดาวน์ **ที่สอง** ต่อ key ซ้อนอยู่**เหนือ** [NOTIFICATION_COOLDOWN_MILLIS]
      * เดิม (ไม่ได้แทนที่) เก็บลง store คนละไฟล์กับทุก store ที่เส้นทางล้าง state
      * (`ProximityGateStore`, `BackgroundRegionStore`) แก้ไขอยู่โดยตั้งใจ — ตอบปัญหา
      * ของ §12.6.1: state ที่ถูกล้างทำให้ transition แรกดูเหมือนเดินข้ามขอบใหม่
-     * (ADR-25 §2) **ค่า 30 นาที: เลือกจากการอ่าน §12.6 เท่านั้น ยังไม่ calibrate
-     * กับข้อมูลจริง** (ADR-25 §2)
+     * (ADR-25 §2)
+     *
+     * **ค่าเริ่มต้นของสินค้า (product default) — 24 ชั่วโมง** (ADR-25 §8.1, ยืนยันจาก
+     * เจ้าของสินค้า 17 ก.ย. 2026, §6 ข้อ 2) — ⚠️ ค่านี้เป็น **ค่าเริ่มต้นของพารามิเตอร์
+     * `install()` เท่านั้น** ไม่ใช่ SDK default เพราะ SDK (`packages/beacon_kit_android/`)
+     * ไม่มีแนวคิดคูลดาวน์นี้เลย — คูลดาวน์ยังเป็นนโยบายของ example/host app ล้วน ๆ
+     * ตาม ADR-20 หัวข้อ 6
      */
-    internal const val LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
+    internal const val DEFAULT_LONG_COOLDOWN_MILLIS = 24 * 60 * 60 * 1_000L // 86,400,000
+
+    /** ค่าที่ใช้งานจริง ณ runtime — ตั้งครั้งเดียวใน [install] ไม่มี setter อื่น (ADR-25 §8.3) */
+    private var longCooldownMillis: Long = DEFAULT_LONG_COOLDOWN_MILLIS
 
     /** ไฟล์ prefs ใหม่ แยกจากทุก store เดิม (ADR-25 §3) */
     private const val LONG_COOLDOWN_PREFS = "notification_cooldown_v1"
@@ -54,8 +62,16 @@ object ExampleProximityWatcher {
     /**
      * ตั้งผู้สังเกตการณ์ — ต้องเรียกจาก `Application.onCreate()` เท่านั้น (จุดเดียว
      * ที่ทำงานเสมอไม่ว่า process จะเกิดด้วยเหตุใด — ดู kdoc ของ `ExampleApplication`)
+     *
+     * @param longCooldownMillis ค่าคูลดาวน์ 30 นาทีที่สอง (ADR-25 §2/§3.1) — default
+     *   เป็นค่าสินค้า [DEFAULT_LONG_COOLDOWN_MILLIS] (24 ชม., ADR-25 §8.1) example app
+     *   override เป็นค่าทดสอบสั้นกว่าอย่างชัดเจนที่จุดเรียก (`ExampleApplication.kt`)
      */
-    fun install(context: Context) {
+    fun install(
+        context: Context,
+        longCooldownMillis: Long = DEFAULT_LONG_COOLDOWN_MILLIS,
+    ) {
+        this.longCooldownMillis = longCooldownMillis
         val appContext = context.applicationContext
         BackgroundProximityMonitor.setProximityObserver { event ->
             onProximityChanged(appContext, event)
@@ -369,15 +385,20 @@ object ExampleProximityWatcher {
      *   (ค่าเดียวกับ default ของ `SharedPreferences.getLong(key, 0L)` ตรง ๆ
      *   จึงไม่ต้องมี sentinel แยกต่างหาก)
      * @param nowElapsedMillis เวลาปัจจุบัน ([SystemClock.elapsedRealtime])
+     * @param cooldownMillis ความยาวหน้าต่างคูลดาวน์ — ⚠️ **ไม่มีค่า default โดยตั้งใจ**
+     *   (ADR-25 §8.4.1) เพื่อบังคับให้ทุกจุดเรียก (ทั้ง I/O wrapper และเทส) ระบุ
+     *   หน้าต่างที่ตั้งใจทดสอบอย่างชัดเจน ป้องกันเทสเขียวผิดหน้าต่างเงียบ ๆ ถ้ามี
+     *   ค่า default แอบเปลี่ยนความหมายในอนาคต
      */
     internal fun longCooldownSinceLastPostedMillisOrNull(
         lastPostedElapsedMillisOrZero: Long,
         nowElapsedMillis: Long,
+        cooldownMillis: Long,
     ): Long? {
         if (lastPostedElapsedMillisOrZero == 0L) return null // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
         if (lastPostedElapsedMillisOrZero > nowElapsedMillis) return null // reboot แล้ว (elapsedRealtime รีเซ็ต)
         val since = nowElapsedMillis - lastPostedElapsedMillisOrZero
-        return if (since < LONG_COOLDOWN_MILLIS) since else null
+        return if (since < cooldownMillis) since else null
     }
 
     /**
@@ -391,7 +412,11 @@ object ExampleProximityWatcher {
         nowElapsed: Long,
     ): Long? {
         val prefs = context.getSharedPreferences(LONG_COOLDOWN_PREFS, Context.MODE_PRIVATE)
-        return longCooldownSinceLastPostedMillisOrNull(prefs.getLong(key, 0L), nowElapsed)
+        return longCooldownSinceLastPostedMillisOrNull(
+            lastPostedElapsedMillisOrZero = prefs.getLong(key, 0L),
+            nowElapsedMillis = nowElapsed,
+            cooldownMillis = longCooldownMillis,
+        )
     }
 
     /**

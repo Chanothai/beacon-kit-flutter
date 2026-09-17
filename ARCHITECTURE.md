@@ -6488,7 +6488,14 @@ static let testingLongCooldownSeconds: TimeInterval = 30 * 60
 /// `hasEverBecomeActive` ที่มีอยู่แล้วในไฟล์นี้ ตั้ง default เป็นค่าสินค้าไว้ก่อน
 /// แล้ว override อย่างชัดเจนตอน launch (ดูโค้ดด้านล่าง) — สมมาตรกับ Android ที่
 /// override ค่าจริงที่จุดประกอบ (`ExampleProximityWatcher.install()`)
-private var longCooldownSeconds: TimeInterval = Self.productDefaultLongCooldownSeconds
+private var longCooldownSeconds: TimeInterval = AppDelegate.productDefaultLongCooldownSeconds
+// ⚠️ ใช้ชื่อ type ตรง ๆ ไม่ใช่ `Self.` — แก้ 17 ก.ย. 2026 ตอน implement: ฉบับแรกของ
+// หัวข้อนี้เขียน `Self.productDefaultLongCooldownSeconds` แล้ว **compile ไม่ผ่านจริง**
+// (`error: covariant 'Self' type cannot be referenced from a stored property
+// initializer`) เพราะ `AppDelegate` ไม่ใช่ `final class` (`AppDelegate.swift:16`:
+// `@objc class AppDelegate: FlutterAppDelegate, ...`) — Swift ห้าม `Self` ใน
+// initializer ของ stored property · ผลเหมือนกันทุกประการเพราะไม่มี subclass จริง
+// ส่วน `Self.` ที่ใช้ใน method body (เช่นบรรทัด override ด้านล่าง) ไม่มีข้อจำกัดนี้
 ```
 
 **จุดประกอบ — ใน `didFinishLaunchingWithOptions` (`AppDelegate.swift:51-53`, วางก่อน
