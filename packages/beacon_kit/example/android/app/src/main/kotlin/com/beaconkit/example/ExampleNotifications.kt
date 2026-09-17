@@ -100,7 +100,10 @@ object ExampleNotifications {
                 conclusion = ExampleApplication.processState.conclusion,
                 rawSignals = BackgroundEvidenceLog.rawSignals(
                     context = context, state = ExampleApplication.processState, receiverEntry = false,
-                ) + " beacon=$beacon mac=$mac layer=$layer posted=false reason=$reason $extra",
+                    // `trimEnd()` — ผู้เรียกที่ไม่มีอะไรต่อท้ายส่ง `extra = ""` ได้
+                    // (เช่นเส้นทาง `reason=disabled` ของ ADR-25 §9) โดยบรรทัดไม่ลงท้าย
+                    // ด้วยช่องว่างลอย ซึ่งจะทำให้ไฟล์หลักฐานมีสองรูปแบบปนกัน
+                ) + " beacon=$beacon mac=$mac layer=$layer posted=false reason=$reason $extra".trimEnd(),
             ),
         )
     }

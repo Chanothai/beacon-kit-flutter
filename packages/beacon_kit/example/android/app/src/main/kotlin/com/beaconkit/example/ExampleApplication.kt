@@ -34,6 +34,26 @@ class ExampleApplication : Application() {
      * `uptime` ใน log จะกลายเป็น 0 ตลอด ซึ่งกลบสิ่งที่มันควรวัดพอดี)
      */
     companion object {
+        /** เปิด/ปิด notification ชั้นที่ 1 (enter/exit) — ปิดโดย default (ADR-25 §9) —
+         *  บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร
+         *
+         *  **`internal` ไม่ใช่ `private`** (เปิดหลังรอบตรวจ QA ยืนยันจากคอมไพเลอร์จริง
+         *  ว่า `private const val` ในไฟล์นี้เข้าถึงไม่ได้จากเทส) — เปิด access ให้แคบ
+         *  ที่สุดเท่าที่ unit test ต้องใช้เพื่อตรวจว่าค่าเริ่มต้นคือปิดจริง ไม่ใช่เปิด
+         *  เป็น `public`/API สาธารณะของแอป — `internal` แปลว่ามองเห็นได้แค่ในโมดูล
+         *  `app` เท่านั้น (คนละความหมายกับ `public` ที่ข้ามโมดูลได้) — precedent
+         *  เดียวกับที่ commit `6e3470d` เคยเปิด `proximityCooldownKey(for:)` และ
+         *  `proximityLongNotificationCooldownSeconds` ฝั่ง iOS จาก `private` เป็น
+         *  `internal` ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
+         */
+        internal const val LAYER1_NOTIFICATIONS_ENABLED = false
+
+        // ⚠️ ค่าทดสอบ 30 นาที ไม่ใช่ค่าสินค้า (ค่าสินค้า = 24 ชั่วโมง,
+        // ExampleProximityWatcher.DEFAULT_LONG_COOLDOWN_MILLIS, ADR-25 §8.1) — override
+        // สั้นลงเพื่อให้เห็นใบที่สองระหว่างรอบทดสอบภาคสนามได้จริงโดยไม่ต้องรอทั้งวัน
+        // (เหตุผลเต็มว่าทำไมต้อง override ชัดเจนแบบนี้แทนการฝัง literal อยู่ที่ ADR-25 §8.1)
+        private const val TESTING_LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
+
         @Volatile
         lateinit var processState: ProcessState
             private set
@@ -78,22 +98,36 @@ class ExampleApplication : Application() {
             // enter/exit จริง ไม่งั้นผู้ใช้จะเห็นการแจ้งเตือนถี่ผิดปกติทุกครั้ง
             // ที่นาฬิกาปลุกดังแล้วยังไม่ครบเวลาจริง (เกิดซ้ำได้หลายรอบต่อคืน)
             if (event.state == "enter" || event.state == "exit") {
-                ExampleNotifications.post(
-                    context = this,
-                    title = "Region ${event.state}: ${event.regionIdentifier}",
-                    // ชั้นที่ 1 พูดถึง **ทั้ง region** ไม่ใช่บีคอนตัวใดตัวหนึ่ง —
-                    // `beacon` จึงเป็น `n/a` ตามจริง **ห้ามใส่บีคอนตัวแรกที่เจอ**
-                    regionIdentifier = event.regionIdentifier,
-                    beacon = ExampleNotifications.BEACON_NOT_APPLICABLE,
-                    mac = ExampleNotifications.BEACON_NOT_APPLICABLE,
-                    layer = ExampleNotifications.LAYER_REGION,
-                    // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ
-                    // [BackgroundEvidenceLog.processId] ไม่ใช่ pid ของ Linux
-                    // การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat` หาไม่เจอ
-                    // แล้วสรุปว่า process ไม่ตรงกัน
-                    body = "สถานะแอป: ${processState.conclusion} · " +
-                        "procUuid=${BackgroundEvidenceLog.processId}",
-                )
+                if (LAYER1_NOTIFICATIONS_ENABLED) {
+                    ExampleNotifications.post(
+                        context = this,
+                        title = "Region ${event.state}: ${event.regionIdentifier}",
+                        // ชั้นที่ 1 พูดถึง **ทั้ง region** ไม่ใช่บีคอนตัวใดตัวหนึ่ง —
+                        // `beacon` จึงเป็น `n/a` ตามจริง **ห้ามใส่บีคอนตัวแรกที่เจอ**
+                        regionIdentifier = event.regionIdentifier,
+                        beacon = ExampleNotifications.BEACON_NOT_APPLICABLE,
+                        mac = ExampleNotifications.BEACON_NOT_APPLICABLE,
+                        layer = ExampleNotifications.LAYER_REGION,
+                        // `procUuid=` ไม่ใช่ `pid=` — ค่านี้คือ
+                        // [BackgroundEvidenceLog.processId] ไม่ใช่ pid ของ Linux
+                        // การติดป้ายผิดทำให้คนที่เอาไปเทียบกับ `logcat` หาไม่เจอ
+                        // แล้วสรุปว่า process ไม่ตรงกัน
+                        body = "สถานะแอป: ${processState.conclusion} · " +
+                            "procUuid=${BackgroundEvidenceLog.processId}",
+                    )
+                } else {
+                    // ปิดโดย default (ADR-25 §9) — เขียนบรรทัดหลักฐานเสมอ ห้ามเงียบหาย
+                    // (ADR-20 §12.2/§12.5.3: "ไม่มีบรรทัด" ต้องไม่ถูกอ่านเป็นหลักฐานเชิงลบ)
+                    ExampleNotifications.recordSuppressed(
+                        context = this,
+                        regionIdentifier = event.regionIdentifier,
+                        beacon = ExampleNotifications.BEACON_NOT_APPLICABLE,
+                        mac = ExampleNotifications.BEACON_NOT_APPLICABLE,
+                        layer = ExampleNotifications.LAYER_REGION,
+                        reason = "disabled",
+                        extra = "",
+                    )
+                }
             }
         }
 
@@ -104,7 +138,7 @@ class ExampleApplication : Application() {
         //
         // ตั้งที่นี่ด้วยเหตุผลเดียวกับ observer เดิมเป๊ะ: `Application.onCreate()`
         // คือจุดเดียวที่ทำงานเสมอก่อน `onReceive()` ไม่ว่า process จะเกิดด้วยเหตุใด
-        ExampleProximityWatcher.install(this)
+        ExampleProximityWatcher.install(this, longCooldownMillis = TESTING_LONG_COOLDOWN_MILLIS)
 
         logLaunch()
     }

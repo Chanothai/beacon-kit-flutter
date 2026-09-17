@@ -48,6 +48,35 @@ import beacon_kit_ios
   /// idempotent จึงเรียกซ้ำหรือเรียกทั้งคู่ได้อย่างปลอดภัย
   private var hasEverBecomeActive = false
 
+  /// ค่าที่ใช้งานจริง ณ runtime — **instance property** (ไม่ใช่ `static let`) เพราะ
+  /// จุดประกอบจริงของไฟล์นี้คือ `didFinishLaunchingWithOptions` ซึ่งเป็น **instance
+  /// method** (`didFinishLaunchingWithOptions` ด้านล่าง) — แพทเทิร์นเดียวกับ
+  /// `launchedByLocationKey`/`hasEverBecomeActive` ที่มีอยู่แล้วในไฟล์นี้ ตั้ง default
+  /// เป็นค่าสินค้าไว้ก่อน แล้ว override อย่างชัดเจนตอน launch (ดูโค้ดใน
+  /// `didFinishLaunchingWithOptions`) — สมมาตรกับ Android ที่ override ค่าจริงที่จุด
+  /// ประกอบ (`ExampleProximityWatcher.install()`, ADR-25 §8.4)
+  ///
+  /// ⚠️ **ส่วนต่างจาก ADR-25 §8.4:** ตัวอย่างโค้ดของ ADR เขียน
+  /// `= Self.productDefaultLongCooldownSeconds` แต่ตรวจจริงแล้ว **compile ไม่ผ่าน**
+  /// (`error: covariant 'Self' type cannot be referenced from a stored property
+  /// initializer`) เพราะ `AppDelegate` ไม่ใช่ `final class` — Swift ห้ามใช้ `Self`
+  /// ใน initializer ของ stored property เพราะ subclass ที่ยังไม่มีตัวตน ณ จุดนั้น
+  /// อาจ override ค่า static นี้ได้ในทางทฤษฎี ใช้ชื่อ type ตรง ๆ (`AppDelegate.`)
+  /// แทน ซึ่งให้ผลเหมือนกันทุกประการเพราะไม่มี subclass จริงของ `AppDelegate`
+  ///
+  /// **`internal` ไม่ใช่ `private`** (เปิดหลังรอบตรวจ QA — พิสูจน์จากคอมไพเลอร์จริง
+  /// ว่า `private var` เข้าถึงไม่ได้แม้ผ่าน `@testable import`: `error:
+  /// 'longCooldownSeconds' is inaccessible due to 'private' protection level` —
+  /// `private` ของ Swift จำกัดแค่ไฟล์เดียวกันเท่านั้น `@testable import` ยกระดับ
+  /// แค่ `internal` เป็นสูงสุด ไม่ทะลุ `private`/`fileprivate`) — เปิด access ให้
+  /// แคบที่สุดเท่าที่ §8.8 ต้องใช้เพื่อตรวจว่า `AppDelegate()` ใหม่มีค่าเริ่มต้นเป็น
+  /// ค่าสินค้าจริง ไม่ใช่เปิดเป็น `public` (ยัง**ไม่มี** access modifier แปลว่า
+  /// `internal` ตาม default ของ Swift — มองเห็นได้แค่ในโมดูลนี้ ข้ามโมดูลไม่ได้)
+  /// — precedent เดียวกับที่ commit `6e3470d` เปิด `proximityCooldownKey(for:)`
+  /// กับ `proximityLongNotificationCooldownSeconds` จาก `private` เป็น `internal`
+  /// ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
+  var longCooldownSeconds: TimeInterval = AppDelegate.productDefaultLongCooldownSeconds
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -142,6 +171,13 @@ import beacon_kit_ios
     // เรียกตรงนี้เพื่อให้ manager + delegate มีตัวตนตั้งแต่รอบ launch เสมอ
     // ไม่ว่ารอบนั้นจะมี UI หรือไม่ และไม่ต้องรอ Dart เรียกเข้ามา
     //
+    // ⚠️ ค่าทดสอบ 30 นาที ไม่ใช่ค่าสินค้า (ค่าสินค้า = 24 ชั่วโมง,
+    // `productDefaultLongCooldownSeconds`, ADR-25 §8.1) — override สั้นลงเพื่อให้เห็น
+    // ใบที่สองระหว่างรอบทดสอบภาคสนามได้จริงโดยไม่ต้องรอทั้งวัน (เหตุผลเต็มที่ §8.1)
+    // ต้องตั้งค่านี้ **ก่อน** `startBackgroundRegionMonitoring` ด้านล่าง เพื่อให้ค่า
+    // พร้อมก่อนมี event ใดเข้ามาถึง `longCooldownBlockedSinceMs`
+    longCooldownSeconds = Self.testingLongCooldownSeconds
+
     // ⚠️ ห้ามใส่ `stopMonitoring` ใด ๆ ในเส้นทางนี้ (ดูคอมเมนต์ใน
     // `IBeaconRangingManager.init()`) — การเรียกเองจะล้าง region ที่เป็นเหตุผล
     // เดียวที่ทำให้ iOS ปลุกแอปขึ้นมา
@@ -272,9 +308,43 @@ import beacon_kit_ios
     // ยิง notification **หลัง**เขียน log เสมอ — log คือหลักฐานที่ต้องรอด ส่วน
     // notification เป็นแค่สัญญาณให้คนเห็น ถ้าเวลาที่ระบบให้หมดก่อน อย่างน้อย
     // หลักฐานต้องลงดิสก์แล้ว
-    postNotification(
-      title: "Region \(event.state): \(event.regionIdentifier)",
-      body: "สถานะแอป: \(currentRunContext())"
+    if Self.layer1NotificationsEnabled {
+      postNotification(  // เนื้อหาเดิมทุกบรรทัด ไม่แก้
+        title: "Region \(event.state): \(event.regionIdentifier)",
+        body: "สถานะแอป: \(currentRunContext())"
+      )
+    } else {
+      recordRegionNotificationDisabled(event)
+    }
+  }
+
+  /// เปิด/ปิด notification ชั้นที่ 1 (enter/exit) — ปิดโดย default (ADR-25 §9) —
+  /// บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร
+  ///
+  /// **`internal` ไม่ใช่ `private`** (เปิดหลังรอบตรวจ QA ยืนยันจากคอมไพเลอร์จริงว่า
+  /// `private static let` เข้าถึงไม่ได้แม้ผ่าน `@testable import` — `private`
+  /// จำกัดแค่ไฟล์เดียวกัน ส่วน `@testable import` ยกระดับได้สูงสุดแค่ `internal`)
+  /// เปิด access ให้แคบที่สุดเท่าที่ §9.7 ต้องใช้เพื่อตรวจว่าค่าเริ่มต้นคือปิดจริง
+  /// ไม่ใช่เปิดเป็น `public`/API สาธารณะของแอป — ไม่ระบุ access modifier แปลว่า
+  /// `internal` ตาม default ของ Swift (มองเห็นได้แค่ในโมดูลนี้ ข้ามโมดูลไม่ได้) —
+  /// precedent เดียวกับที่ commit `6e3470d` เปิด `proximityCooldownKey(for:)` กับ
+  /// `proximityLongNotificationCooldownSeconds` จาก `private` เป็น `internal`
+  /// ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
+  static let layer1NotificationsEnabled: Bool = false
+
+  /// เขียนบรรทัดหลักฐานตอน notification ชั้นที่ 1 ถูกปิดไว้ (ADR-25 §9) — **ต้องเขียน
+  /// เสมอ ห้ามเงียบหาย** (ADR-20 §12.2/§12.5.3) ใช้ `event.regionIdentifier` จริง
+  /// ไม่ใช่ `"-"` แบบที่ [postNotification] เขียนตอนล้มเหลว เพราะที่นี่รู้ region แน่นอน
+  private func recordRegionNotificationDisabled(_ event: BeaconKitRegionStateEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "notification",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + " posted=false reason=disabled"
+      )
     )
   }
 
@@ -292,18 +362,29 @@ import beacon_kit_ios
   /// suite แยกของ cooldown — **ต้องรอดข้าม process** (ดู [consumeProximityCooldown])
   private static let proximityCooldownSuiteName = "beacon_kit_example.proximity_cooldown"
 
-  /// คูลดาวน์ **ที่สอง** ต่อ key — 30 นาที ซ้อนอยู่**เหนือ**
-  /// [proximityNotificationCooldownMillis] เดิม (ไม่ได้แทนที่) เก็บลง suite
-  /// คนละไฟล์โดยตั้งใจ — ตอบปัญหาของ §12.6.1 (ADR-25 §2): state ที่ถูกล้างทำให้
-  /// transition แรกดูเหมือนเดินข้ามขอบใหม่ **ค่า 30 นาที: เลือกจากการอ่าน §12.6
-  /// เท่านั้น ยังไม่ calibrate กับข้อมูลจริง** (ADR-25 §2)
+  /// คูลดาวน์ **ที่สอง** ต่อ key ซ้อนอยู่**เหนือ** [proximityNotificationCooldownMillis]
+  /// เดิม (ไม่ได้แทนที่) เก็บลง suite คนละไฟล์โดยตั้งใจ — ตอบปัญหาของ §12.6.1
+  /// (ADR-25 §2): state ที่ถูกล้างทำให้ transition แรกดูเหมือนเดินข้ามขอบใหม่
+  ///
+  /// ค่าเริ่มต้นของสินค้า (product default) — 24 ชั่วโมง (ADR-25 §8.1) — ค่านี้ไม่ใช่
+  /// SDK default เช่นเดียวกับฝั่ง Android เพราะ `beacon_kit_ios` ไม่มีแนวคิดคูลดาวน์นี้
+  /// เลย — **แหล่งความจริงเดียวของค่าสินค้า** (`static let` เพราะเป็นค่าคงที่ระดับ
+  /// สินค้า ไม่ใช่ค่าที่ override ได้ต่อ instance)
+  static let productDefaultLongCooldownSeconds: TimeInterval = 24 * 60 * 60  // 86,400
+
+  /// ค่า literal ที่ตั้งใจ override ค่าเริ่มต้นของสินค้าเพื่อการทดสอบเท่านั้น (ADR-25
+  /// §8.1) — คงเป็น `static let` (ไม่ใช่ instance) เพราะเป็นแค่**ค่าคงที่ที่ทั้งจุด
+  /// ประกอบและไฟล์เทสต้องอ้างอิงถึงได้โดยไม่ต้องมี `AppDelegate` instance** — เทียบเท่า
+  /// `TESTING_LONG_COOLDOWN_MILLIS` ที่ฝั่ง Android เก็บไว้ใน `ExampleApplication.kt`
+  /// ตัวมันเองไม่ใช่ค่าที่ใช้งานจริง — ต้อง override เข้า [longCooldownSeconds]
+  /// ที่จุดประกอบก่อนถึงจะมีผล (ดู `didFinishLaunchingWithOptions`)
   ///
   /// **`internal` ไม่ใช่ `private`** (แก้ตามรอบรีวิว QA) — เพื่อให้ `RunnerTests`
   /// อ้างอิงค่าจริงนี้ตรง ๆ ผ่าน `@testable import Runner` ได้ ไม่ต้อง hardcode
   /// `30 * 60` ซ้ำในไฟล์เทส (ถ้าวันหนึ่งมีคนแก้ค่านี้ เทสที่ hardcode ไว้จะยังเขียว
-  /// ทั้งที่ทดสอบคนละค่า) — เท่ากับที่ฝั่ง Android เปิด `LONG_COOLDOWN_MILLIS` เป็น
-  /// `internal const val` ไว้แล้ว
-  static let proximityLongNotificationCooldownSeconds: TimeInterval = 30 * 60
+  /// ทั้งที่ทดสอบคนละค่า) — เท่ากับที่ฝั่ง Android เปิด `TESTING_LONG_COOLDOWN_MILLIS`
+  /// ไว้แล้ว
+  static let testingLongCooldownSeconds: TimeInterval = 30 * 60
 
   /// suite ใหม่ของคูลดาวน์ 30 นาที — ชื่อนี้เลือกให้สมมาตรกับชื่อไฟล์ Android
   /// (`notification_cooldown_v1`) ไม่ใช่ข้อบังคับจากที่ไหน (ADR-25 §4 — เดิมชื่อ
@@ -743,14 +824,19 @@ import beacon_kit_ios
   ///     default ของ `UserDefaults.double(forKey:)` ตรง ๆ จึงไม่ต้องมี sentinel
   ///     แยกต่างหาก)
   ///   - nowEpochSeconds: `Date().timeIntervalSince1970` ปัจจุบัน
+  ///   - cooldownSeconds: ความยาวหน้าต่างคูลดาวน์ — ⚠️ **ไม่มีค่า default โดยตั้งใจ**
+  ///     (ADR-25 §8.4.1) เพื่อบังคับให้ทุกจุดเรียก (ทั้ง I/O wrapper และเทส) ระบุ
+  ///     หน้าต่างที่ตั้งใจทดสอบอย่างชัดเจน ป้องกันเทสเขียวผิดหน้าต่างเงียบ ๆ ถ้ามี
+  ///     ค่า default แอบเปลี่ยนความหมายในอนาคต
   static func longCooldownSinceLastPostedMillisOrNull(
     lastPostedEpochSecondsOrZero: TimeInterval,
-    nowEpochSeconds: TimeInterval
+    nowEpochSeconds: TimeInterval,
+    cooldownSeconds: TimeInterval
   ) -> Int64? {
     if lastPostedEpochSecondsOrZero == 0 { return nil }  // ไม่เคยโพสต์คีย์นี้สำเร็จมาก่อน
     if lastPostedEpochSecondsOrZero > nowEpochSeconds { return nil }  // นาฬิกาถูกปรับย้อนหลัง
     let sinceSeconds = nowEpochSeconds - lastPostedEpochSecondsOrZero
-    return sinceSeconds < Self.proximityLongNotificationCooldownSeconds
+    return sinceSeconds < cooldownSeconds
       ? Int64(sinceSeconds * 1000) : nil
   }
 
@@ -759,12 +845,15 @@ import beacon_kit_ios
   /// §4.1) ไม่มีตรรกะเทียบเวลาอยู่ในฟังก์ชันนี้เลยแม้แต่บรรทัดเดียว — **อ่านอย่างเดียว
   /// ไม่จด** แยกจาก [recordLongCooldownPosted] · พารามิเตอร์เป็น
   /// `Date().timeIntervalSince1970` (wall clock) ตั้งแต่ ADR-25 §4.3 — เดิมเคยเป็น
-  /// `nowUptime: TimeInterval` (`ProcessInfo.processInfo.systemUptime`) ถอนแล้ว
+  /// `nowUptime: TimeInterval` (`ProcessInfo.processInfo.systemUptime`) ถอนแล้ว ·
+  /// ส่ง [longCooldownSeconds] (instance property ที่ตั้งไว้ตอน launch, ADR-25 §8.4)
+  /// เป็นอาร์กิวเมนต์ที่สามแทนการพึ่ง default
   private func longCooldownBlockedSinceMs(key: String, nowEpochSeconds: TimeInterval) -> Int64? {
     guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
     return Self.longCooldownSinceLastPostedMillisOrNull(
       lastPostedEpochSecondsOrZero: defaults.double(forKey: key),
-      nowEpochSeconds: nowEpochSeconds
+      nowEpochSeconds: nowEpochSeconds,
+      cooldownSeconds: longCooldownSeconds
     )
   }
 

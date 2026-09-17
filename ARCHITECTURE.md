@@ -4131,10 +4131,19 @@ tail ของข้อมูลชุดเดียว (2 วัน, เคร
 > `docs/test-checklists/android_background_scanning.md` หัวข้อ "PR A — exit-clear
 > proximity ตอน region exit (code-complete, unverified — รอรอบเดินจริง)"**
 
-> **PR B — ยังระงับต่อ (ไม่ใช่ปิดถาวร)** — รอบทดลอง SLOT1 รอบที่ 1 (14-15 ก.ย. 2026) **inconclusive**
-> ตามเกณฑ์ที่ล็อกไว้ล่วงหน้า (กลุ่มควบคุมขยับ 0→1 ในหน้าต่างตัดสิน) ค่า `staleAfterMillis` ยังคง
-> `60_000L` ไม่เปลี่ยน — **ปิดถาวรเมื่อรอบที่ 2 (คืน 15-16 ก.ย.) ผ่านเกณฑ์เท่านั้น** ดูรายละเอียดเต็ม
-> ที่หัวข้อ 12.5.1/12.5.2
+> **PR B — ⛔ ปิดถาวร (17 ก.ย. 2026) — ค่า `staleAfterMillis` คงเป็น `60_000L` ตลอดไป
+> เว้นแต่จะมี ADR ใหม่มาเปิดเรื่องนี้อีกครั้ง** · เหตุผลเต็มที่ **§12.6.2**: หลักฐานรอบ 17 ก.ย.
+> (`docs/test-data/2026-09-17_android_cooldown_desk_redmi.log`) เป็นไฟล์แรกที่มี `sinceLastSeenMs`
+> ครบทุกบรรทัด `reason=stale` (59/59) และแสดงว่าช่วงเงียบยาวสุดคือ **94.0 วินาที** — PR B **"จะได้ผล"
+> จริง (เพดานใหม่ 300 วิ จะลบบรรทัด `stale` ทั้ง 59 ทิ้ง) **แต่ไม่จำเป็นแล้ว** เพราะคูลดาวน์ชั้น 2
+> ของ ADR-25 แก้อาการที่ผู้ใช้เห็นไปแล้วที่ชั้นนโยบายของแอป (18 ใบยิงจริง / 50 ใบถูกกัน · ทุกคู่ของ
+> key เดียวกันห่าง ≥ 30 นาที) โดย**ไม่ต้องจ่ายราคาของ PR B** คือ "เดินออกแล้วกลับเข้ามาภายใน 5 นาที
+> จะไม่ได้ notification รอบสอง" (ข้อเสียในหัวข้อนี้ยังจริงทุกข้อ ฝั่ง Android ยังไม่มี exit-clear)
+>
+> ⚠️ **ข้อความเดิมของแบนเนอร์นี้ (ถอนแล้ว):** "ยังระงับต่อ (ไม่ใช่ปิดถาวร) ... **ปิดถาวรเมื่อรอบที่ 2
+> (คืน 15-16 ก.ย.) ผ่านเกณฑ์เท่านั้น**" — รอบที่ 2 ออกมา `inconclusive` ด้วยเหตุผลใหม่ (§12.5.2:
+> เครื่องถูกนำกลับบ้าน หน้าต่างตัดสินมี 0 บรรทัด) เงื่อนไขเดิมจึงไม่เคยถูกทำให้เป็นจริง — **การปิด
+> ถาวรรอบนี้มาจากเหตุผลคนละทางกับที่แบนเนอร์เดิมวางไว้** ไม่ใช่การประกาศว่ารอบที่ 2 ผ่าน
 
 **ค่าใหม่นี้ถูกระงับไว้ก่อน** จนกว่าจะปิดช่องว่าง parity ข้างล่างเสร็จ **หรือ** แก้ไปพร้อมกันใน PR ที่
 เรียงลำดับตามนี้ — เหตุผลไม่ใช่เรื่องตัวเลข แต่เป็นเพราะ **ฝั่ง Android ไม่มีอะไรล้างสถานะ proximity
@@ -4682,6 +4691,10 @@ grep "reason=stale" docs/test-data/2026-09-16_android_overnight_slot1_round2_red
 `sinceLastSeenMs` ลงบรรทัด `reason=stale` แล้วเก็บ log อีกรอบ** — เป็นการแก้ฝั่ง log ไม่ใช่ฝั่ง
 ตรรกะ SDK และไม่ขัดกับลำดับ PR A → PR B ที่ §7.1 บังคับไว้
 
+> ✅ **ข้อนี้ถูกปิดแล้ว 17 ก.ย. 2026** — `sinceLastSeenMs` ถูกเติมลงบรรทัด `reason=stale` ใน PR#42
+> และเก็บ log รอบใหม่แล้วตามที่ย่อหน้านี้สั่ง · การกระจายที่ได้อยู่ที่ **§12.6.2** ด้านล่าง
+> และคำตอบคือ **PR B ถูกปิดถาวร** (ไม่ใช่ปลดล็อก) ด้วยเหตุผลที่ §12.6.2 อธิบาย
+
 **เวลาที่ผู้ทดสอบแตะเครื่อง (บันทึกตามที่ §12.5.2 บังคับ):** เสียบ adb ~10:06 น. 16 ก.ย. —
 เห็นในไฟล์เป็น `launch` 4 ครั้งใน 10:06:03-10:06:21 (บรรทัด 472/474/478/479) และ `doze` กลับเป็น
 `false` ที่ 10:06:55.911 (บรรทัด 480) หลังเป็น `true` มาตั้งแต่ 09:38:50.160 · **บรรทัดหลัง 10:06
@@ -4777,6 +4790,56 @@ grep "reason=stale" docs/test-data/2026-09-16_android_overnight_slot1_round2_red
   หัวข้อ `ProximityKeyCodec` (รูปแบบ key ที่ Android กลับมาตรงกัน), `docs/beacon-inventory.md`,
   `docs/test-data/2026-09-14_android_overnight_proximity_redmi.log` (หัวข้อ 7/10/11 — รอบเดินจริง 2 วัน
   ที่ยืนยัน identity-from-frame และเปิดพบ Problem 1-3 ของรอบแก้ 14 ก.ย. 2026)
+
+##### 12.6.2 การกระจายของ `sinceLastSeenMs` — PR B "จะได้ผล แต่ไม่จำเป็นแล้ว" (เพิ่ม 17 ก.ย. 2026)
+
+หลักฐาน: [`docs/test-data/2026-09-17_android_cooldown_desk_redmi.log`](docs/test-data/2026-09-17_android_cooldown_desk_redmi.log)
+(476 บรรทัด · md5 `146502e00dfe09afb8213cb34fbe21d9` · `build=49810c2` · Redmi Note 9 วางนิ่งบนโต๊ะ
+09:05:05-13:41:50 = 4 ชม. 36 นาที) — **เป็นไฟล์แรกที่ตอบคำถามของ §12.5 ได้** เพราะ `reason=stale`
+**59 บรรทัด มี `sinceLastSeenMs` ครบทั้ง 59** (ไฟล์ก่อนหน้ามี 0)
+
+| สถิติของ `sinceLastSeenMs` บนบรรทัด `reason=stale` (n=59) | ค่า |
+|---|---|
+| ต่ำสุด | **60,083 ms** (60.1 วินาที) |
+| มัธยฐาน | **64,209 ms** (64.2 วินาที) |
+| p90 | 82,961 ms (83.0 วินาที) |
+| สูงสุด | **94,030 ms** (94.0 วินาที) |
+
+การกระจายเป็นช่วงละ 10 วินาที: **60-70 วิ = 42 · 70-80 วิ = 10 · 80-90 วิ = 6 · 90-100 วิ = 1**
+— **ไม่มีสักบรรทัดเดียวที่เกิน 94.0 วินาที**
+
+```bash
+grep "reason=stale" docs/test-data/2026-09-17_android_cooldown_desk_redmi.log | wc -l          # 59
+grep "reason=stale" docs/test-data/2026-09-17_android_cooldown_desk_redmi.log \
+  | grep -c "sinceLastSeenMs="                                                                  # 59
+```
+
+**อ่านตัวเลขนี้ให้ตรง — มันตอบสองคำถามคนละคำถาม:**
+
+1. **PR B (`staleAfterMillis` 60 วิ → 300 วิ) "จะได้ผล" จริง** — ช่วงเงียบที่ยาวที่สุดทั้งรอบคือ
+   94.0 วินาที ซึ่ง**ต่ำกว่าเพดานใหม่ 300 วินาทีอยู่ 3.2 เท่า** แปลว่าถ้าขยับค่าจริง บรรทัด
+   `reason=stale` ทั้ง **59 บรรทัดจะหายไปทั้งหมด** (ไม่ใช่ลดลง — หายหมด) และ transition
+   `near from=none` ที่เกิดตามหลังการล้าง state ก็จะหายตามไปด้วย · **นี่คือครั้งแรกที่ข้ออ้างนี้มี
+   ข้อมูลรองรับ** ก่อนหน้านี้เป็นการเดาล้วนเพราะไม่มี `sinceLastSeenMs`
+2. **แต่ "ไม่จำเป็นแล้ว"** — คูลดาวน์ชั้น 2 ของ ADR-25 แก้**อาการที่ผู้ใช้เห็น**ไปแล้วในรอบเดียวกันนี้:
+   จาก `layer=2` 68 บรรทัด มีแค่ **18 ใบที่ยิงจริง** ส่วน **50 ใบถูกกัน** และช่วงห่างระหว่างใบที่ยิงจริง
+   ของ key เดียวกัน **ทั้ง 15 คู่ ≥ 30 นาทีครบทุกคู่** (ต่ำสุด 1,834,278 ms) — เทียบกับ baseline
+   **26 ใบใน 64.9 นาที** ของ §12.6 หัวข้อ 1 · คูลดาวน์ทำงานที่**ชั้นนโยบายของแอป** ซึ่งไม่ต้องแตะ
+   ค่าใน SDK เลยสักค่า
+
+**ทำไมถึงเลือก "ปิดถาวร" แทน "ปลดล็อกแล้วทำ":** PR B ยังมีข้อเสียเดิมของ §7.1 ครบทุกข้อ —
+ลูกค้าที่เดินออกแล้วกลับเข้ามา**ภายใน 5 นาที** จะไม่ได้ notification รอบสองเลย เพราะสถานะค้างเป็น
+`near` และยังไม่ถึง `staleAfter` ที่ยาวขึ้น (ฝั่ง Android ยังไม่มี exit-clear) — **แลกปัญหา
+"เด้งถี่เกิน" ไปเป็น "ไม่เด้งเลยตอนกลับเข้ามา" ซึ่งแย่กว่า** ตอนนี้อาการเด้งถี่ถูกแก้ที่ชั้นแอป
+ไปแล้วโดยไม่ต้องจ่ายราคานั้น · การขยับ `staleAfterMillis` จึงไม่เหลือเหตุผลที่จะทำ — **ปิดถาวร
+ดู §7.1**
+
+⚠️ **ขอบเขตของข้อสรุปนี้ — รอบเดียว เครื่องเดียว วางนิ่ง:** ตัวเลข 60-94 วินาทีเป็นของ **Redmi
+Note 9 (API 31) `battOpt=optimized`** ในสภาพวางนิ่งบนโต๊ะ 4.6 ชั่วโมงเท่านั้น (`standbyBucket`:
+`active` 256 · `working` 217 · `rare` 3) — **ไม่ใช่ค่าที่พิสูจน์แล้วว่าใช้ได้กับเครื่องอื่น รุ่น
+Android อื่น หรือสภาพเดินจริง** ถ้าวันหนึ่งพบเครื่องที่ช่วงเงียบยาวเกิน 300 วินาทีเป็นปกติ ข้อสรุป
+ข้อ 1 ข้างบนจะใช้ไม่ได้กับเครื่องนั้น — **แต่ข้อสรุป "ไม่จำเป็นแล้ว" ยังใช้ได้อยู่** เพราะคูลดาวน์
+ชั้น 2 ไม่ได้ขึ้นกับช่วงเงียบเลย
 
 ## ADR-21: ProximityGate ฝั่ง iOS — port เป็น Swift ใน `IBeaconRangingManager` (เพิ่ม 10 ก.ย. 2026)
 
@@ -5409,6 +5472,14 @@ store ที่เส้นทางล้าง state (`ProximityGateStore`, `B
 
 ### 3. ออกแบบฝั่ง Android — `ExampleProximityWatcher.kt`
 
+> ⚠️ **สนิปเพ็ตโค้ดในหัวข้อนี้เป็นฉบับก่อน §8 (17 ก.ย. 2026) — อย่าคัดไปใช้ตรง ๆ:**
+> `LONG_COOLDOWN_MILLIS` ถูกเปลี่ยนเป็น `DEFAULT_LONG_COOLDOWN_MILLIS` (ค่าสินค้า
+> 24 ชั่วโมง ไม่ใช่ 30 นาที) และ `proximityLongNotificationCooldownSeconds` ถูก**ลบ**
+> แทนด้วย `productDefaultLongCooldownSeconds`/`testingLongCooldownSeconds`/instance
+> `longCooldownSeconds` · pure function ทั้งสองฝั่งรับค่าคูลดาวน์เป็นพารามิเตอร์ที่สาม
+> **โดยไม่มีค่า default** (§8.4.1) — **ฉบับที่ตรงกับโค้ดจริงอยู่ที่ §8.3/§8.4**
+> หัวข้อนี้เก็บไว้เป็นบันทึกว่าการออกแบบรอบแรกหน้าตาอย่างไรเท่านั้น
+
 ไฟล์จริง: `packages/beacon_kit/example/android/app/src/main/kotlin/com/beaconkit/example/ExampleProximityWatcher.kt`
 (จุดโพสต์ชั้นที่ 2 เดี่ยวจุดเดียว — `onProximityChanged()` บรรทัด 51-128)
 
@@ -5593,6 +5664,14 @@ ADR นี้ก่อน
 
 ### 4. ⚠️ คำตอบข้อบังคับ: จุดโพสต์ notification ชั้นที่ 2 ฝั่ง iOS อยู่ใน **example app**
 ไม่ใช่ SDK — ออกแบบคู่ขนาน ไม่ใช่หนี้ parity
+
+> ⚠️ **สนิปเพ็ตโค้ดในหัวข้อนี้เป็นฉบับก่อน §8 (17 ก.ย. 2026) — อย่าคัดไปใช้ตรง ๆ:**
+> `LONG_COOLDOWN_MILLIS` ถูกเปลี่ยนเป็น `DEFAULT_LONG_COOLDOWN_MILLIS` (ค่าสินค้า
+> 24 ชั่วโมง ไม่ใช่ 30 นาที) และ `proximityLongNotificationCooldownSeconds` ถูก**ลบ**
+> แทนด้วย `productDefaultLongCooldownSeconds`/`testingLongCooldownSeconds`/instance
+> `longCooldownSeconds` · pure function ทั้งสองฝั่งรับค่าคูลดาวน์เป็นพารามิเตอร์ที่สาม
+> **โดยไม่มีค่า default** (§8.4.1) — **ฉบับที่ตรงกับโค้ดจริงอยู่ที่ §8.3/§8.4**
+> หัวข้อนี้เก็บไว้เป็นบันทึกว่าการออกแบบรอบแรกหน้าตาอย่างไรเท่านั้น
 
 ยืนยันจากโค้ดจริง: `posted=requested` (สตริงตัวชี้ว่านี่คือจุดโพสต์) อยู่ใน
 `packages/beacon_kit/example/ios/Runner/AppDelegate.swift:418` เพียงจุดเดียว ภายใน
@@ -6001,6 +6080,12 @@ returned value is identical to the result of `mach_absolute_time()`" — ตร�
 ### 4.3.2 สัญญาของ pure function ใหม่ — สำหรับ `flutter-dev` implement และ
 `beacon-qa` เทส
 
+> ⚠️ **สนิปเพ็ตในหัวข้อนี้เป็นฉบับก่อน §8 (17 ก.ย. 2026):** ลายเซ็นจริงตอนนี้มี
+> **พารามิเตอร์ที่สาม `cooldownSeconds: TimeInterval` (ไม่มีค่า default ตาม §8.4.1)**
+> และ `proximityLongNotificationCooldownSeconds` ถูกลบไปแล้ว — **ฉบับที่ตรงกับโค้ดจริง
+> อยู่ที่ §8.4** · เนื้อหาเรื่อง**ฐานเวลา** (wall clock) ของหัวข้อนี้ยังจริงทุกประการ
+> ส่วนที่ล้าสมัยคือ**ลายเซ็น**เท่านั้น
+
 **ชื่อฟังก์ชันไม่เปลี่ยน** (`longCooldownSinceLastPostedMillisOrNull`) — เปลี่ยนแค่
 **ความหมายและชื่อพารามิเตอร์เวลา** จาก "systemUptime" เป็น "epoch seconds" (wall
 clock) ตรรกะภายในฟังก์ชัน**ไม่เปลี่ยนแม้แต่บรรทัดเดียว** (เหตุผล: ฟังก์ชันนี้เป็น
@@ -6228,6 +6313,20 @@ calibrate ค่าคูลดาวน์ 30 นาที **ขอบเขต
    จริงบน iPhone ที่ใช้ทดสอบ · `UserDefaults` ข้ามโปรเซสที่ถูกระบบฆ่า · การปรับ
    นาฬิกาเครื่องจริง (รวมเคส "คูลดาวน์ที่หมดอายุแล้วกลับมาติดใหม่" ของ §4.3.1) ·
    ผลของการขยับ suite `_v1`→`_v2` ตอนอัปเกรดบนเครื่องที่เคยติดตั้งเวอร์ชันเก่า
+8. **หน้าต่าง 24 ชั่วโมง (§8) ทำให้ความเสี่ยง "Android reboot รีเซ็ต `elapsedRealtime`"
+   ของ §3/§4.3.4 มีโอกาสเกิดสูงขึ้นจริง แต่ยังไม่แก้ในรอบนี้ — หนี้ที่ตั้งใจปล่อยไว้**
+   (เพิ่ม 17 ก.ย. 2026, วิเคราะห์เต็มที่ §8.6): หน้าต่าง 30 นาทีมีโอกาสคาบเกี่ยวกับ
+   การ reboot ของเครื่องทดสอบต่ำมาก แต่หน้าต่าง 24 ชั่วโมงคาบเกี่ยวได้ง่ายกว่ามาก
+   (เครื่องทดสอบหลายเครื่องรีสตาร์ทอย่างน้อยวันละครั้งจากการอัปเดต/เสียบชาร์จ) ผลคือ
+   `longCooldownSinceLastPostedMillisOrNull` ฝั่ง Android (§8.3) จะตัดสินว่า "ไม่ติด
+   คูลดาวน์" เร็วกว่าที่ตั้งใจ (`lastPostedElapsedMillisOrZero > nowElapsedMillis`
+   ติดหลัง reboot ทุกครั้ง) **ทิศทางเดียวกับความเสี่ยงที่ §3/§4.3.4 ยอมรับไว้แล้วสำหรับ
+   หน้าต่าง 30 นาที** เพียงแค่ความน่าจะเป็นสูงขึ้น ไม่ใช่กลไกใหม่ ⚠️ **ยังไม่แก้เพราะ
+   สโคปของรอบนี้คือ ARCHITECTURE.md เท่านั้น (ห้ามแตะโค้ด) และเพราะแก้ที่ถูกต้อง
+   (เช่น เก็บ wall-clock anchor คู่กับ `elapsedRealtime` เพื่อตรวจจับ reboot แล้ว
+   fail-closed แทน fail-open) เป็นการเปลี่ยนตรรกะ SDK/example ระดับเดียวกับ §4.3
+   ที่ต้องผ่านรอบทดสอบอุปกรณ์จริงของตัวเอง ไม่ควรพ่วงมากับ PR ที่แค่เปลี่ยนค่าคูลดาวน์**
+   — ถ้าจะแก้ต้องเป็น ADR ใหม่ที่วัดความถี่ reboot จริงของเครื่องทดสอบก่อน (ไม่ใช่เดา)
 
 ### 7. ไฟล์ที่ต้องแก้ — สรุปตามแพลตฟอร์ม (สำหรับส่งต่อ `flutter-dev` **หลังตัดสินใจ
 เสร็จ** เท่านั้น)
@@ -6245,6 +6344,672 @@ calibrate ค่าคูลดาวน์ 30 นาที **ขอบเขต
 `ProximityGate.swift`, `ProximityGateStore.swift`, ไฟล์ build ใด ๆ, platform channel/
 Dart ใด ๆ
 
+### 8. คูลดาวน์เป็น "ค่าตั้ง" ของ watcher — แยก default ของสินค้า (24 ชม.) ออกจาก
+override ของ example (30 นาที) (เพิ่ม 17 ก.ย. 2026)
+
+> **สถานะ: code-complete, unverified — implement แล้วใน commit `8b20433` (โค้ด) ·
+> `6bb546b` (access) · `c7fd4e2` (เทส) ของ PR เดียวกับที่เขียนหัวข้อนี้** ดูสถานะ
+> ผลทดสอบที่ `docs/test-checklists/android_background_scanning.md` ข้อ 13 · 14 และ
+> `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 21.1 · 21.4 · 22.1
+>
+> ⚠️ **ถอนแบนเนอร์เดิม (17 ก.ย. 2026, รอบตรวจ):** ฉบับแรกเขียนว่า *"accepted
+> (การออกแบบ) — โค้ดยังไม่ถูกแก้สักบรรทัดในรอบนี้ ... implement เป็นงานของ
+> `flutter-dev` รอบถัดไป"* ซึ่งจริง ณ ตอนเขียน (commit `b1ba6c4`) แต่**เป็นเท็จ
+> ภายใน 11 นาทีถัดมา** เมื่อ `8b20433` implement จริงในสาขาเดียวกัน — เป็นบั๊ก
+> คลาสเดียวกับที่ CONTRIBUTING.md หัวข้อ 8 บันทึกว่าเคยเกิดกับ ADR-16/ADR-17
+> (แบนเนอร์ค้างในสถานะที่เก่ากว่าโค้ด ทิศทาง understate) · **หมายเหตุสำหรับคนที่
+> จะเพิ่มเครื่องมือตรวจ:** ทั้ง `grep` ของกฎข้อ 8 และ `tool/check_adr_banners.sh`
+> **จับเคสนี้ไม่ได้** เพราะตัวแรกตรวจแค่ว่าแบนเนอร์ไม่มีคำว่าผลทดสอบปนอยู่ ตัวที่สอง
+> ตรวจแค่ว่าตัวชี้ชี้ไปที่มีอยู่จริง — ไม่มีตัวไหนตรวจว่าแบนเนอร์ "ตามทันโค้ด" หรือยัง
+>
+> **ยังไม่ verified:** ยังไม่มีรอบเดินอุปกรณ์จริงกับค่าสินค้า 24 ชั่วโมงเลยสักรอบ
+> (หลักฐานที่มีทดสอบค่า 30 นาทีเท่านั้น) · **ไม่แตะ SDK** (`packages/beacon_kit_android/`, `packages/beacon_kit_ios/`,
+> `packages/beacon_kit/lib/`) แม้แต่บรรทัดเดียว — ทุกอย่างในหัวข้อนี้อยู่ใน example app
+> ล้วน (`ExampleProximityWatcher.kt`/`ExampleApplication.kt` ฝั่ง Android,
+> `AppDelegate.swift` ฝั่ง iOS)
+
+#### 8.1 ปัญหาและเป้าหมาย
+
+§6 ข้อ 2 บันทึกไว้แล้วว่าเจ้าของสินค้ายืนยันค่าที่ตั้งใจใช้จริงคือ **24 ชั่วโมง**
+แต่ตอนนี้ทั้งสองแพลตฟอร์มฝัง 30 นาทีเป็น **compile-time constant** ตรง ๆ
+(`internal const val LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L` —
+`ExampleProximityWatcher.kt:49` · `static let proximityLongNotificationCooldownSeconds:
+TimeInterval = 30 * 60` — `AppDelegate.swift:306`) **ไม่มีที่ไหนในโค้ดที่บอกว่า 30
+นาทีเป็นค่าทดสอบ ต่างจากค่าที่ตั้งใจใช้จริง** — ถ้าวันหนึ่งมีคนแก้ literal นี้ตรง ๆ
+เป็น 24 ชั่วโมง จะไม่มีร่องรอยว่าเคยมีค่าอื่นไว้ทดสอบ และจะไม่มีทางตั้งค่าทดสอบสั้น ๆ
+กลับมาใช้ได้อีกโดยไม่แก้ซอร์สซ้ำ
+
+เป้าหมายของหัวข้อนี้คือทำให้คูลดาวน์เป็น **ค่าตั้งที่ประกอบเข้าไปตอนสร้าง watcher**
+ไม่ใช่ literal ที่ฝังอยู่กลางตรรกะ — โดยมี **ค่า default ของสินค้า (24 ชม.)**
+เป็นแหล่งความจริงหนึ่งเดียว และ example **override อย่างชัดเจน ณ จุดประกอบ** เป็น
+30 นาที พร้อมคอมเมนต์อธิบายเหตุผล ไม่ใช่ silently ใช้คนละค่ากันโดยไม่มีอะไรฟ้อง
+
+#### 8.2 ทำไมคูลดาวน์ต้องยาวกว่าการมาร้านหนึ่งครั้ง — อ้างอิงให้ตรงกับที่เอกสารเขียนจริง
+
+⚠️ **บรีฟของงานนี้อ้างเหตุผลจาก "ADR-24"** แต่ **ไม่มี ADR-24 อยู่ในไฟล์นี้เลย**
+(`grep -n "## ADR-24" ARCHITECTURE.md` ไม่เจอ — เลขสารบัญกระโดดจาก ADR-22 ตรงไป
+ADR-25 ตรง ๆ, ดู `grep -n "^## ADR" ARCHITECTURE.md`) เหตุผลเรื่อง "`exit` เชื่อไม่ได้"
+ที่บรีฟตั้งใจอ้างถึงอยู่จริงใน **ADR-14 §4** และ **ADR-15** (ฉบับร่าง) แทน:
+
+- **ADR-14 §4 (accepted, implemented):** นาฬิกาปลุกฝั่ง Android ใช้
+  `AlarmManager.setAndAllowWhileIdle` ซึ่งเอกสารทางการระบุว่าเป็น **inexact** — เวลา
+  ที่ส่งเข้าไป "will not be delivered before this time, but **may be deferred and
+  delivered some time later**" (คำต่อคำ + URL ที่ `docs/sources/android_background_ble.md`
+  หัวข้อ 8) — รอบทดสอบสนามจริงเจอ `exit` หน่วง **22 วินาที กับ 3 นาที 15 วินาที
+  ด้วย `exitTimeoutSeconds=30` เท่ากันทั้งคู่** (ADR-14 §4, ส่วนขยาย 1 ก.ย. 2026)
+- **ADR-15 (สถานะ: ร่าง — ยังไม่ตัดสิน แต่ข้อมูลวัดจริงในนั้นใช้อ้างได้):** ค่าที่ตั้ง
+  `exitTimeoutSeconds=30` วินาที ได้ผลจริง**มัธยฐาน 10 นาที** จากหลักฐาน
+  `docs/test-data/2026-09-01_android_overnight_region_flapping.log` — ความคลาดเคลื่อน
+  **20 เท่า** ไม่ใช่ความไม่แม่นยำเล็กน้อย และ "มันผิดแบบเงียบ: ไม่มี error ไม่มี
+  warning ไม่มีอะไรฟ้อง" (ADR-15 หัวข้อ 2)
+- **ADR-11 หัวข้อ 2:** ฝั่ง iOS ค่าหน่วงก่อนประกาศ `exit` เป็นของระบบล้วน ๆ **เราปรับ
+  ไม่ได้** วัดได้เอง ~30 วินาที แต่ไม่พบเอกสาร Apple ที่รับประกันค่านี้เลย
+
+**สรุปที่ใช้เป็นฐานของ §8:** `exit` (และ `didExitRegion`) ไม่ใช่สัญญาณที่นับเวลาได้
+แม่นยำบนทั้งสองแพลตฟอร์ม ด้วยกลไกที่ต่างกันคนละแบบ — ถ้าคูลดาวน์ของ notification
+ชั้นที่ 2 สั้นกว่าเวลาที่ลูกค้าอยู่ในร้านจริง (ซึ่งวัดจาก `exit` ไม่ได้แม่นเลย) ลูกค้า
+จะโดนแจ้งเตือนซ้ำระหว่างเดินอยู่ในร้านเดียวกัน — คูลดาวน์จึงต้อง **ยาวกว่าการมาร้าน
+หนึ่งครั้งโดยเผื่อเยอะ** ไม่ใช่คำนวณจากค่าที่ `exitTimeoutSeconds` สัญญาไว้ตรง ๆ
+(เพราะพิสูจน์แล้วว่าสัญญานั้นเชื่อไม่ได้) — เป็นเหตุผลเชิงทิศทาง (ยาวกว่า) ไม่ใช่การ
+คำนวณ 24 ชั่วโมงจากตัวเลขในสามแหล่งนี้ตรง ๆ (ยังไม่มีข้อมูลระยะเวลาที่ลูกค้าอยู่ในร้าน
+จริงเช่นกัน — §6 ข้อ 2 บันทึกช่องว่างนี้ไว้แล้ว)
+
+#### 8.3 ออกแบบฝั่ง Android — `ExampleProximityWatcher` เป็น `object` ไม่มี constructor
+จริง ๆ จึงใช้พารามิเตอร์ของ `install()` แทน
+
+⚠️ **ส่วนต่างจากบรีฟ:** บรีฟระบุว่า "ส่งผ่าน constructor/parameter ของ
+`ExampleProximityWatcher`" แต่ตรวจจากโค้ดจริง (`ExampleProximityWatcher.kt:28`)
+คลาสนี้คือ **Kotlin `object` (singleton) ไม่มี constructor ให้ส่งพารามิเตอร์เข้าเลย**
+— จุดที่ใกล้เคียง "constructor" ที่สุดคือ `install(context: Context)` ซึ่งเป็น
+เมธอดตั้งค่าเดียวที่ถูกเรียกครั้งเดียวจาก `ExampleApplication.onCreate()`
+(`ExampleApplication.kt:107`) จึงออกแบบให้พารามิเตอร์ของคูลดาวน์อยู่ที่ `install()`
+
+**ลายเซ็นเต็ม (`ExampleProximityWatcher.kt`):**
+
+```kotlin
+/** ค่าเริ่มต้นของสินค้า (product default) — 24 ชั่วโมง (ADR-25 §8.1, ยืนยันจากเจ้าของ
+ *  สินค้า 17 ก.ย. 2026, §6 ข้อ 2) — ⚠️ ค่านี้เป็น **ค่าเริ่มต้นของพารามิเตอร์ `install()`
+ *  เท่านั้น** ไม่ใช่ SDK default เพราะ SDK (`packages/beacon_kit_android/`) ไม่มีแนวคิด
+ *  คูลดาวน์นี้เลย — คูลดาวน์ยังเป็นนโยบายของ example/host app ล้วน ๆ ตาม ADR-20 หัวข้อ 6
+ */
+internal const val DEFAULT_LONG_COOLDOWN_MILLIS = 24 * 60 * 60 * 1_000L  // 86,400,000
+
+/** ค่าที่ใช้งานจริง ณ runtime — ตั้งครั้งเดียวใน [install] ไม่มี setter อื่น */
+private var longCooldownMillis: Long = DEFAULT_LONG_COOLDOWN_MILLIS
+
+fun install(
+    context: Context,
+    longCooldownMillis: Long = DEFAULT_LONG_COOLDOWN_MILLIS,
+) {
+    this.longCooldownMillis = longCooldownMillis
+    val appContext = context.applicationContext
+    BackgroundProximityMonitor.setProximityObserver { event ->
+        onProximityChanged(appContext, event)
+    }
+}
+```
+
+**pure function ต้องรับค่าคูลดาวน์เป็นพารามิเตอร์ที่สาม แทนการอ่าน const ส่วนกลาง**
+(กระทบ `ExampleProximityWatcher.kt:373-381` — เหตุผลเดียวกับที่ฟังก์ชันนี้แยกออกจาก
+I/O มาตั้งแต่ §3.1: unit test ต้องกำหนดค่าคูลดาวน์ของตัวเองได้โดยไม่ผูกกับค่า default
+ที่อาจถูกแก้ในอนาคต):
+
+```kotlin
+internal fun longCooldownSinceLastPostedMillisOrNull(
+    lastPostedElapsedMillisOrZero: Long,
+    nowElapsedMillis: Long,
+    cooldownMillis: Long,   // ⚠️ ไม่มีค่า default โดยตั้งใจ — ดู §8.4.1
+): Long? {
+    if (lastPostedElapsedMillisOrZero == 0L) return null
+    if (lastPostedElapsedMillisOrZero > nowElapsedMillis) return null
+    val since = nowElapsedMillis - lastPostedElapsedMillisOrZero
+    return if (since < cooldownMillis) since else null
+}
+```
+
+และ I/O wrapper (`longCooldownSinceLastPostedOrNull`, `ExampleProximityWatcher.kt:388-395`)
+ส่ง `longCooldownMillis` (ตัวแปรที่ `install()` ตั้งไว้) เป็นอาร์กิวเมนต์ที่สามแทนการ
+พึ่ง default ของพารามิเตอร์เฉย ๆ
+
+**จุดประกอบ — `ExampleApplication.kt:107` (ตรวจจากโค้ดจริง, ไม่เดา):**
+
+```kotlin
+// ⚠️ ค่าทดสอบ 30 นาที ไม่ใช่ค่าสินค้า (ค่าสินค้า = 24 ชั่วโมง,
+// ExampleProximityWatcher.DEFAULT_LONG_COOLDOWN_MILLIS, ADR-25 §8.1) — override
+// สั้นลงเพื่อให้เห็นใบที่สองระหว่างรอบทดสอบภาคสนามได้จริงโดยไม่ต้องรอทั้งวัน
+// (เหตุผลเต็มว่าทำไมต้อง override ชัดเจนแบบนี้แทนการฝัง literal อยู่ที่ ADR-25 §8.1)
+private const val TESTING_LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L
+
+// ...ใน onCreate():
+ExampleProximityWatcher.install(this, longCooldownMillis = TESTING_LONG_COOLDOWN_MILLIS)
+```
+
+#### 8.4 ออกแบบฝั่ง iOS — **แก้ 17 ก.ย. 2026 รอบตรวจสอง: ใช้ instance property override
+ที่ `didFinishLaunchingWithOptions` ไม่ใช่ `static let` คู่** (ถอนดีไซน์ฉบับแรกของหัวข้อ
+นี้ทั้งหมด)
+
+> ⚠️ **ฉบับแรกของหัวข้อนี้ผิด — เหตุผลที่ใช้ปฏิเสธ parameter ไม่ตรงกับโค้ดจริง**
+> ฉบับแรกอ้างว่า "จุดประกอบฝั่ง iOS คือตัว declaration ของ `static let` เอง (ไม่มี
+> 'จุดเรียก' แยกต่างหากเหมือน Android เพราะไม่มีฟังก์ชันตั้งค่าให้เรียก)" — ตรวจโค้ด
+> ซ้ำแล้วพบว่า**ไม่จริง**: `application(_:didFinishLaunchingWithOptions:)`
+> (`AppDelegate.swift:51-53`) **คือจุดประกอบจริงและเป็นจุดที่ไฟล์นี้ตั้งค่าอย่างอื่น
+> อยู่แล้ว** และไฟล์นี้มี **instance `var` ที่ถูกตั้งค่าตอน launch อยู่แล้วสองตัว**:
+> `launchedByLocationKey` (`AppDelegate.swift:35`, ตั้งค่าที่บรรทัด 55 ใน
+> `didFinishLaunchingWithOptions`) และ `hasEverBecomeActive` (`AppDelegate.swift:49`)
+> — แพทเทิร์น "instance property ที่ประกอบค่าตอน launch" **มีอยู่จริงในไฟล์นี้แล้ว**
+> ไม่ใช่รูปแบบที่ไม่เคยมี และ `longCooldownBlockedSinceMs` (`AppDelegate.swift:763`)
+> เป็น **`private func` ไม่มี `static`** (instance method) อยู่แล้ว จึงอ่าน instance
+> property ได้ตรง ๆ โดยไม่ต้องรื้อโครงอะไรเลย — แก้ดีไซน์ทั้งหมดด้านล่างนี้ใหม่
+
+**ดีไซน์ที่ถูกต้อง — แยกสามค่า ไม่ใช่สองค่า:**
+
+```swift
+/// ค่าเริ่มต้นของสินค้า (product default) — 24 ชั่วโมง (ADR-25 §8.1) — ค่านี้ไม่ใช่ SDK
+/// default เช่นเดียวกับฝั่ง Android เพราะ `beacon_kit_ios` ไม่มีแนวคิดคูลดาวน์นี้เลย
+/// — **แหล่งความจริงเดียวของค่าสินค้า** (`static let` เพราะเป็นค่าคงที่ระดับสินค้า
+/// ไม่ใช่ค่าที่ override ได้ต่อ instance)
+static let productDefaultLongCooldownSeconds: TimeInterval = 24 * 60 * 60  // 86,400
+
+/// ค่า literal ที่ตั้งใจ override ค่าเริ่มต้นของสินค้าเพื่อการทดสอบเท่านั้น (ADR-25
+/// §8.1) — คงเป็น `static let` (ไม่ใช่ instance) เพราะเป็นแค่**ค่าคงที่ที่ทั้งจุด
+/// ประกอบและไฟล์เทสต้องอ้างอิงถึงได้โดยไม่ต้องมี `AppDelegate` instance** — เทียบเท่า
+/// `TESTING_LONG_COOLDOWN_MILLIS` ที่ฝั่ง Android เก็บไว้ใน `ExampleApplication.kt`
+/// (§8.3) ตัวมันเองไม่ใช่ค่าที่ใช้งานจริง — ต้อง override เข้า [longCooldownSeconds]
+/// ที่จุดประกอบก่อนถึงจะมีผล (ดูโค้ดด้านล่าง)
+static let testingLongCooldownSeconds: TimeInterval = 30 * 60
+
+/// ค่าที่ใช้งานจริง ณ runtime — **instance property** (ไม่ใช่ `static let`) เพราะ
+/// จุดประกอบจริงของไฟล์นี้คือ `didFinishLaunchingWithOptions` ซึ่งเป็น **instance
+/// method** (`AppDelegate.swift:51-53`) — แพทเทิร์นเดียวกับ `launchedByLocationKey`/
+/// `hasEverBecomeActive` ที่มีอยู่แล้วในไฟล์นี้ ตั้ง default เป็นค่าสินค้าไว้ก่อน
+/// แล้ว override อย่างชัดเจนตอน launch (ดูโค้ดด้านล่าง) — สมมาตรกับ Android ที่
+/// override ค่าจริงที่จุดประกอบ (`ExampleProximityWatcher.install()`)
+private var longCooldownSeconds: TimeInterval = AppDelegate.productDefaultLongCooldownSeconds
+// ⚠️ ใช้ชื่อ type ตรง ๆ ไม่ใช่ `Self.` — แก้ 17 ก.ย. 2026 ตอน implement: ฉบับแรกของ
+// หัวข้อนี้เขียน `Self.productDefaultLongCooldownSeconds` แล้ว **compile ไม่ผ่านจริง**
+// (`error: covariant 'Self' type cannot be referenced from a stored property
+// initializer`) เพราะ `AppDelegate` ไม่ใช่ `final class` (`AppDelegate.swift:16`:
+// `@objc class AppDelegate: FlutterAppDelegate, ...`) — Swift ห้าม `Self` ใน
+// initializer ของ stored property · ผลเหมือนกันทุกประการเพราะไม่มี subclass จริง
+// ส่วน `Self.` ที่ใช้ใน method body (เช่นบรรทัด override ด้านล่าง) ไม่มีข้อจำกัดนี้
+```
+
+**จุดประกอบ — ใน `didFinishLaunchingWithOptions` (`AppDelegate.swift:51-53`, วางก่อน
+`BeaconKitIosPlugin.startBackgroundRegionMonitoring` ที่บรรทัด 148 เพื่อให้ค่าพร้อม
+ก่อนมี event ใดเข้ามาถึง `longCooldownBlockedSinceMs`):**
+
+```swift
+// ⚠️ ค่าทดสอบ 30 นาที ไม่ใช่ค่าสินค้า (ค่าสินค้า = 24 ชั่วโมง,
+// `productDefaultLongCooldownSeconds`, ADR-25 §8.1) — override สั้นลงเพื่อให้เห็น
+// ใบที่สองระหว่างรอบทดสอบภาคสนามได้จริงโดยไม่ต้องรอทั้งวัน (เหตุผลเต็มที่ §8.1)
+longCooldownSeconds = Self.testingLongCooldownSeconds
+```
+
+**pure function ยังคง `static` เหมือนเดิม** (ไม่เปลี่ยนจากฉบับแรก — กระทบ
+`AppDelegate.swift:746-755`, แพทเทิร์นเดียวกับ §8.3 ฝั่ง Android เป๊ะ, ยังไม่ต้อง
+พึ่ง instance เพราะยังเป็น pure function ล้วนที่รับทุกอย่างเป็นพารามิเตอร์):
+
+```swift
+static func longCooldownSinceLastPostedMillisOrNull(
+    lastPostedEpochSecondsOrZero: TimeInterval,
+    nowEpochSeconds: TimeInterval,
+    cooldownSeconds: TimeInterval   // ⚠️ ไม่มีค่า default โดยตั้งใจ — ดู §8.4.1
+) -> Int64? {
+    if lastPostedEpochSecondsOrZero == 0 { return nil }
+    if lastPostedEpochSecondsOrZero > nowEpochSeconds { return nil }
+    let sinceSeconds = nowEpochSeconds - lastPostedEpochSecondsOrZero
+    return sinceSeconds < cooldownSeconds ? Int64(sinceSeconds * 1000) : nil
+}
+```
+
+**`longCooldownBlockedSinceMs` (`AppDelegate.swift:763-769`, instance method อยู่
+แล้ว — ไม่มี `static` นำหน้า) เปลี่ยนจากอ่าน `Self.proximityLongNotificationCooldownSeconds`
+(สัญลักษณ์นี้ถูกลบไปแล้วในดีไซน์ใหม่) เป็นอ่าน `longCooldownSeconds` (instance
+property ที่ตั้งไว้ตอน launch ด้านบน) ตรง ๆ:**
+
+```swift
+private func longCooldownBlockedSinceMs(key: String, nowEpochSeconds: TimeInterval) -> Int64? {
+    guard let defaults = UserDefaults(suiteName: Self.proximityLongCooldownSuiteName) else { return nil }
+    return Self.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedEpochSecondsOrZero: defaults.double(forKey: key),
+      nowEpochSeconds: nowEpochSeconds,
+      cooldownSeconds: longCooldownSeconds  // instance property, ไม่ใช่ static let อีกต่อไป (ADR-25 §8.4)
+    )
+}
+```
+
+**ผลกระทบต่อ `RunnerTests.swift` — ตรวจจากโค้ดจริงแล้วครบทุกจุดที่เรียก
+`AppDelegate.longCooldownSinceLastPostedMillisOrNull(...)` (10 จุด) และทุกจุดที่อ้าง
+`AppDelegate.proximityLongNotificationCooldownSeconds` (สัญลักษณ์ที่ถูกลบ):**
+
+⚠️ **compile-breaking แน่นอน 3 จุด** — อ้าง `AppDelegate.proximityLongNotificationCooldownSeconds`
+ตรง ๆ ในตัวเทสเอง ต้องเปลี่ยนเป็น `AppDelegate.testingLongCooldownSeconds`:
+
+| ฟังก์ชันเทส | บรรทัดที่อ้างสัญลักษณ์เดิม |
+|---|---|
+| `testLongCooldownStillBlocksOneSecondBeforeWindowElapses` | `RunnerTests.swift:674` |
+| `testLongCooldownAllowsExactlyAtWindowBoundary` | `RunnerTests.swift:694` |
+| `testLongCooldownAllowsOneSecondAfterWindowElapses` | `RunnerTests.swift:707` |
+
+ทั้งสามฟังก์ชันนี้เรียก `longCooldownSinceLastPostedMillisOrNull` แบบสองพารามิเตอร์
+เดิม (`RunnerTests.swift:677/696/709`) — **ต้องเพิ่มอาร์กิวเมนต์ที่สาม
+`cooldownSeconds: AppDelegate.testingLongCooldownSeconds` ด้วย ไม่ใช่แค่เปลี่ยนชื่อ
+สัญลักษณ์ในตัวคำนวณ `elapsed`/`now`** เพราะฟังก์ชันเวอร์ชันใหม่มี default เป็น
+`productDefaultLongCooldownSeconds` (24 ชม.) — ถ้าไม่ส่งพารามิเตอร์ที่สาม การทดสอบขอบ
+เขตพอดี (`==`, `-1`, `+1`) จะไปทดสอบขอบเขตของ 24 ชั่วโมงแทน 30 นาทีโดยไม่มีใครรู้ตัว
+ซึ่งเป็นเคสที่ทั้งสามฟังก์ชันนี้**มีอยู่เพื่อพิสูจน์ขอบเขตของค่าที่ example ใช้จริงเท่านั้น**
+(ไม่ใช่ขอบเขตของค่าสินค้า)
+
+⚠️ **ไม่ compile-breaking แต่เสี่ยง "เทสเขียวผิดที่" แบบเดียวกับที่ §8.9 เตือนไว้ฝั่ง
+Android — อีก 7 จุด** ที่เรียก `longCooldownSinceLastPostedMillisOrNull` แบบสอง
+พารามิเตอร์เดิมโดยไม่อ้างสัญลักษณ์ที่ถูกลบ (จึง compile ผ่านเฉย ๆ ด้วย default 24 ชม.
+ใหม่) แต่ comment/ชื่อฟังก์ชันยืนยันว่าตั้งใจทดสอบพฤติกรรม **30 นาที** ตรง ๆ:
+
+| ฟังก์ชันเทส | บรรทัดที่เรียก | อ้างอิงจาก comment ว่าตั้งใจทดสอบอะไร |
+|---|---|---|
+| `testLongCooldownBlocksSecondPostWithinWindowAndReturnsExactElapsed` | `RunnerTests.swift:653` | "โพสต์ครั้งที่สองภายใน **30 นาที**" |
+| `testLongCooldownStillBlocksWhenPersistedValueIsPassedInAfterSimulatedRestart` | `RunnerTests.swift:816` | คูลดาวน์รอดข้าม process kill (ไม่ผูกตัวเลขกับ 30 นาทีตรง ๆ — ผลกระทบต่ำสุดในกลุ่มนี้) |
+| `testLongCooldownAllowsWhenClockWasSetBackwardsPastLastPosted` | `RunnerTests.swift:846` | เคส ก1 ของ §4.3.1 (ไม่ผูกตัวเลขกับ 30 นาทีตรง ๆ เช่นกัน) |
+| `testLongCooldownRemainsBlockedWithUnderstatedElapsedWhenClockWasSetBackwardsLessThanElapsed` | `RunnerTests.swift:886` | ตัวอย่างอิง "< **30 นาที**" ตรง ๆ ในคอมเมนต์ (เคส ก2 ของ §4.3.1) |
+| `testLongCooldownTimingIsIndependentOfTransitionReason` | `RunnerTests.swift:926,930` | "10 นาที — ยังอยู่ใน**คูลดาวน์**" |
+| `testLongCooldownAllowsFirstEverPostForKey` | `RunnerTests.swift:638` | ไม่ผูกตัวเลขกับหน้าต่างเลย (`lastPostedEpochSecondsOrZero: 0` เป็น sentinel) — **ผลกระทบต่ำสุด ไม่จำเป็นต้องแก้ก็ยังถูกต้อง** แต่แก้เพื่อความสม่ำเสมอก็ได้ |
+
+**คำแนะนำให้ `beacon-qa`/`flutter-dev`:** เพิ่ม `cooldownSeconds: AppDelegate.testingLongCooldownSeconds`
+เป็นอาร์กิวเมนต์ที่สามให้ครบทั้ง 10 จุด (ไม่ใช่แค่ 3 จุดที่ compile พัง) เพื่อให้ทุกเทส
+ในกลุ่มนี้ยังทดสอบพฤติกรรมของ**ค่าที่ example ใช้จริง (30 นาที)** ตรงตามชื่อ/คอมเมนต์
+ของตัวเองเป๊ะ ไม่ใช่ทดสอบพฤติกรรมของค่าสินค้า (24 ชม.) โดยไม่ตั้งใจ — ยกเว้น
+`testLongCooldownAllowsFirstEverPostForKey` ที่ไม่ผูกกับหน้าต่างเวลาเลยจึงแก้หรือไม่
+แก้ก็ได้ **และต้องแก้คอมเมนต์อธิบาย (`RunnerTests.swift:628-633`) ที่อ้าง
+`AppDelegate.proximityLongNotificationCooldownSeconds` ตรง ๆ ให้ชี้ไปที่
+`testingLongCooldownSeconds` แทน** ไม่งั้นคอมเมนต์จะอ้างสัญลักษณ์ที่ไม่มีอยู่จริงแล้ว
+
+#### 8.4.1 ⚠️ พารามิเตอร์คูลดาวน์ของ **pure function** ต้องไม่มีค่า default
+(แก้ 17 ก.ย. 2026 รอบตรวจสาม)
+
+ฉบับก่อนหน้าของ §8.3/§8.4 ให้พารามิเตอร์ที่สามของ pure function ทั้งสองฝั่งมีค่า
+default เป็นค่าสินค้า (`cooldownMillis: Long = DEFAULT_LONG_COOLDOWN_MILLIS` และ
+`cooldownSeconds: TimeInterval = productDefaultLongCooldownSeconds`) — **ถอนแล้ว
+ทั้งสองฝั่ง** เพราะ default ตรงนี้เปลี่ยน "จุดที่คอมไพเลอร์จับได้" ให้กลายเป็น
+"จุดที่เงียบแล้วผิด":
+
+- §8.4 เองระบุไว้แล้วว่าใน `RunnerTests.swift` มี **3 จุดที่ compile พังแน่นอน**
+  (อ้าง `proximityLongNotificationCooldownSeconds` ที่ถูกลบ) และอีก **7 จุดที่
+  "เขียวผิดที่"** — เทสที่เคยทดสอบหน้าต่าง 30 นาทีจะยัง compile ผ่านและยังเขียว
+  **แต่กลายเป็นทดสอบหน้าต่าง 24 ชั่วโมงแทนโดยไม่มีอะไรฟ้อง** เพราะไม่ได้ส่ง
+  อาร์กิวเมนต์ที่สามแล้วไปกิน default ใหม่
+- เคสเดียวกันนี้เกิดกับ `ExampleProximityWatcherTest.kt` ฝั่ง Android ด้วย
+
+**ตัดค่า default ออกจาก pure function ทั้งสองฝั่ง** ทำให้ทั้ง 10 จุดกลายเป็น
+**compile error ทุกจุด** — คนแก้ถูกบังคับให้ตัดสินใจทีละจุดว่าเทสนั้นตั้งใจทดสอบ
+หน้าต่างไหน ซึ่งเป็นสิ่งที่ต้องการพอดี · **ราคาที่จ่าย:** ผู้เรียกทุกจุดต้องเขียน
+อาร์กิวเมนต์ที่สามเอง (มีผู้เรียกจริงในโค้ดฝั่งละหนึ่งจุดเท่านั้น — ชั้น I/O —
+ที่เหลือคือเทส) ซึ่งถูกกว่าการปล่อยให้เทสเงียบ ๆ ทดสอบผิดหน้าต่างมาก
+
+⚠️ **ข้อนี้ไม่กระทบค่า default ของ `install(context, longCooldownMillis = ...)`
+ฝั่ง Android (§8.3)** — ตรงนั้น default **ต้องมี** เพราะเป็นกลไก "ค่าสินค้าถูกใช้
+ถ้าไม่มีใคร override" ซึ่งเป็นหัวใจของ §8.1 ทั้งหัวข้อ · ความต่างคือ `install()`
+เป็น**จุดประกอบ** (ที่ควรมีค่าปริยาย) ส่วน pure function เป็น**ตรรกะที่ถูกเทส**
+(ที่ต้องไม่มีค่าปริยาย)
+
+#### 8.5 ข้อเสีย/ผลข้างเคียงของหน้าต่าง 24 ชั่วโมง — ไม่ปิดบัง
+
+1. **ลูกค้าที่มาร้านสองครั้งจริงในวันเดียวกันจะไม่ได้รับแจ้งเตือนครั้งที่สอง** — ถ้า
+   ระยะห่างระหว่างสองครั้งนั้นน้อยกว่า 24 ชั่วโมง คูลดาวน์ยังไม่หมดอายุ การมาครั้งที่
+   สองจะถูกกลืนไปเงียบ ๆ (มีบรรทัดหลักฐาน `reason=cooldown` แต่ไม่มี notification)
+   — เป็น trade-off ที่ตั้งใจตาม §8.2 (กันสแปมจาก state ที่ถูกล้าง สำคัญกว่าการยิง
+   ทุกครั้งที่เข้าใกล้) แต่ต้องยอมรับตรง ๆ ว่ากรณีนี้เกิดขึ้นจริงได้ในทางธุรกิจ
+2. **ผลกระทบต่อการทดสอบ — เหตุผลที่ต้อง override เป็น 30 นาทีใน example**: ถ้าใคร
+   เผลอใช้ค่า default 24 ชั่วโมงบนเครื่องทดสอบ จะต้องรอทั้งวันกว่าจะเห็นใบที่สองของ
+   บีคอนเดียวกัน ซึ่งทำให้รอบทดสอบภาคสนามช้าลงมหาศาลโดยไม่จำเป็น — นี่คือเหตุผลเดียว
+   ที่ §8.1/§8.3/§8.4 ยืนกรานให้ override เป็น**พารามิเตอร์ที่ชัดเจน มีคอมเมนต์กำกับ**
+   ไม่ใช่แก้ literal ของ default ตรง ๆ
+3. **หน้าต่าง 24 ชั่วโมงทำให้ความต่างฐานเวลาของสองแพลตฟอร์ม (§4.3.4) สำคัญขึ้นจริง
+   หรือไม่ — วิเคราะห์เต็มที่ §8.6**
+
+#### 8.6 หน้าต่าง 24 ชั่วโมงทำให้ความต่างฐานเวลาของสองแพลตฟอร์มสำคัญขึ้นหรือไม่
+
+**คำตอบ: สำคัญขึ้นฝั่ง Android เท่านั้น ในเชิงความน่าจะเป็น ไม่ใช่กลไกใหม่ — และ
+ตัดสินใจไม่แก้ในรอบนี้ (บันทึกเป็นหนี้ที่ §6 ข้อ 8)**
+
+§4.3.4 ยอมรับไว้แล้วว่าสองแพลตฟอร์มใช้ฐานเวลาคนละแบบสำหรับคูลดาวน์เดียวกัน — iOS เป็น
+wall clock (รอดข้าม reboot, เสี่ยงเรื่องปรับนาฬิกา) ส่วน Android เป็น boot-relative
+(`SystemClock.elapsedRealtime()`, รีเซ็ตตอน reboot, ไม่เสี่ยงเรื่องปรับนาฬิกา) —
+เหตุผลที่ §4.3.4 ยอมรับความต่างนี้ได้คือ "ส่วนต่างที่เหลือ (reboot) เป็นเหตุการณ์หายาก
+พอ ๆ กันบนทั้งสองแพลตฟอร์ม" **ข้อสมมติฐานนั้นอิงกับหน้าต่าง 30 นาที** — โอกาสที่
+เครื่องจะ reboot ระหว่างหน้าต่าง 30 นาทีใด ๆ ต่ำมากไม่ว่าความถี่ reboot จะเป็นเท่าไร
+ก็ตาม (ถ้า reboot เฉลี่ยวันละครั้ง โอกาสคาบเกี่ยวหน้าต่าง 30 นาทีใด ๆ ≈ 30/1440 ≈ 2%)
+
+**หน้าต่าง 24 ชั่วโมงเปลี่ยนตัวเลขนี้อย่างมีนัยสำคัญ**: ถ้า reboot เฉลี่ยวันละครั้ง
+โอกาสที่หน้าต่าง 24 ชั่วโมงใด ๆ จะคาบเกี่ยวกับ reboot อย่างน้อยหนึ่งครั้ง**เข้าใกล้
+100%** — เครื่องทดสอบที่ปิดเปิดทุกวัน (ชาร์จตอนกลางคืน, อัปเดตระบบ) จะทำให้คูลดาวน์
+ฝั่ง Android รีเซ็ตแทบทุกรอบ 24 ชั่วโมง ในขณะที่ฝั่ง iOS (wall clock) จะไม่รีเซ็ตเลย
+จาก reboot **นี่คือการเปลี่ยนความน่าจะเป็นของกลไกที่ §4.3.4 ยอมรับไว้แล้วอยู่แล้ว
+ไม่ใช่กลไกใหม่** และทิศทางผลลัพธ์ก็เหมือนเดิม (fail-open — ยิงเร็ว/บ่อยกว่าที่ตั้งใจ
+ไม่ใช่ fail-closed แบบบั๊ก `systemUptime` เดิมของ iOS ที่ §4.3 แก้ไปแล้ว) ความเสี่ยง
+สูงสุดคือ **notification เกินมาหนึ่งใบต่อบีคอนต่อรอบ reboot** ระดับเดียวกับที่ §4.2/
+§4.3.3 ยอมรับไว้แล้วสำหรับกรณีอื่น (upgrade เปลี่ยนรูปร่าง key/suite)
+
+**สรุป: ร้ายแรงขึ้นในเชิงความถี่ที่จะเจอ แต่ไม่ร้ายแรงขึ้นในเชิงขนาดของผลกระทบต่อ
+ครั้ง** — จึง**ไม่แก้ในรอบนี้** ด้วยเหตุผลตามที่บันทึกไว้ที่ §6 ข้อ 8: (1) รอบนี้ห้าม
+แตะโค้ดตามสโคปที่กำหนด (2) ทางแก้ที่ถูกต้อง (เช่น เก็บ wall-clock anchor คู่กับ
+`elapsedRealtime` เพื่อตรวจจับ reboot แล้วเลือก fail-closed แทน) เป็นการเปลี่ยน
+ตรรกะระดับเดียวกับ §4.3 ที่ต้องผ่านรอบทดสอบอุปกรณ์จริงของตัวเอง ไม่ควรพ่วงมากับ PR
+ที่แค่เปลี่ยนค่าคูลดาวน์เป็นค่าตั้ง (3) ยังไม่มีข้อมูลความถี่ reboot จริงของเครื่อง
+ทดสอบที่จะใช้ตัดสินว่าค่าความเสี่ยงจริงสูงแค่ไหน — การเดาความถี่แล้วออกแบบทางแก้จะ
+เป็นการเดาที่ห้ามตามนโยบายโปรเจกต์
+
+#### 8.7 ไฟล์ที่ต้องแก้ — สำหรับ `flutter-dev` (หลังตัดสินใจหัวข้อนี้แล้วเท่านั้น)
+
+| แพลตฟอร์ม | ไฟล์ | แก้อะไร |
+|---|---|---|
+| example Android | `ExampleProximityWatcher.kt` | เปลี่ยน `LONG_COOLDOWN_MILLIS` (const) → `DEFAULT_LONG_COOLDOWN_MILLIS = 24h` + `private var longCooldownMillis`; `install()` รับพารามิเตอร์ `longCooldownMillis: Long = DEFAULT_LONG_COOLDOWN_MILLIS`; `longCooldownSinceLastPostedMillisOrNull` เพิ่มพารามิเตอร์ที่สาม `cooldownMillis`; I/O wrapper ส่งค่านี้ต่อ |
+| example Android | `ExampleApplication.kt` | เพิ่ม `private const val TESTING_LONG_COOLDOWN_MILLIS = 30 * 60 * 1_000L` พร้อมคอมเมนต์ override; เปลี่ยนบรรทัดเรียก `install()` ให้ส่งพารามิเตอร์นี้ |
+| example iOS | `AppDelegate.swift` | เพิ่ม `static let productDefaultLongCooldownSeconds = 24h` + `static let testingLongCooldownSeconds = 30min` + **instance** `private var longCooldownSeconds` (default = ค่าสินค้า); override `longCooldownSeconds = Self.testingLongCooldownSeconds` ใน `didFinishLaunchingWithOptions`; `longCooldownSinceLastPostedMillisOrNull` (ยังเป็น `static`) เพิ่มพารามิเตอร์ที่สาม `cooldownSeconds`; `longCooldownBlockedSinceMs` (instance method) ส่ง `longCooldownSeconds` (instance property) แทน `Self.proximityLongNotificationCooldownSeconds` (ลบสัญลักษณ์นี้) |
+| example iOS (เทส) | `RunnerTests.swift` | แก้ 3 จุด compile-breaking (`:674/694/707`) ให้อ้าง `AppDelegate.testingLongCooldownSeconds` แทน `proximityLongNotificationCooldownSeconds` **และ**เพิ่ม `cooldownSeconds:` เป็นอาร์กิวเมนต์ที่สามในทั้ง 10 จุดที่เรียก `longCooldownSinceLastPostedMillisOrNull` (รายละเอียดครบที่ §8.4); แก้คอมเมนต์อธิบาย `:628-633` ให้ชี้สัญลักษณ์ใหม่ |
+
+**ไม่แตะ:** `packages/beacon_kit_android/`, `packages/beacon_kit_ios/`,
+`packages/beacon_kit/lib/`, ไฟล์ build ใด ๆ — ทุกจุดข้างบนอยู่ใน example app ล้วน
+
+#### 8.8 เคสที่ unit test ต้องคลุม
+
+- `install()`/declaration ที่ไม่ระบุพารามิเตอร์ ต้องได้ `DEFAULT_LONG_COOLDOWN_MILLIS`
+  (24 ชม.) จริง ไม่ใช่ 30 นาที — ทดสอบว่า "ค่า default คือค่าสินค้า" (Android) ·
+  ฝั่ง iOS เทียบเท่าคือ: `AppDelegate()` ใหม่ (ก่อนเรียก `didFinishLaunchingWithOptions`)
+  ต้องมี `longCooldownSeconds == productDefaultLongCooldownSeconds` — **แต่ตรวจจาก
+  โค้ดจริงแล้ว `RunnerTests.swift` ไม่มีจุดใดสร้าง `AppDelegate` instance เองเลย**
+  (ทุกเทสเรียก `static func`/`static let` ผ่านชื่อ type ตรง ๆ) เคสนี้จึง **ต้องมี
+  เทสใหม่ที่สร้าง `AppDelegate()` จริงเพื่อตรวจ default ของ instance property** —
+  ไม่มีของเดิมให้ reuse
+- `install(longCooldownMillis = X)` (Android) ต้องทำให้ `longCooldownSinceLastPostedMillisOrNull`
+  ที่เรียกผ่าน I/O wrapper ใช้ `X` จริง ไม่ใช่ `DEFAULT_LONG_COOLDOWN_MILLIS` ที่ถูก
+  ละเลย — **นี่คือเคสที่พิสูจน์ว่าค่าตั้งถูกใช้จริง ไม่ใช่ค่าคงที่เดิมที่แฝงอยู่** ·
+  ฝั่ง iOS เทียบเท่าคือ: หลังเรียก `didFinishLaunchingWithOptions` (หรือหลัง assign
+  `longCooldownSeconds = Self.testingLongCooldownSeconds` ตรง ๆ ถ้าเทส
+  `didFinishLaunchingWithOptions` ทั้งเมธอดยาก) `longCooldownBlockedSinceMs` ต้องใช้
+  ค่าที่ override แล้ว ไม่ใช่ `productDefaultLongCooldownSeconds`
+- ทุกเคสเดิมของ `ExampleProximityWatcherTest.kt`/`RunnerTests.swift` (ขอบเขตพอดี,
+  เกินขอบเขตหนึ่ง, reboot/นาฬิกาปรับ ฯลฯ) **ต้องย้ายไปเรียกด้วยค่าคูลดาวน์ทดสอบของ
+  ตัวเองอย่างชัดเจนผ่านพารามิเตอร์ที่สาม** แทนการอ้าง `LONG_COOLDOWN_MILLIS`/
+  `proximityLongNotificationCooldownSeconds` ตรง ๆ (สัญลักษณ์แรกเปลี่ยนความหมายเป็น
+  24 ชม.แล้ว สัญลักษณ์ที่สองถูกลบไปแล้วฝั่ง iOS — การไม่แก้จุดอ้างอิงจะทำให้ไม่ compile
+  (iOS) หรือเทสเขียวผิดที่ (ทั้งสองแพลตฟอร์ม) — รายการจุดที่ต้องแก้ครบตาม §8.4)
+
+#### 8.9 อะไรจะพังถ้าทำผิด
+
+- **ถ้าลืมแก้จุดอ้างอิง `LONG_COOLDOWN_MILLIS` ในเทสเดิมให้เป็น
+  `DEFAULT_LONG_COOLDOWN_MILLIS` หรือค่าพารามิเตอร์ที่สาม (Android):** เทสเดิมที่
+  ทดสอบขอบเขต "30 นาที" จะกลายเป็นทดสอบขอบเขต "24 ชั่วโมง" แบบไม่ตั้งใจ — เทสยัง
+  **ผ่าน** (เพราะตรรกะเดียวกัน) แต่ไม่ได้ทดสอบสิ่งที่ชื่อเทสบอกไว้อีกต่อไป เป็นความ
+  เงียบที่อันตรายแบบเดียวกับที่ §6 ข้อ 6 เตือนไว้เรื่อง "ข้อความอ้างอิงที่ยังไม่ผ่านการ
+  คัดโค้ดสองฝั่ง"
+- **ถ้า `ExampleApplication.kt` ไม่ override เป็น 30 นาทีชัดเจน (ปล่อยให้ `install()`
+  ใช้ default เฉย ๆ):** example จะใช้ 24 ชั่วโมงจริงตั้งแต่วันแรก — รอบทดสอบภาคสนาม
+  ที่ตั้งใจเห็นใบที่สองภายในไม่กี่สิบนาทีจะไม่เห็นอะไรเลยทั้งวัน (อาการเดียวกับ §8.5
+  ข้อ 2) และจะดูเหมือนฟีเจอร์พัง ทั้งที่จริงคือค่าตั้งไม่ถูก override
+- **ถ้า iOS ไม่ assign `longCooldownSeconds = Self.testingLongCooldownSeconds` ใน
+  `didFinishLaunchingWithOptions` (ปล่อยให้ instance property ใช้ default เฉย ๆ):**
+  อาการเดียวกับข้อบน (Android) เป๊ะ — example จะใช้ 24 ชั่วโมงจริงตั้งแต่วันแรก
+- **ถ้า iOS ลบความต่างระหว่าง `testingLongCooldownSeconds`/`productDefaultLongCooldownSeconds`
+  (ตั้งให้เท่ากัน):** จะเสียความสามารถทดสอบสั้นไปเหมือนข้อบน แต่ที่แย่กว่านั้นคือ
+  **ฝั่ง Android กับ iOS จะไม่ตรงกันอีก** ถ้าแก้ข้างเดียว (Android ยัง override 30
+  นาที iOS ใช้ 24 ชม.) — สองแพลตฟอร์มต้องซิงก์ค่าทดสอบกันเสมอ (คอมเมนต์ต้องอ้างถึง
+  กันทั้งสองไฟล์ตามโค้ดตัวอย่างของ §8.3/§8.4)
+- **ถ้า iOS เผลอทำ `longCooldownSeconds` เป็น `static var` แทน instance `var` (เพื่อ
+  ความสะดวกตอนเขียนเทสโดยไม่ต้องสร้าง instance):** จะเสียเหตุผลทั้งหมดของ §8.4 ที่
+  แก้จากฉบับแรก — กลับไปมีปัญหาเดิมคือค่าไม่ได้ผูกกับจุดประกอบจริง (`didFinishLaunchingWithOptions`)
+  แต่ผูกกับ static state ที่ทุก instance (ในทางทฤษฎี ถ้ามีมากกว่าหนึ่ง) ใช้ร่วมกัน
+  ซึ่งขัดกับที่ `beacon-sdk-architect` (ผู้ตรวจ) ยืนยันแล้วว่า `didFinishLaunchingWithOptions`
+  เป็น instance method และไฟล์นี้มีแพทเทิร์น instance var ที่ตั้งค่าตอน launch อยู่แล้ว
+
+### 9. notification ชั้นที่ 1 (`enter`/`exit`) ปิดโดยค่าเริ่มต้นใน example — บรรทัด
+หลักฐานยังต้องเขียนเสมอ (เพิ่ม 17 ก.ย. 2026)
+
+> **สถานะ: code-complete, unverified — implement แล้วใน commit `8b20433` ของ PR
+> เดียวกับที่เขียนหัวข้อนี้** ดูสถานะผลทดสอบที่
+> `docs/test-checklists/android_background_scanning.md` ข้อ 14 และ
+> `docs/test-checklists/ios_broadcast_scanning.md` ข้อ 22.1
+>
+> ⚠️ **ถอนข้อความ "ออกแบบเท่านั้น ยังไม่ implement" ของหัวเรื่องเดิม (17 ก.ย. 2026,
+> รอบตรวจ)** — เหตุผลเดียวกับ §8 ทุกประการ
+>
+> **ยังไม่ verified:** unit test ยืนยันได้แค่ว่า flag มีค่าเริ่มต้นเป็นปิด — **ไม่ได้
+> พิสูจน์ว่าบรรทัด `posted=false reason=disabled` ถูกเขียนลงไฟล์จริง** เส้นทางนั้น
+> ต้องมี `Context`/ไฟล์จริง ต้องยืนยันด้วยอุปกรณ์จริงเท่านั้น
+>
+> **ขอบเขต: ไม่แตะชั้นที่ 2 (proximity, ADR-20/ADR-21/ADR-22) และไม่แตะ
+> `staleAfterMillis`/`BackgroundRegionMonitor.kt` ตามขอบเขตเดิมของ ADR-25 ทั้งฉบับ**
+> — หัวข้อนี้แก้เฉพาะจุดที่ยิง notification ของ `enter`/`exit` ในสอง example app
+> เท่านั้น
+
+#### 9.1 ปัญหาและหลักการ — อ้างอิงให้ตรงกับที่เอกสารเขียนจริง
+
+⚠️ **บรีฟอ้าง "ADR-20 หัวข้อ 7 · §12.5.3"** สำหรับกติกา "ไม่มีบรรทัด ≠ หลักฐานเชิงลบ"
+แต่ตรวจจากโค้ดจริง **ADR-20 หัวข้อ 7** ("ข้อยกเว้นค่า POC ที่อนุญาตไว้ล่วงหน้า...",
+`ARCHITECTURE.md:3986`) เป็นเรื่องการ calibrate `staleAfterMillis` **คนละเรื่องกัน
+โดยสิ้นเชิง** — หัวข้อที่มีกติกานี้จริงคือ **ADR-20 §12.2** ("ข้อสรุปที่ตัวเลขรองรับ
+ได้: ตัวที่ 'เงียบ' คือตัวที่ทำงานดี") และ **ADR-20 §12.5.3** ซึ่งเขียนตรง ๆ ว่า:
+
+> "การอ่านตามตัวอักษรแล้วประกาศ 'ผ่าน' จะเป็นการนับ**การไม่มีข้อมูล**เป็น**หลักฐาน
+> เชิงบวก** ซึ่งเป็นความผิดพลาดแบบเดียวกับที่ §12.2 เตือนไว้ ('อย่าใช้ "ไม่มีบรรทัด"
+> เป็นตัวพิสูจน์ว่าบีคอนอยู่ในระยะ')" (§12.5.3)
+
+หลักการเดียวกันนี้ใช้กับหัวข้อนี้ตรง ๆ แม้จะเป็นคนละคำถาม (เดิม: "บีคอนอยู่ในระยะไหม"
+ใหม่: "notification ชั้น 1 ถูกปิดไว้หรือเงื่อนไขไม่เคยเข้า") — **ถ้าลบบรรทัด
+`event=notification` ทิ้งไปเฉย ๆ ตอนปิดสวิตช์ จะแยกไม่ออกจากไฟล์ log ล้วน ๆ ระหว่าง
+"ปิดสวิตช์ไว้" กับ "enter/exit ไม่เคยเกิดเลยทั้งคืน"** ซึ่งเป็นคนละสาเหตุที่ต้องแก้
+คนละทาง (สวิตช์ vs. ปัญหาที่ region monitoring เอง)
+
+#### 9.2 ออกแบบฝั่ง Android
+
+จุดยิง layer 1 อยู่ที่ `ExampleApplication.kt:80-97` เท่านั้น (สังเกตจาก
+`if (event.state == "enter" || event.state == "exit") { ExampleNotifications.post(...) }`
+ภายใน closure ของ `BackgroundRegionMonitor.setRegionStateObserver`) — **ไม่ใช่
+`ExampleProximityWatcher.kt`** (ไฟล์นั้นเป็นชั้นที่ 2 ล้วน ๆ ตามชื่อ)
+
+**flag เดียว — `LAYER1_NOTIFICATIONS_ENABLED`** เก็บใน `companion object` ที่มีอยู่
+แล้วของ `ExampleApplication` (คู่กับ `processState`, `ExampleApplication.kt:36-40`):
+
+```kotlin
+companion object {
+    /** เปิด/ปิด notification ชั้นที่ 1 (enter/exit) — ปิดโดย default (ADR-25 §9) —
+     *  บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร */
+    private const val LAYER1_NOTIFICATIONS_ENABLED = false
+
+    @Volatile
+    lateinit var processState: ProcessState
+        private set
+}
+```
+
+**เปลี่ยนบล็อก `if (event.state == "enter" || event.state == "exit")` เดิม
+(`ExampleApplication.kt:80-97`)** จาก:
+
+```kotlin
+if (event.state == "enter" || event.state == "exit") {
+    ExampleNotifications.post(...)
+}
+```
+
+เป็น:
+
+```kotlin
+if (event.state == "enter" || event.state == "exit") {
+    if (LAYER1_NOTIFICATIONS_ENABLED) {
+        ExampleNotifications.post(...)  // เนื้อหาเดิมทุกบรรทัด ไม่แก้
+    } else {
+        // ปิดโดย default (ADR-25 §9) — เขียนบรรทัดหลักฐานเสมอ ห้ามเงียบหาย
+        // (ADR-20 §12.2/§12.5.3: "ไม่มีบรรทัด" ต้องไม่ถูกอ่านเป็นหลักฐานเชิงลบ)
+        ExampleNotifications.recordSuppressed(
+            context = this,
+            regionIdentifier = event.regionIdentifier,
+            beacon = ExampleNotifications.BEACON_NOT_APPLICABLE,
+            mac = ExampleNotifications.BEACON_NOT_APPLICABLE,
+            layer = ExampleNotifications.LAYER_REGION,
+            reason = "disabled",
+            extra = "",
+        )
+    }
+}
+```
+
+**ใช้ `ExampleNotifications.recordSuppressed()` ที่มีอยู่แล้วตรง ๆ** (เพิ่มมาตั้งแต่
+§3, `ExampleNotifications.kt:85-106`) — ฟังก์ชันนี้รับ `reason: String` แบบ free-text
+อยู่แล้ว (ปัจจุบันมีผู้เรียกเดียวคือ `ExampleProximityWatcher.kt:128` ด้วย
+`reason = "cooldown"`) **ไม่ต้องเพิ่มฟังก์ชันใหม่ฝั่ง Android เลย**
+
+#### 9.3 ออกแบบฝั่ง iOS
+
+จุดยิง layer 1 อยู่ที่ `recordRegionEvent(_:)` (`AppDelegate.swift:253-279`) เรียกจาก
+`BeaconKitIosPlugin.startBackgroundRegionMonitoring` (`AppDelegate.swift:148-151`)
+
+⚠️ **พบระหว่างอ่านโค้ด — ความไม่สมมาตรที่มีอยู่ก่อนแล้วระหว่างสองแพลตฟอร์ม (ไม่ใช่สิ่ง
+ที่หัวข้อนี้สร้างขึ้น แต่ต้องรู้ก่อนออกแบบ):** ฝั่ง Android, layer 1 เขียนบรรทัด
+`event=notification` เสมอไม่ว่า `post()` จะสำเร็จหรือไม่ (`ExampleNotifications.kt:140-194`
+เขียน log ก่อนเรียก `notify()` เสมอ) แต่ฝั่ง iOS, `recordRegionEvent` เรียก
+`postNotification(title:body:)` ดิบ ๆ (`AppDelegate.swift:275-278`) ซึ่ง**เขียนบรรทัด
+หลักฐานเฉพาะตอนล้มเหลวเท่านั้น** (`postNotification`, `AppDelegate.swift:866-885`) —
+ตอนสำเร็จไม่มีบรรทัด `event=notification` ใด ๆ เลย (ต่างจาก layer 2 ฝั่ง iOS เองที่มี
+`recordNotificationEvent()` เขียน `posted=requested` เสมอ, `AppDelegate.swift:487-499`)
+**ไม่แก้ความไม่สมมาตรนี้ในรอบนี้** (นอกสโคปของ §9 ซึ่งเพิ่มแค่ทางแยกตอนปิด ไม่แตะทาง
+ที่เปิดอยู่) แต่บันทึกไว้ตรงนี้เพราะกระทบว่าบรรทัดใหม่ของหัวข้อนี้ต้องเป็นฟังก์ชันใหม่
+(ไม่มีของเดิมให้ reuse แบบฝั่ง Android)
+
+**flag เดียว — `layer1NotificationsEnabled`** (สมมาตรชื่อกับฝั่ง Android ตามชื่อ
+semantic เดียวกัน ต่างแค่ naming convention ของภาษา):
+
+```swift
+/// เปิด/ปิด notification ชั้นที่ 1 (enter/exit) — ปิดโดย default (ADR-25 §9) —
+/// บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร
+private static let layer1NotificationsEnabled: Bool = false
+```
+
+**เปลี่ยน `recordRegionEvent(_:)` (`AppDelegate.swift:253-279`)** — ส่วนเขียน log เดิม
+(บรรทัด 254-270) **ไม่แก้เลย** เพราะเป็นบรรทัด `event=enter`/`event=exit` ของ region
+ไม่ใช่ `event=notification` — แก้เฉพาะส่วนท้าย (บรรทัด 272-278):
+
+```swift
+if Self.layer1NotificationsEnabled {
+    postNotification(  // เนื้อหาเดิมทุกบรรทัด ไม่แก้
+      title: "Region \(event.state): \(event.regionIdentifier)",
+      body: "สถานะแอป: \(currentRunContext())"
+    )
+} else {
+    recordRegionNotificationDisabled(event)
+}
+```
+
+**ฟังก์ชันใหม่** (ไม่มีของเดิมให้ reuse ตามที่อธิบายไว้ข้างบน — รูปร่างเดียวกับ
+`recordNotificationSuppressed`/`recordNotificationEvent` ของ layer 2 แต่ตัดคอลัมน์
+เฉพาะบีคอน `bucket=`/`from=`/`beacon=`/`mode=` ออกเพราะ layer 1 พูดถึงทั้ง region
+ไม่ใช่บีคอนตัวใดตัวหนึ่ง เหมือนที่ `ExampleNotifications.recordSuppressed()` ฝั่ง
+Android ใช้ `beacon=n/a mac=n/a` สำหรับกรณีเดียวกัน):
+
+```swift
+/// เขียนบรรทัดหลักฐานตอน notification ชั้นที่ 1 ถูกปิดไว้ (ADR-25 §9) — **ต้องเขียน
+/// เสมอ ห้ามเงียบหาย** (ADR-20 §12.2/§12.5.3) ใช้ `event.regionIdentifier` จริง
+/// ไม่ใช่ `"-"` แบบที่ [postNotification] เขียนตอนล้มเหลว เพราะที่นี่รู้ region แน่นอน
+private func recordRegionNotificationDisabled(_ event: BeaconKitRegionStateEvent) {
+    BackgroundEvidenceLog.shared.append(
+      line: BackgroundEvidenceLog.line(
+        timestamp: event.timestamp,
+        event: "notification",
+        regionIdentifier: event.regionIdentifier,
+        conclusion: currentRunContext(),
+        rawSignals: rawSignalSummary(receiverEntry: true)
+          + " posted=false reason=disabled"
+      )
+    )
+}
+```
+
+⚠️ **บรรทัดใหม่นี้ไม่มี `layer=`** เพราะไม่มีที่ไหนในไฟล์ iOS นี้เขียน `layer=` เลย
+สักจุด (ต่างจาก Android ที่มี `LAYER_REGION`/`LAYER_PROXIMITY` ชัดเจน) — เป็นความไม่
+สมมาตรที่มีอยู่ก่อนแล้วเช่นกัน ไม่ใช่สิ่งที่ควรแก้เฉพาะบรรทัดใหม่นี้บรรทัดเดียวโดยลำพัง
+เพราะจะทำให้บรรทัดใหม่ไม่ตรงรูปแบบกับบรรทัด `event=notification` เดิมของ layer 2
+บนไฟล์เดียวกัน — ถ้าจะแก้ต้องเป็น ADR ใหม่ที่แก้ทั้งสองชั้นพร้อมกัน
+
+#### 9.4 ผลต่อเซตของ `reason=` — ตรวจจากโค้ดจริง ไม่ใช่ตามที่บรีฟสมมติ
+
+⚠️ **ส่วนต่างจากบรีฟ:** บรีฟบอกว่า `reason=` ฝั่ง Android "เดิมเป็นเซตปิดสี่ค่า" และ
+`reason=disabled` จะเป็น "ค่าใหม่ในเซตนั้น" — ตรวจจากโค้ดจริงแล้วภาพนี้**ไม่ตรงเป๊ะ**:
+
+- เซตปิดสี่ค่าที่มีจริงคือ**เฉพาะ return type ของ `deliveryReason()`**
+  (`ExampleNotifications.kt:205-227`): `granted` (`REASON_GRANTED`) ·
+  `permissionDenied` · `blockedByUser` · `channelBlocked` — ยืนยันซ้ำจาก
+  `ARCHITECTURE.md:5547-5551` ("**ไม่มีค่าไหนชื่อ 'denied' ตรง ๆ**")
+- แต่ `reason=` บนบรรทัด `event=notification` **ไม่ได้ผูกกับ `deliveryReason()`
+  เพียงแหล่งเดียว** — `recordSuppressed()` (`ExampleNotifications.kt:85-106`) เขียน
+  `reason=` จาก **พารามิเตอร์ `String` อิสระ** ไม่ใช่ enum ปิด และมีค่า `"cooldown"`
+  ใช้งานจริงอยู่แล้ว (เรียกจาก `ExampleProximityWatcher.kt:134`) — ยืนยันจาก
+  `ARCHITECTURE.md:5552-5554` ("`cooldown` เป็นคนละแกนคำถามโดยสิ้นเชิง... จึงต้อง
+  เป็นฟังก์ชันใหม่ที่**ไม่เรียก** `deliveryReason()`")
+
+**สรุปที่ถูกต้อง:** `reason=disabled` เป็นค่าที่ **5** ที่ปรากฏจริงบนบรรทัด
+`event=notification` (ต่อจาก `granted`/`permissionDenied`/`blockedByUser`/
+`channelBlocked`/`cooldown`) แต่ใช้ **กลไกเดียวกับ `reason=cooldown` เป๊ะ**
+(พารามิเตอร์ `String` อิสระของ `recordSuppressed()`) **ไม่ได้แตะ `deliveryReason()`
+หรือเซตปิดสี่ค่านั้นเลยแม้แต่จุดเดียว** — ไม่ต้องแก้ enum ใด ๆ ฝั่ง Android
+
+#### 9.5 ผลต่อ `tool/analyze_region_log.dart` — ตรวจจากโค้ดจริงแล้วว่า **ไม่กระทบ**
+
+⚠️ **ตรวจแล้วพบว่าไม่ตรงกับสิ่งที่บรีฟตั้งคำถามไว้:** `tool/analyze_region_log.dart`
+(836 บรรทัด) **ไม่มีการอ้างถึงคำว่า `reason`, `notification`, หรือ `posted` เลยแม้แต่
+จุดเดียว** (ตรวจด้วย `grep -n "reason\|notification\|posted" tool/analyze_region_log.dart`
+= ไม่มีผลลัพธ์) — เครื่องมือนี้ประมวลผลเฉพาะ `event == 'launch'`, `event == 'enter'`,
+`event == 'exit'` เท่านั้น (ยืนยันจาก `e.event == 'launch'`/`e.event == 'enter'`/
+`e.event == 'exit'` ที่บรรทัด 258/312/364/416/429/430/435/438/460/461/464/557/561/
+597/599/658 ของไฟล์) **ไม่เคยอ่านบรรทัด `event=proximity` หรือ `event=notification`
+เลยสักบรรทัด** — การเพิ่ม `reason=disabled` จึง **ไม่กระทบเครื่องมือนี้เลย** ไม่ต้อง
+แก้ไฟล์นี้ในรอบนี้หรือรอบถัดไปของหัวข้อนี้
+
+#### 9.6 ไฟล์ที่ต้องแก้ — สำหรับ `flutter-dev` (หลังตัดสินใจหัวข้อนี้แล้วเท่านั้น)
+
+| แพลตฟอร์ม | ไฟล์ | แก้อะไร |
+|---|---|---|
+| example Android | `ExampleApplication.kt` | เพิ่ม `private const val LAYER1_NOTIFICATIONS_ENABLED = false` ใน `companion object`; แก้บล็อก `if (event.state == "enter" \|\| event.state == "exit")` ให้แยกสาขาเปิด/ปิดตาม §9.2 — เนื้อหา `ExampleNotifications.post(...)` เดิมไม่แก้เลย |
+| example iOS | `AppDelegate.swift` | เพิ่ม `private static let layer1NotificationsEnabled: Bool = false`; แก้ท้าย `recordRegionEvent(_:)` ให้แยกสาขา; เพิ่มฟังก์ชันใหม่ `recordRegionNotificationDisabled(_:)` ตาม §9.3 |
+
+**ไม่แตะ:** `ExampleProximityWatcher.kt` (ชั้น 2 ล้วน), `ExampleNotifications.kt`
+(ใช้ `recordSuppressed()` ที่มีอยู่แล้วตรง ๆ ไม่แก้ฟังก์ชันนี้), ฟังก์ชันชั้น 2 ทุกตัว
+ฝั่ง iOS, `staleAfterMillis`, `BackgroundRegionMonitor.kt`, `tool/analyze_region_log.dart`
+(§9.5), ไฟล์ build ใด ๆ, SDK ใด ๆ
+
+#### 9.7 เคสที่ unit test ต้องคลุม
+
+- **flag ปิด (default):** `enter`/`exit` เกิดขึ้น → ต้องมีบรรทัด `event=notification`
+  ที่มี `posted=false reason=disabled` เขียนจริง (ทั้งสองแพลตฟอร์ม) และ **ต้องไม่มี**
+  การเรียก `notify()`/`UNUserNotificationCenter.current().add()` จริง — แยกสองสิ่งนี้
+  เป็นสองการยืนยันคนละจุด (เขียน log ≠ ไม่ยิง notification เป็นคนละพฤติกรรมที่ต้อง
+  พิสูจน์แยกกัน)
+- **flag เปิด:** พฤติกรรมต้องเหมือนโค้ดเดิมทุกประการ (regression test ว่า path เดิม
+  ไม่เปลี่ยน) — เทียบกับเทสที่มีอยู่แล้วก่อนหน้า §9 ถ้ามี
+- **รูปร่างบรรทัดหลักฐานตอนปิด:** `regionIdentifier=` ต้องเป็นค่าจริงของ event (ไม่ใช่
+  `"-"`) ทั้งสองแพลตฟอร์ม — เคสนี้สำคัญเพราะฝั่ง iOS มีทางเดิม
+  (`postNotification`'s failure branch) ที่เขียน `"-"` ฮาร์ดโค้ดอยู่แล้ว (§9.3) ถ้า
+  `recordRegionNotificationDisabled` เผลอ copy พฤติกรรมนั้นมาจะผิด
+- **Android เท่านั้น:** `reason=disabled` ต้องไม่ไปกระทบ `deliveryReason()` — เทส
+  เดิมของ `deliveryReason()` (ถ้ามี) ต้องยังคืนแค่สี่ค่าเดิมเป๊ะ (§9.4)
+
+#### 9.8 อะไรจะพังถ้าทำผิด
+
+- **ถ้าลบบล็อก `if (event.state == "enter" || event.state == "exit")` ทิ้งไปเฉย ๆ
+  แทนการแยกสาขา:** บรรทัด `event=notification` ของ layer 1 จะหายไปทั้งหมดตอนปิด
+  สวิตช์ — ผิดกติกาหลักของหัวข้อนี้โดยตรง (§9.1) และทำให้แยกไม่ออกระหว่าง "ปิดอยู่"
+  กับ "region monitoring ไม่ทำงานเลย" ซึ่งเป็นบั๊กคนละชนิดที่ต้องแก้คนละทาง
+- **ถ้าฝั่ง iOS เผลอ reuse `postNotification`'s failure-branch evidence writer แทน
+  การเขียนฟังก์ชันใหม่:** จะได้ `regionIdentifier="-"` ฮาร์ดโค้ดแทนค่าจริง (§9.3/§9.7)
+  ทำให้ไฟล์หลักฐานตอบคำถาม "ปิดของ region ไหน" ไม่ได้ ทั้งที่ตอนเขียนมีข้อมูลพร้อมอยู่
+  แล้วในสโคป
+- **ถ้าฝั่ง Android เผลอเพิ่ม case ใหม่ใน `deliveryReason()` แทนการใช้
+  `recordSuppressed()`:** จะทำให้ `reason=disabled` ปนกับเซตปิดสี่ค่าที่เป็นคำตอบของ
+  คำถาม "ระบบจะให้ notification ขึ้นจริงไหม" (§9.4) ทั้งที่ "ปิดไว้เอง" เป็นคนละแกน
+  คำถามโดยสิ้นเชิง (แอปตัดสินใจไม่ลองยิงเอง ไม่ใช่ระบบบล็อก) — ผิดหลักการเดียวกับที่
+  `ARCHITECTURE.md:5552-5554` เตือนไว้แล้วสำหรับ `reason=cooldown`
+- **ถ้าไม่ตั้งชื่อ flag ให้สมมาตรกันสองฝั่ง** (เช่น Android ใช้ชื่อหนึ่ง iOS ใช้อีกชื่อ
+  ที่ไม่สื่อความหมายเดียวกัน): ผู้ที่ไล่ตรวจโค้ดสองฝั่งพร้อมกัน (เช่น `beacon-qa`) จะ
+  หาจุดเปิด/ปิดของแต่ละแพลตฟอร์มไม่เจอง่าย ๆ จากชื่อ — ใช้ `LAYER1_NOTIFICATIONS_ENABLED`/
+  `layer1NotificationsEnabled` ตามที่ §9.2/§9.3 กำหนดไว้ตรง ๆ
+
 ### อ้างอิง
 
 ADR-20 หัวข้อ 3 (รูปร่าง key) · หัวข้อ 6 (ตาราง "ยังไม่ทำในรอบนี้" — คูลดาวน์เดิมเป็น
@@ -6253,3 +7018,9 @@ ADR-20 หัวข้อ 3 (รูปร่าง key) · หัวข้อ 6 
 (คูลดาวน์ 60 วินาที iOS) — `ExampleProximityWatcher.kt` (โค้ดปัจจุบัน, Android) —
 `AppDelegate.swift` (โค้ดปัจจุบัน, iOS) — `ProximityGateStore.kt`/`BeaconScanReceiver.kt`
 (รูปร่าง key `region|uuid|major|minor`) — `docs/test-data/2026-09-16_android_overnight_slot1_round2_redmi.log`
+— **สำหรับ §8/§9:** ADR-14 §4 (`exit` เชื่อไม่ได้ฝั่ง Android, accepted) · ADR-15
+(ฉบับร่าง — `exitTimeoutSeconds` ผิดสัญญา มัธยฐาน 10 นาที) · ADR-11 หัวข้อ 2 (`exit`
+ฝั่ง iOS เป็นของระบบ ปรับไม่ได้) · ADR-20 §12.2/§12.5.3 ("ไม่มีบรรทัด ≠ หลักฐานเชิงลบ")
+· §4.3.4 (ความต่างฐานเวลาสองแพลตฟอร์มที่ §8.6 วิเคราะห์ต่อ) · `ExampleApplication.kt`
+(โค้ดปัจจุบัน, layer 1 Android) · `ExampleNotifications.kt` (`recordSuppressed()`,
+`deliveryReason()`) · `tool/analyze_region_log.dart` (ตรวจแล้วว่าไม่กระทบ, §9.5)
