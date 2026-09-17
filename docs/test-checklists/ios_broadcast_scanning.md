@@ -1581,3 +1581,25 @@ implement ไปตั้งแต่ 16 ก.ย. 2026 (`6e3470d`/PR#42)
 คือ `code-complete, unverified` ห้ามเขียนว่า `observed` จนกว่าจะมีไฟล์หลักฐานที่เห็น
 บรรทัด `posted=false reason=disabled` จริง
 
+## 23. ADR-26 — บทบาท region zone/point (เพิ่ม 17 ก.ย. 2026)
+
+แถวคู่ขนานกับ `android_background_scanning.md` **ข้อ 15** · region ใหม่ `k9p-point`
+ใช้ **UUID เดียวกับ `bigc-test`** แต่เจาะจง `major 9902 minor 2` — บีคอนทะเบียน #2
+จึงอยู่ใน 2 region พร้อมกันโดยตั้งใจ
+
+⚠️ **ข้อจำกัดเฉพาะ iOS ที่ Android ไม่มี:** `IBeaconRangingManager` ผูก
+`startMonitoring(for:)` กับ `startRangingBeacons(satisfying:)` แบบ **1:1 ทุก region**
+(`IBeaconRangingManager.swift:411-436`) และมีเพดานฮาร์ดโค้ด `maxMonitoredRegions = 20`
+บังคับใช้จริง (`:47`, เช็คที่ `:179`) — **ตอนนี้ใช้ไป 4 จาก 20** · โมเดล point ที่ต้องมี
+region ต่อจุดจะชนเพดานนี้เมื่อไร เป็นคำถามเปิดที่ ADR-26 §5 ยังไม่ตัดสิน
+
+| # | สิ่งที่ต้องพิสูจน์ | สถานะ | หลักฐาน |
+|---|---|---|---|
+| 23.1 | **ชั้นที่ 2 โพสต์เฉพาะ region ที่เป็น `point` · `zone` เขียน `posted=false reason=zoneRegion` เสมอ** | **`code-complete, unverified`** | unit test คลุมได้แค่ตาราง mapping (`testRegionRolesTableMapsAllFourDocumentedIdentifiersToCorrectRole` · `...HasExactlyFourEntries...` · `...UnknownRegionIdentifierIsAbsent...` ใน `RunnerTests.swift`) — **ไม่ได้พิสูจน์พฤติกรรมการโพสต์จริง** เพราะ `recordProximityEvent` เขียนผ่าน `BackgroundEvidenceLog.shared`/`UserDefaults`/`UNUserNotificationCenter` ของจริง<br>**เกณฑ์รับงานเหมือน Android ข้อ 15** (ดูคำสั่ง grep ที่นั่น) |
+| 23.2 | **บีคอนเดียวกันในสอง region ได้ notification ใบเดียว** | **`code-complete, unverified`** | ยังไม่มีรอบเดินจริงเลย · **ต้องนับใบที่เด้งบนเครื่องด้วยตา ไม่ใช่เชื่อไฟล์ log อย่างเดียว** เพราะไฟล์บอกได้แค่ว่าแอปสั่งยิง (`posted=requested` ฝั่ง iOS ≠ ผู้ใช้เห็นจริง — ข้อจำกัดเดิมของ ADR-25 §4.1) |
+| 23.3 | **`registered=4` — region ที่ 4 ลงทะเบียนสำเร็จบน iOS จริง** | **`code-complete, unverified`** | ยืนยันระดับโค้ดแล้ว (`main.dart` มี `IBeaconRegionConfig` 4 รายการ) · ⚠️ **ฝั่ง iOS ต่างจาก Android ตรงที่ region ที่ 4 กิน ranging slot ด้วย** (ผูก 1:1) — รอบเดินจริงต้องยืนยันว่าไม่มี region ไหนถูกปฏิเสธ และ `k9p-point` กับ `bigc-test` ที่ UUID ซ้ำกันทำงานพร้อมกันได้จริงบน CoreLocation |
+
+**สรุป:** ยังไม่มีรอบเดินจริงบนบิลด์ที่มี ADR-26 เลยสักรอบทั้งสองแพลตฟอร์ม —
+ห้ามเขียนว่า `observed` จนกว่าจะมีไฟล์หลักฐานที่เห็นทั้ง `reason=zoneRegion` และ
+`registered=4` จริง
+
