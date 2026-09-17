@@ -22,6 +22,16 @@ Always ต้องพาผู้ใช้ไปที่ Settings เอง (�
 [`example/lib/main.dart:1180-1181`](../packages/beacon_kit/example/lib/main.dart#L1180-L1181)
 ซึ่งเป็นสิ่งที่ example ทำจริงตอนนี้ ไม่ใช่ progressive request อัตโนมัติ)
 
+**bundle ID ของ example ไม่ใช่ของที่ยืมไปใช้ได้** — `Runner` ของ example ใช้
+`com.chanothai.beaconkit.example` (เปลี่ยนจาก `com.beaconkit.example` เมื่อ 17 ก.ย.
+2026 เพราะ Personal Team สร้าง App ID ชื่อเดิมไม่ได้ — ถูกทีมอื่นจดไปแล้ว ซึ่งบน
+Personal Team ไม่มีทางแก้อื่นนอกจากเปลี่ยนชื่อ) · **แอปจริงต้องจด bundle ID ของตัวเอง
+ใต้ทีม paid ของบริษัท ห้ามใช้ชื่อของ example** — bundle ID ผูกกับ App ID, provisioning
+profile, capability และ container บนเครื่องผู้ใช้แบบหนึ่งต่อหนึ่ง การใช้ชื่อซ้ำกับแอปตัวอย่าง
+จึงไม่ใช่แค่เรื่องความสวยงามของชื่อ ส่วน `DEVELOPMENT_TEAM` ยังคงอ่านจาก
+`Flutter/Local.xcconfig` ของแต่ละเครื่องเหมือนเดิม (ไม่เคย hardcode ลง `project.pbxproj`
+— CONTRIBUTING ข้อ 7)
+
 ### Android
 
 สิทธิ์ที่ plugin ประกาศให้เองใน manifest แล้ว (ยืนยันจาก
