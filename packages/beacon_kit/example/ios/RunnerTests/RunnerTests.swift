@@ -594,9 +594,20 @@ class RunnerTests: XCTestCase {
     )
   }
 
-  // MARK: - ADR-25 §4/§4.1 — คูลดาวน์ที่สอง 30 นาที (เพิ่มโดย beacon-qa, 16 ก.ย. 2026)
+  // MARK: - ADR-25 §4/§4.1/§4.3 — คูลดาวน์ที่สอง 30 นาที (เพิ่มโดย beacon-qa, 16 ก.ย. 2026)
   //
-  // `AppDelegate.longCooldownSinceLastPostedMillisOrNull(lastPostedUptimeOrZero:nowUptime:)`
+  // ⚠️ **แก้ 17 ก.ย. 2026 (ADR-25 §4.3/§4.3.2, commit `ff72482`):** ฐานเวลาของ
+  // ฟังก์ชันนี้เปลี่ยนจาก `ProcessInfo.processInfo.systemUptime` เป็น wall clock
+  // (`Date().timeIntervalSince1970`) เพราะทิศทางของบั๊กที่ §4/§4.1 ยอมรับไว้ตอนแรก
+  // กลับหัว (`systemUptime` ไม่เดินตอนเครื่องหลับ ต่างจากที่เดา) — **ชื่อฟังก์ชันและ
+  // ตรรกะภายในไม่เปลี่ยนแม้แต่บรรทัดเดียว เปลี่ยนแค่ชื่อ argument label และความหมาย
+  // ของค่าเวลา** ตัวเลข/assertion เดิมของเทสต์ด้านล่างยังใช้ได้ทั้งหมดตามที่ ADR
+  // ยืนยันไว้ ยกเว้นชื่อ/คอมเมนต์ของเคส 6 ที่ต้องแก้เพราะความหมายของเงื่อนไข
+  // `lastPosted > now` เปลี่ยนจาก "reboot แล้ว systemUptime รีเซ็ต" เป็น "นาฬิกา
+  // เครื่องถูกปรับย้อนหลัง" (ดู §4.3.1/§4.3.2) และเพิ่มเทสต์ใหม่เคส 8 สำหรับช่องโหว่
+  // ที่ guard นี้จับไม่ได้ (ก2 ใน §4.3.1)
+  //
+  // `AppDelegate.longCooldownSinceLastPostedMillisOrNull(lastPostedEpochSecondsOrZero:nowEpochSeconds:)`
   // เป็น `static func` ไม่มีการระบุ access modifier จึงเป็น `internal` ตามค่า
   // default ของ Swift — เข้าถึงได้จริงผ่าน `@testable import Runner` โดยไม่ต้อง
   // มี `AppDelegate` instance เพราะเป็น pure function ล้วน (8d31df0)
@@ -625,8 +636,8 @@ class RunnerTests: XCTestCase {
   /// `UserDefaults.double(forKey:)` ที่ไม่พบ key) → ต้องยิงได้ (`nil`)
   func testLongCooldownAllowsFirstEverPostForKey() {
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: 0,
-      nowUptime: 1_000
+      lastPostedEpochSecondsOrZero: 0,
+      nowEpochSeconds: 1_000
     )
 
     XCTAssertNil(result, "ไม่เคยโพสต์คีย์นี้มาก่อนต้องยิงได้เสมอ")
@@ -640,8 +651,8 @@ class RunnerTests: XCTestCase {
     let now = lastPosted + elapsedSeconds
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: lastPosted,
-      nowUptime: now
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: now
     )
 
     XCTAssertEqual(
@@ -664,8 +675,8 @@ class RunnerTests: XCTestCase {
     let now = lastPosted + elapsed
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: lastPosted,
-      nowUptime: now
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: now
     )
 
     XCTAssertEqual(
@@ -683,8 +694,8 @@ class RunnerTests: XCTestCase {
     let now = lastPosted + AppDelegate.proximityLongNotificationCooldownSeconds
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: lastPosted,
-      nowUptime: now
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: now
     )
 
     XCTAssertNil(result, "since == 30 นาทีพอดีต้องยิงได้ เพราะเงื่อนไขเป็น <")
@@ -696,8 +707,8 @@ class RunnerTests: XCTestCase {
     let now = lastPosted + AppDelegate.proximityLongNotificationCooldownSeconds + 1
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: lastPosted,
-      nowUptime: now
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: now
     )
 
     XCTAssertNil(result, "เกิน 30 นาทีไปแล้วต้องยิงได้")
@@ -803,8 +814,8 @@ class RunnerTests: XCTestCase {
     let nowAfterRestart = valueAsIfReadBackFromDefaultsAfterProcessRestart + elapsed
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: valueAsIfReadBackFromDefaultsAfterProcessRestart,
-      nowUptime: nowAfterRestart
+      lastPostedEpochSecondsOrZero: valueAsIfReadBackFromDefaultsAfterProcessRestart,
+      nowEpochSeconds: nowAfterRestart
     )
 
     XCTAssertEqual(
@@ -814,22 +825,79 @@ class RunnerTests: XCTestCase {
     )
   }
 
-  /// เคส 6: ค่าที่เก็บไว้มากกว่าเวลาปัจจุบัน (เครื่อง reboot ทำให้
-  /// `systemUptime` รีเซ็ตกลับไปนับจาก 0) → ต้องยิงได้ ตามที่โจทย์กำหนดตรง ๆ
-  func testLongCooldownAllowsWhenStoredValueIsAheadOfNowDueToReboot() {
-    let storedBeforeReboot: TimeInterval = 10_000
-    let nowAfterReboot: TimeInterval = 5 // เครื่อง reboot แล้ว systemUptime นับใหม่
+  /// เคส 6 (ก1 ใน ADR-25 §4.3.1) — ค่าที่เก็บไว้มากกว่าเวลาปัจจุบัน → ต้องยิงได้
+  ///
+  /// ⚠️ **เปลี่ยนชื่อ/คอมเมนต์ 17 ก.ย. 2026 (ADR-25 §4.3/§4.3.2) — ถอนความหมายเดิม:**
+  /// ชื่อเดิม `testLongCooldownAllowsWhenStoredValueIsAheadOfNowDueToReboot` และ
+  /// คอมเมนต์เดิม ("เครื่อง reboot แล้ว `systemUptime` รีเซ็ตกลับไปนับจาก 0") ผูกกับ
+  /// นาฬิกา `systemUptime` เดิมที่ถูกถอนไปแล้ว — ตอนนี้ฐานเวลาเป็น wall clock ซึ่ง
+  /// **ไม่รีเซ็ตตอน reboot** เงื่อนไข `lastPosted > now` เดียวกันนี้จึงมีความหมายใหม่:
+  /// **นาฬิกาเครื่องถูกปรับย้อนหลังมากกว่าเวลาที่ผ่านไปตั้งแต่โพสต์สำเร็จ (ก1)** เช่น
+  /// เครื่องแบตหมดนานจน RTC รีเซ็ตใกล้ epoch 1970 แล้วค่อย sync ใหม่ทีหลัง — ตรรกะและ
+  /// ตัวเลขเดิม (`10_000` / `5`) ยังพิสูจน์เคสนี้ได้ตรงเป๊ะ **จงใจไม่เปลี่ยนเป็นตัวเลข
+  /// สเกล epoch จริง (~1.77×10⁹)** เพราะฟังก์ชันเป็น pure function ที่สนใจแค่ผลต่าง
+  /// ของสองค่า ไม่สนใจสเกลสัมบูรณ์ — ตัวเลขเล็กอ่านง่ายกว่าและเป็นรูปแบบเดียวกับเทสต์
+  /// อื่นในกลุ่มนี้ (เช่นเคส 2 ที่ใช้ `1_000`) การเปลี่ยนไปใช้เลข epoch จริงจะไม่เพิ่ม
+  /// การครอบคลุมเคสใด ๆ มีแต่ทำให้ตัวเลขอ่านยากขึ้นเปล่า ๆ
+  func testLongCooldownAllowsWhenClockWasSetBackwardsPastLastPosted() {
+    let lastPostedEpochSecondsBeforeClockAdjustment: TimeInterval = 10_000
+    let nowEpochSecondsAfterClockSetBackwards: TimeInterval = 5 // นาฬิกาเครื่องถูกปรับย้อนหลังผ่านจุดที่เคยโพสต์ไปแล้ว
 
     let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: storedBeforeReboot,
-      nowUptime: nowAfterReboot
+      lastPostedEpochSecondsOrZero: lastPostedEpochSecondsBeforeClockAdjustment,
+      nowEpochSeconds: nowEpochSecondsAfterClockSetBackwards
     )
 
-    XCTAssertNil(result, "ค่าที่เก็บไว้มากกว่าปัจจุบันแปลว่า reboot แล้ว ต้องยิงได้")
+    XCTAssertNil(
+      result,
+      "ค่าที่เก็บไว้มากกว่าปัจจุบันแปลว่านาฬิกาเครื่องถูกปรับย้อนหลังผ่านจุดนั้นไปแล้ว (ก1) — guard ต้องให้ยิงได้ (fail-open ตาม ADR-25 §4.3.1)"
+    )
   }
 
-  /// เคส 7 — เคสหลักของ ADR-20 §12.6: "stale แล้ว near ใหม่ภายในคูลดาวน์ →
-  /// ไม่ยิง" **สิ่งที่เทสต์นี้พิสูจน์ได้จริง:** ฟังก์ชันนี้ไม่รับ
+  /// เคส 8 (ก2 ใน ADR-25 §4.3.1) — นาฬิกาถูกปรับย้อนหลัง **น้อยกว่า** เวลาที่ผ่านไป
+  /// จริงตั้งแต่โพสต์สำเร็จ → guard `lastPosted > now` **ไม่ติด** (เพราะ `lastPosted`
+  /// ยังไม่มากกว่า `now` ที่ปรับแล้ว) → ผลคือ**ยังติดคูลดาวน์อยู่** และ
+  /// `sinceLastPostedMs` ที่คืนมา**น้อยกว่าเวลาจริงที่ผ่านไปจริง**เท่ากับขนาดที่ปรับ
+  /// ย้อนหลัง
+  ///
+  /// ⚠️ **นี่คือ fail-closed ที่ ADR-25 §4.3.1 ยอมรับไว้อย่างมีเพดานโดยตั้งใจ ไม่ใช่
+  /// พฤติกรรมที่ถูกต้องสมบูรณ์และไม่ใช่บั๊ก** — เพดานของมันเท่ากับ**ขนาดของการปรับ
+  /// นาฬิกาครั้งนั้นเท่านั้น** (หลักวินาทีถึงสิบนาที เกิดเฉพาะตอนมีการปรับนาฬิกาจริง)
+  /// ต่างจากบั๊ก `systemUptime` เดิมที่ §4.3 กำลังแก้ ซึ่งยืดเป็นสัดส่วนกับเวลาที่
+  /// เครื่องหลับทุกครั้ง (~2.7-2.8 เท่า) ไม่มีเพดาน เทสต์นี้มีหน้าที่**ตรึงพฤติกรรมที่
+  /// ยอมรับไว้ให้เป็นเอกสารที่รันได้** เท่านั้น ไม่ใช่ยืนยันว่าถูกต้อง 100%
+  ///
+  /// ตัวอย่างตรงจาก ADR-25 §4.3.1: โพสต์สำเร็จตอน 10:00 · เวลาจริงผ่านไป 20 นาที
+  /// (จริง ๆ คือ 10:20) · นาฬิกาเครื่องถูกปรับย้อนหลัง 10 นาทีระหว่างนั้น → `now` ที่
+  /// อ่านได้จากเครื่องคือ 10:10 → `since` ที่คำนวณได้ = 10 นาที (ไม่ใช่ 20 นาทีจริง)
+  /// < 30 นาที → ยังติดคูลดาวน์ (จะหมดอายุตอนนาฬิกาอ่านได้ 10:30 ซึ่งคือเวลาจริง
+  /// 10:40 — คูลดาวน์กินเวลาจริง 40 นาที ยาวกว่าที่ตั้งไว้ 10 นาที เท่ากับขนาดที่
+  /// ปรับย้อนหลังพอดี)
+  func testLongCooldownRemainsBlockedWithUnderstatedElapsedWhenClockWasSetBackwardsLessThanElapsed() {
+    let lastPostedEpochSeconds: TimeInterval = 10 * 60 * 60 // สมมติแทน "10:00" — ค่าฐานสัมบูรณ์ไม่มีผล ฟังก์ชันสนใจแค่ผลต่าง
+    let realElapsedSeconds: TimeInterval = 20 * 60 // เวลาจริงที่ผ่านไปตั้งแต่โพสต์สำเร็จ (10:00 -> 10:20 จริง)
+    let clockSetBackSeconds: TimeInterval = 10 * 60 // ขนาดที่นาฬิกาเครื่องถูกปรับย้อนหลังระหว่างนั้น
+    let nowEpochSeconds = lastPostedEpochSeconds + realElapsedSeconds - clockSetBackSeconds // เครื่องอ่านได้ "10:10" ไม่ใช่ "10:20"
+
+    let result = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
+      lastPostedEpochSecondsOrZero: lastPostedEpochSeconds,
+      nowEpochSeconds: nowEpochSeconds
+    )
+
+    XCTAssertNotNil(
+      result,
+      "guard จับเคส (ก2) นี้ไม่ได้ (ADR-25 §4.3.1) — ยังติดคูลดาวน์ทั้งที่เวลาจริงผ่านไปแล้ว 20 นาที ไม่ใช่บั๊ก แต่เป็นความเสี่ยงที่ยอมรับไว้อย่างมีเพดาน"
+    )
+    XCTAssertEqual(
+      result,
+      Int64((realElapsedSeconds - clockSetBackSeconds) * 1000),
+      "sinceLastPostedMs ที่คืนมาต้องน้อยกว่าเวลาจริงที่ผ่านไป (20 นาที) อยู่พอดีเท่ากับขนาดที่ปรับย้อนหลัง (10 นาที) เหลือ 10 นาที ตามตัวอย่างใน ADR-25 §4.3.1"
+    )
+  }
+
+  /// เคส 9 (เดิมกำกับเป็นเคส 7 — เลื่อนเลขให้ต่อเนื่องหลังเพิ่มเคส 8 ด้านบน
+  /// 17 ก.ย. 2026, ADR-25 §4.3) — เคสหลักของ ADR-20 §12.6: "stale แล้ว near ใหม่
+  /// ภายในคูลดาวน์ → ไม่ยิง" **สิ่งที่เทสต์นี้พิสูจน์ได้จริง:** ฟังก์ชันนี้ไม่รับ
   /// `BeaconKitProximityChangedEvent`/reason ใด ๆ เป็นพารามิเตอร์เลย — ผลลัพธ์
   /// ขึ้นกับ`เวลาที่ผ่านไป`เท่านั้น เรียกซ้ำด้วยพารามิเตอร์เวลาเดียวกันต้องได้ผล
   /// เดียวกันเสมอไม่ว่าผู้เรียกจะอยู่ในเส้นทางไหน (ล้าง state จาก stale/reconcile/
@@ -838,7 +906,10 @@ class RunnerTests: XCTestCase {
   ///
   /// ⚠️ **ข้ออ้าง "stale ไม่ล้างคูลดาวน์นี้" ไม่ได้ถูกยืนยันโดยเทสต์นี้ (หรือ
   /// เทสต์ใดในไฟล์นี้)** — เป็นข้อสรุปเชิงโครงสร้างจากการที่คูลดาวน์ 30 นาทีนี้
-  /// เก็บอยู่ใน `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v1")`
+  /// เก็บอยู่ใน `UserDefaults(suiteName: "beacon_kit_example.notification_cooldown_v2")`
+  /// (⚠️ แก้ชื่อ suite 17 ก.ย. 2026 — เดิมคอมเมนต์นี้อ้าง `..._v1` ซึ่งเป็นชื่อก่อน
+  /// ADR-25 §4.3.3 เปลี่ยนเป็น `..._v2` ตอนย้ายฐานเวลาเป็น wall clock ตัวชื่อ suite
+  /// เปลี่ยนไปแล้วในโค้ดจริง แต่คอมเมนต์นี้ไม่เคยถูกอัปเดตตาม)
   /// ซึ่งเป็น suite คนละอันจาก `ProximityGateStore.swift`/`ProximityGate.swift`
   /// ที่เส้นทาง `stale` แก้ไข — ไม่มีโค้ดจุดใดใน `AppDelegate.swift` เรียก
   /// `.removePersistentDomain`/ล้าง suite นี้เลย (อ่านจากซอร์สโดยตรง ไม่ได้พิสูจน์
@@ -849,12 +920,12 @@ class RunnerTests: XCTestCase {
     let now = lastPosted + elapsed
 
     let resultA = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: lastPosted,
-      nowUptime: now
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: now
     )
     let resultB = AppDelegate.longCooldownSinceLastPostedMillisOrNull(
-      lastPostedUptimeOrZero: lastPosted,
-      nowUptime: now
+      lastPostedEpochSecondsOrZero: lastPosted,
+      nowEpochSeconds: now
     )
 
     XCTAssertEqual(resultA, Int64(elapsed * 1000))
