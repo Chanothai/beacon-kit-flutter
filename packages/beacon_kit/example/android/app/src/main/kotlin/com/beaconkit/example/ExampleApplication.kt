@@ -35,8 +35,18 @@ class ExampleApplication : Application() {
      */
     companion object {
         /** เปิด/ปิด notification ชั้นที่ 1 (enter/exit) — ปิดโดย default (ADR-25 §9) —
-         *  บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร */
-        private const val LAYER1_NOTIFICATIONS_ENABLED = false
+         *  บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร
+         *
+         *  **`internal` ไม่ใช่ `private`** (เปิดหลังรอบตรวจ QA ยืนยันจากคอมไพเลอร์จริง
+         *  ว่า `private const val` ในไฟล์นี้เข้าถึงไม่ได้จากเทส) — เปิด access ให้แคบ
+         *  ที่สุดเท่าที่ unit test ต้องใช้เพื่อตรวจว่าค่าเริ่มต้นคือปิดจริง ไม่ใช่เปิด
+         *  เป็น `public`/API สาธารณะของแอป — `internal` แปลว่ามองเห็นได้แค่ในโมดูล
+         *  `app` เท่านั้น (คนละความหมายกับ `public` ที่ข้ามโมดูลได้) — precedent
+         *  เดียวกับที่ commit `6e3470d` เคยเปิด `proximityCooldownKey(for:)` และ
+         *  `proximityLongNotificationCooldownSeconds` ฝั่ง iOS จาก `private` เป็น
+         *  `internal` ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
+         */
+        internal const val LAYER1_NOTIFICATIONS_ENABLED = false
 
         // ⚠️ ค่าทดสอบ 30 นาที ไม่ใช่ค่าสินค้า (ค่าสินค้า = 24 ชั่วโมง,
         // ExampleProximityWatcher.DEFAULT_LONG_COOLDOWN_MILLIS, ADR-25 §8.1) — override

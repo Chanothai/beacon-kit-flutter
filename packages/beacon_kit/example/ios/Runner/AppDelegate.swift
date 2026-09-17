@@ -63,7 +63,19 @@ import beacon_kit_ios
   /// ใน initializer ของ stored property เพราะ subclass ที่ยังไม่มีตัวตน ณ จุดนั้น
   /// อาจ override ค่า static นี้ได้ในทางทฤษฎี ใช้ชื่อ type ตรง ๆ (`AppDelegate.`)
   /// แทน ซึ่งให้ผลเหมือนกันทุกประการเพราะไม่มี subclass จริงของ `AppDelegate`
-  private var longCooldownSeconds: TimeInterval = AppDelegate.productDefaultLongCooldownSeconds
+  ///
+  /// **`internal` ไม่ใช่ `private`** (เปิดหลังรอบตรวจ QA — พิสูจน์จากคอมไพเลอร์จริง
+  /// ว่า `private var` เข้าถึงไม่ได้แม้ผ่าน `@testable import`: `error:
+  /// 'longCooldownSeconds' is inaccessible due to 'private' protection level` —
+  /// `private` ของ Swift จำกัดแค่ไฟล์เดียวกันเท่านั้น `@testable import` ยกระดับ
+  /// แค่ `internal` เป็นสูงสุด ไม่ทะลุ `private`/`fileprivate`) — เปิด access ให้
+  /// แคบที่สุดเท่าที่ §8.8 ต้องใช้เพื่อตรวจว่า `AppDelegate()` ใหม่มีค่าเริ่มต้นเป็น
+  /// ค่าสินค้าจริง ไม่ใช่เปิดเป็น `public` (ยัง**ไม่มี** access modifier แปลว่า
+  /// `internal` ตาม default ของ Swift — มองเห็นได้แค่ในโมดูลนี้ ข้ามโมดูลไม่ได้)
+  /// — precedent เดียวกับที่ commit `6e3470d` เปิด `proximityCooldownKey(for:)`
+  /// กับ `proximityLongNotificationCooldownSeconds` จาก `private` เป็น `internal`
+  /// ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
+  var longCooldownSeconds: TimeInterval = AppDelegate.productDefaultLongCooldownSeconds
 
   override func application(
     _ application: UIApplication,
@@ -308,7 +320,17 @@ import beacon_kit_ios
 
   /// เปิด/ปิด notification ชั้นที่ 1 (enter/exit) — ปิดโดย default (ADR-25 §9) —
   /// บรรทัดหลักฐาน `event=notification` ยังเขียนเสมอไม่ว่าค่านี้จะเป็นอะไร
-  private static let layer1NotificationsEnabled: Bool = false
+  ///
+  /// **`internal` ไม่ใช่ `private`** (เปิดหลังรอบตรวจ QA ยืนยันจากคอมไพเลอร์จริงว่า
+  /// `private static let` เข้าถึงไม่ได้แม้ผ่าน `@testable import` — `private`
+  /// จำกัดแค่ไฟล์เดียวกัน ส่วน `@testable import` ยกระดับได้สูงสุดแค่ `internal`)
+  /// เปิด access ให้แคบที่สุดเท่าที่ §9.7 ต้องใช้เพื่อตรวจว่าค่าเริ่มต้นคือปิดจริง
+  /// ไม่ใช่เปิดเป็น `public`/API สาธารณะของแอป — ไม่ระบุ access modifier แปลว่า
+  /// `internal` ตาม default ของ Swift (มองเห็นได้แค่ในโมดูลนี้ ข้ามโมดูลไม่ได้) —
+  /// precedent เดียวกับที่ commit `6e3470d` เปิด `proximityCooldownKey(for:)` กับ
+  /// `proximityLongNotificationCooldownSeconds` จาก `private` เป็น `internal`
+  /// ด้วยเหตุผลเดียวกันเป๊ะ (ดู MARK header ของ `RunnerTests.swift`)
+  static let layer1NotificationsEnabled: Bool = false
 
   /// เขียนบรรทัดหลักฐานตอน notification ชั้นที่ 1 ถูกปิดไว้ (ADR-25 §9) — **ต้องเขียน
   /// เสมอ ห้ามเงียบหาย** (ADR-20 §12.2/§12.5.3) ใช้ `event.regionIdentifier` จริง
